@@ -2,7 +2,8 @@
 
 **Date:** 2026-11-01
 **Owner:** Michael Rigart
-**Status:** Approved. Signed off by Michael on 2026-11-01, after Codex's spec review.
+**Status:** In progress (branch `feat/tafl-v1`; no merge request yet, because the repository
+has no remote). Signed off by Michael on 2026-11-01, after Codex's spec review.
 **Name:** Tafl, after the Norse board game played by placing pieces on a grid.
 
 ## Why
