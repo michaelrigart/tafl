@@ -5,10 +5,10 @@ Design-record rules (specs, plans, status, commits) are in the global agent inst
 
 ## Commands
 
-Run all of these outside any agent sandbox, with
-`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` as a prefix: SwiftPM's nested
-`sandbox-exec`, the module cache under `/var/folders` and the Xcode build service fail
-inside the Claude sandbox, and `xcode-select` points at the Command Line Tools.
+Run all of these outside any agent sandbox: SwiftPM's nested `sandbox-exec`, the module
+cache under `/var/folders` and the Xcode build service fail inside the Claude sandbox. Prefix
+them with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` and don't change
+`xcode-select`.
 
 - Core tests: `swift test --package-path Packages/TaflCore`
 - Platform tests: `swift test --package-path Packages/TaflPlatform27`

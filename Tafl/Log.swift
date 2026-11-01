@@ -1,6 +1,6 @@
 import os
 
-enum Log {
+nonisolated enum Log {
     static let app = Logger(subsystem: "com.michaelrigart.tafl", category: "app")
     static let engine = Logger(subsystem: "com.michaelrigart.tafl", category: "engine")
     static let config = Logger(subsystem: "com.michaelrigart.tafl", category: "config")
