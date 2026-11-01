@@ -14,6 +14,12 @@ final class TaflApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if let probeArguments = Probe.arguments(from: CommandLine.arguments) {
+            Probe.run(arguments: probeArguments)
+            return
+        }
+        #endif
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "rectangle.split.2x2", accessibilityDescription: "Tafl")
         let menu = NSMenu()
