@@ -25,6 +25,7 @@ enum Probe {
     private static let panel = ProbePanel()
 
     private static func dispatch(_ arguments: [String]) async {
+        _ = queue // creating the queue sets the 0.5 s messaging timeout before any Accessibility call
         ProbeLog.write("probe start arguments=\(arguments.joined(separator: " ")) accessibilityTrusted=\(AXIsProcessTrusted())")
         guard AXIsProcessTrusted() else {
             ProbeLog.write("Accessibility is not granted to this build; grant it and run again")
@@ -53,12 +54,13 @@ enum Probe {
             let pid = app.processIdentifier
             let bundle = app.bundleIdentifier ?? "?"
             let rows = await queue.run(pid: pid) { describeWindows(pid: pid) }
-            let cgCount = everything.filter { $0.pid == pid }.count
-            guard !rows.isEmpty || cgCount > 0 else { continue }
+            let cgAll = everything.filter { $0.pid == pid && $0.layer == 0 }
+            let cgOnScreen = onScreen.filter { $0.pid == pid && $0.layer == 0 }
+            guard !rows.isEmpty || !cgAll.isEmpty else { continue }
             ProbeLog.write(
                 "app bundle=\(bundle) pid=\(pid) axWindows=\(rows.count) "
-                    + "cgWindowsAll=\(cgCount) "
-                    + "cgWindowsOnScreen=\(onScreen.filter { $0.pid == pid }.count)")
+                    + "cgWindowsAll=\(cgAll.count) cgIdsAll=\(cgAll.map { String($0.id) }.joined(separator: ",")) "
+                    + "cgWindowsOnScreen=\(cgOnScreen.count) cgIdsOnScreen=\(cgOnScreen.map { String($0.id) }.joined(separator: ","))")
             for row in rows { ProbeLog.write("  window bundle=\(bundle) \(row.text)", title: row.title) }
         }
         await observe(apps: apps, seconds: seconds, include: { _ in true })
@@ -82,7 +84,7 @@ enum Probe {
             let text = "frame=\(frameText) position-settable=\(AXWindowAccess.isSettable(window, attribute: "AXPosition")) "
                 + "size-settable=\(AXWindowAccess.isSettable(window, attribute: "AXSize")) "
                 + "minimized=\(describe(AXWindowAccess.isMinimized(window))) fullscreen=\(describe(AXWindowAccess.isFullscreen(window))) "
-                + "axFullScreenAttribute=\(rawValue(window, "AXFullScreen")) "
+                + "axFullScreenAttribute=\(describe(AXWindowAccess.fullScreenAttribute(window))) "
                 + "subrole=\(AXWindowAccess.subrole(window) ?? "nil") \(identityText)"
             return WindowRow(text: text, title: AXWindowAccess.title(window))
         }
@@ -107,6 +109,10 @@ enum Probe {
             return
         }
         let pid = app.processIdentifier
+        guard pid != ProcessInfo.processInfo.processIdentifier else {
+            ProbeLog.write("apply refused: Tafl itself is frontmost; focus the window under test before pressing Continue")
+            return
+        }
         ProbeLog.write("apply bundle=\(app.bundleIdentifier ?? "?") pid=\(pid) target=\(format(target)) "
             + "order=\(positionFirst ? "position-first" : "size-first") keepEnhancedUI=\(keepEnhancedUI)")
         await queue.run(pid: pid) {
@@ -172,14 +178,20 @@ enum Probe {
     // MARK: displays
 
     private static func displays() async {
-        logDisplays(label: "displays")
+        await displaySnapshot(label: "displays-first")
+        await panel.pause("Change the Dock (auto-hide on or off, or move it), then press Continue.")
+        await displaySnapshot(label: "displays-second")
+    }
+
+    private static func displaySnapshot(label: String) async {
+        logDisplays(label: label)
         guard let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else {
-            ProbeLog.write("dock: not running")
+            ProbeLog.write("\(label): dock not running")
             return
         }
         let dockFrame = await queue.run(pid: dock.processIdentifier) { dockListFrame(pid: dock.processIdentifier) }
         ProbeLog.write(
-            "dock: axListFrame=\(dockFrame) orientation=\(preference("orientation", "com.apple.dock")) "
+            "\(label): dock axListFrame=\(dockFrame) orientation=\(preference("orientation", "com.apple.dock")) "
                 + "autohide=\(preference("autohide", "com.apple.dock")) tilesize=\(preference("tilesize", "com.apple.dock"))")
     }
 
@@ -215,12 +227,32 @@ enum Probe {
 
     private static func displaysWatch(seconds: Double) async {
         logDisplays(label: "displays-initial")
-        let monitor = ReconfigurationMonitor27 { phase in
-            ProbeLog.write("reconfiguration \(phase)")
+        let monitor = ReconfigurationMonitor27 { phase, detail in
+            let at = ProbeLog.now()
+            ProbeLog.write(
+                "reconfiguration \(phase) displayID=\(detail.displayID) flags=0x\(String(detail.flags, radix: 16)) [\(flagNames(detail.flags))]",
+                at: at)
             if phase == .ended { Task { @MainActor in logDisplays(label: "displays-after-ended") } }
         }
+        let screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { _ in
+            ProbeLog.write("didChangeScreenParameters", at: ProbeLog.now())
+        }
         await observe(apps: observableApps(), seconds: seconds, include: { $0 == kAXWindowMovedNotification || $0 == kAXWindowResizedNotification })
+        NotificationCenter.default.removeObserver(screenObserver)
         monitor.invalidate()
+    }
+
+    private nonisolated static func flagNames(_ raw: UInt32) -> String {
+        let flags = CGDisplayChangeSummaryFlags(rawValue: raw)
+        let names: [(CGDisplayChangeSummaryFlags, String)] = [
+            (.beginConfigurationFlag, "begin"), (.movedFlag, "moved"), (.setMainFlag, "setMain"),
+            (.setModeFlag, "setMode"), (.addFlag, "add"), (.removeFlag, "remove"),
+            (.enabledFlag, "enabled"), (.disabledFlag, "disabled"), (.mirrorFlag, "mirror"),
+            (.unMirrorFlag, "unMirror"), (.desktopShapeChangedFlag, "desktopShapeChanged"),
+        ]
+        return names.filter { flags.contains($0.0) }.map(\.1).joined(separator: ",")
     }
 
     // MARK: tiling
@@ -243,6 +275,7 @@ enum Probe {
         let visible = display.visibleFrame.rect
         let halfW = visible.width / 2, halfH = visible.height / 2
         let candidates: [(String, CGRect)] = [
+            ("fill", visible),
             ("left-half", CGRect(x: visible.minX, y: visible.minY, width: halfW, height: visible.height)),
             ("right-half", CGRect(x: visible.minX + halfW, y: visible.minY, width: halfW, height: visible.height)),
             ("top-half", CGRect(x: visible.minX, y: visible.minY, width: visible.width, height: halfH)),
@@ -306,6 +339,7 @@ enum Probe {
     private static func keys(seconds: Double) async {
         logLayout(label: "layout")
         let hotkeys = CarbonHotkeys()
+        ProbeLog.write("carbon event handler install status=\(hotkeys.installStatus)")
         hotkeys.onPress = { id in
             ProbeLog.write("hotkey pressed id=\(id) chord=\(defaultChords[Int(id) - 1].name)")
         }
@@ -319,7 +353,7 @@ enum Probe {
                 logLayout(label: "layout-after-change")
             }
         }
-        try? await Task.sleep(for: .seconds(seconds))
+        await pause(seconds: seconds)
         DistributedNotificationCenter.default().removeObserver(token)
         for index in defaultChords.indices { hotkeys.unregister(id: UInt32(index + 1)) }
     }
@@ -357,8 +391,14 @@ enum Probe {
         }
     }
 
+    /// Waits on the suspending clock, so the time the Mac sleeps does not count.
+    private static func pause(seconds: Double) async {
+        try? await SuspendingClock().sleep(for: .seconds(seconds))
+    }
+
     /// Observes every app for `seconds`, logging each notification that `include` accepts with
-    /// the frame read while handling it. Registration failures are logged too.
+    /// the frame read while handling it. Registration failures are logged too. The stamp is
+    /// taken before any Accessibility read, so a queued event keeps the time it arrived.
     private static func observe(
         apps: [NSRunningApplication], seconds: Double,
         include: @escaping @Sendable (String) -> Bool,
@@ -366,20 +406,25 @@ enum Probe {
     ) async {
         let hub = AXObserverHub()
         for app in apps {
-            let failed = hub.observe(pid: app.processIdentifier, bundleID: app.bundleIdentifier) { event in
-                guard include(event.notification) else { return }
-                let frame = AXWindowAccess.frame(event.element)
-                var line = "event bundle=\(event.bundleID ?? "?") pid=\(event.pid) notification=\(event.notification) frame=\(format(frame))"
-                if let annotate, let rect = try? frame.get() { line += " " + annotate(rect) }
-                let title = event.notification == kAXTitleChangedNotification ? AXWindowAccess.title(event.element) : nil
-                ProbeLog.write(line, title: title)
+            let pid = app.processIdentifier
+            let bundleID = app.bundleIdentifier
+            let failed = await queue.run(pid: pid) {
+                hub.observe(pid: pid, bundleID: bundleID) { event in
+                    let at = ProbeLog.now()
+                    guard include(event.notification) else { return }
+                    let frame = AXWindowAccess.frame(event.element)
+                    var line = "event bundle=\(event.bundleID ?? "?") pid=\(event.pid) notification=\(event.notification) frame=\(format(frame))"
+                    if let annotate, let rect = try? frame.get() { line += " " + annotate(rect) }
+                    let title = event.notification == kAXTitleChangedNotification ? AXWindowAccess.title(event.element) : nil
+                    ProbeLog.write(line, title: title, at: at)
+                }
             }
             if !failed.isEmpty {
-                ProbeLog.write("registration failed bundle=\(app.bundleIdentifier ?? "?") pid=\(app.processIdentifier) notifications=\(failed.sorted().joined(separator: ","))")
+                ProbeLog.write("registration failed bundle=\(bundleID ?? "?") pid=\(pid) notifications=\(failed.sorted().joined(separator: ","))")
             }
         }
         ProbeLog.write("observing \(apps.count) apps for \(seconds) s")
-        try? await Task.sleep(for: .seconds(seconds))
+        await pause(seconds: seconds)
         hub.stopAll()
     }
 
@@ -390,12 +435,6 @@ enum Probe {
     }
 
     private nonisolated static func ms(_ value: Double) -> String { String(format: "%.3f", value) }
-
-    private nonisolated static func rawValue(_ element: AXUIElement, _ attribute: String) -> String {
-        var value: AnyObject?
-        let status = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
-        return status == .success ? "\(value.map { "\($0)" } ?? "nil")" : "error\(status.rawValue)"
-    }
 
     private nonisolated static func preference(_ key: String, _ domain: String) -> String {
         CFPreferencesCopyAppValue(key as CFString, domain as CFString).map { "\($0)" } ?? "unset"
@@ -415,10 +454,10 @@ enum Probe {
     private nonisolated static func format(_ point: CGPoint) -> String { format(point.x, point.y) }
     private nonisolated static func format(_ size: CGSize) -> String { format(size.width, size.height) }
 
-    private nonisolated static func format(_ result: Result<CGRect, AXError>) -> String {
+    private nonisolated static func format(_ result: Result<CGRect, AXFailure>) -> String {
         switch result {
         case .success(let rect): format(rect)
-        case .failure(let error): "error\(error.rawValue)"
+        case .failure(let failure): "error\(failure.code.rawValue)"
         }
     }
 
@@ -433,8 +472,11 @@ nonisolated enum ProbeLog {
 
     static func start() { _ = origin }
 
-    static func write(_ message: String, title: String? = nil) {
-        let stamp = String(format: "%.3f", Double(DispatchTime.now().uptimeNanoseconds - origin) / 1_000_000)
+    /// A monotonic stamp (uptime, which does not advance while the Mac sleeps). Take it first in a callback.
+    static func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
+
+    static func write(_ message: String, title: String? = nil, at: UInt64? = nil) {
+        let stamp = String(format: "%.3f", Double((at ?? now()) &- origin) / 1_000_000)
         if let title {
             PlatformLog.probe.notice("[\(stamp, privacy: .public) ms] \(message, privacy: .public) title=\(title, privacy: .private)")
         } else {

@@ -12,11 +12,13 @@ public enum WindowIDResolver {
         public var pid: pid_t
         public var id: UInt32
         public var bounds: CGRect
+        public var layer: Int
 
-        public init(pid: pid_t, id: UInt32, bounds: CGRect) {
+        public init(pid: pid_t, id: UInt32, bounds: CGRect, layer: Int = 0) {
             self.pid = pid
             self.id = id
             self.bounds = bounds
+            self.layer = layer
         }
     }
 
@@ -44,7 +46,8 @@ public enum WindowIDResolver {
                   let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDictionary)
             else { return nil }
-            return WindowListEntry(pid: pid, id: id, bounds: bounds)
+            let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0
+            return WindowListEntry(pid: pid, id: id, bounds: bounds, layer: layer)
         }
     }
 

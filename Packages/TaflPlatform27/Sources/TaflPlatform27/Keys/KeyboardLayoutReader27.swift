@@ -3,6 +3,9 @@ import CoreGraphics
 import Foundation
 
 public enum KeyboardLayoutReader27 {
+    /// A mask, not a bit index: dead keys print their own character instead of starting a sequence.
+    static let noDeadKeysOption = OptionBits(kUCKeyTranslateNoDeadKeysMask)
+
     /// The characters the current layout prints for key codes 0 to 127, plain and with Shift.
     /// Text Input Sources are main-thread only, hence `@MainActor`.
     @MainActor
@@ -40,7 +43,7 @@ public enum KeyboardLayoutReader27 {
         var characters = [UniChar](repeating: 0, count: 4)
         let status = UCKeyTranslate(
             layout, code, UInt16(kUCKeyActionDown), modifiers, keyboardType,
-            OptionBits(kUCKeyTranslateNoDeadKeysBit), &deadKeys, characters.count, &length, &characters)
+            noDeadKeysOption, &deadKeys, characters.count, &length, &characters)
         guard status == noErr, length > 0 else { return "" }
         return String(utf16CodeUnits: characters, count: length)
     }

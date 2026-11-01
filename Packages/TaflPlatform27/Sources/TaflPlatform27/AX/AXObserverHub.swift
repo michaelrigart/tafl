@@ -2,6 +2,12 @@ import ApplicationServices
 import Foundation
 import Synchronization
 
+/// Observes Accessibility notifications on one run-loop thread.
+///
+/// Calling rule: `observe`, `stopObserving` and `stopAll` may be called from any thread, but
+/// `observe` makes several Accessibility calls per app that can block up to the messaging
+/// timeout, so call it from that app's `AXQueue`, never from the main actor. Handlers run on
+/// the hub thread: keep them short, hand work off, and do not call back into the hub from them.
 public final class AXObserverHub: @unchecked Sendable { // reason: run-loop state is touched only on the hub thread; the registration table is behind a Mutex
     public struct Event: @unchecked Sendable { // reason: AXUIElement is an immutable CF reference, read only by the handler
         public let pid: pid_t
@@ -52,6 +58,11 @@ public final class AXObserverHub: @unchecked Sendable { // reason: run-loop stat
     }
 
     deinit {
+        stopAll()
+        let drained = DispatchSemaphore(value: 0)
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.defaultMode.rawValue) { drained.signal() }
+        CFRunLoopWakeUp(runLoop)
+        drained.wait()
         CFRunLoopStop(runLoop)
     }
 
@@ -71,9 +82,9 @@ public final class AXObserverHub: @unchecked Sendable { // reason: run-loop stat
             let status = AXObserverAddNotification(observer, app, name as CFString, context)
             if status != .success && status != .notificationAlreadyRegistered { failed.insert(name) }
         }
-        registrations.withLock { $0[pid] = registration }
         CFRunLoopAddSource(runLoop, AXObserverGetRunLoopSource(observer), .defaultMode)
         CFRunLoopWakeUp(runLoop)
+        registrations.withLock { $0[pid] = registration }
         return failed
     }
 

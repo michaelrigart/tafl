@@ -2,6 +2,7 @@ import Carbon.HIToolbox
 
 final class CarbonHotkeys {
     var onPress: ((UInt32) -> Void)?
+    private(set) var installStatus: OSStatus = noErr
 
     private var handlerRef: EventHandlerRef?
     private var hotKeys: [UInt32: EventHotKeyRef] = [:]
@@ -9,7 +10,7 @@ final class CarbonHotkeys {
 
     init() {
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(
+        installStatus = InstallEventHandler(
             GetApplicationEventTarget(), hotKeyHandler, 1, &spec,
             Unmanaged.passUnretained(self).toOpaque(), &handlerRef)
     }
@@ -20,6 +21,7 @@ final class CarbonHotkeys {
     }
 
     func register(keyCode: UInt32, modifiers: UInt32, id: UInt32) -> OSStatus {
+        guard installStatus == noErr else { return installStatus }
         unregister(id: id)
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(

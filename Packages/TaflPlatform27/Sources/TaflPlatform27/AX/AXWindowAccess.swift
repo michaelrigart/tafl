@@ -1,7 +1,11 @@
 import ApplicationServices
 import CoreGraphics
 
-extension AXError: @retroactive Error, @retroactive _BridgedNSError, @retroactive _ObjectiveCBridgeableError {}
+public struct AXFailure: Error, Equatable, Sendable {
+    public let code: AXError
+
+    public init(_ code: AXError) { self.code = code }
+}
 
 public enum AXWindowAccess {
     public static func focusedWindow(of pid: pid_t) -> AXUIElement? {
@@ -16,11 +20,11 @@ public enum AXWindowAccess {
         return value as? [AXUIElement] ?? []
     }
 
-    public static func frame(_ element: AXUIElement) -> Result<CGRect, AXError> {
+    public static func frame(_ element: AXUIElement) -> Result<CGRect, AXFailure> {
         let position = pointValue(element, kAXPositionAttribute)
-        guard case .success(let origin) = position else { return .failure(position.error) }
+        guard case .success(let origin) = position else { return .failure(position.failure) }
         let size = sizeValue(element, kAXSizeAttribute)
-        guard case .success(let extent) = size else { return .failure(size.error) }
+        guard case .success(let extent) = size else { return .failure(size.failure) }
         return .success(CGRect(origin: origin, size: extent))
     }
 
@@ -62,6 +66,11 @@ public enum AXWindowAccess {
               let subrole = subrole(button)
         else { return nil }
         return subrole == kAXZoomButtonSubrole
+    }
+
+    /// The undocumented `AXFullScreen` attribute, read next to `isFullscreen` so the two can be compared.
+    public static func fullScreenAttribute(_ element: AXUIElement) -> Bool? {
+        copyValue(element, "AXFullScreen") as? Bool
     }
 
     public static func minimumSize(_ element: AXUIElement) -> CGSize? {
@@ -127,34 +136,34 @@ public enum AXWindowAccess {
         return (value as! AXUIElement)
     }
 
-    private static func pointValue(_ element: AXUIElement, _ attribute: String) -> Result<CGPoint, AXError> {
+    private static func pointValue(_ element: AXUIElement, _ attribute: String) -> Result<CGPoint, AXFailure> {
         axValue(element, attribute, type: .cgPoint).flatMap { value in
             var point = CGPoint.zero
-            return AXValueGetValue(value, .cgPoint, &point) ? .success(point) : .failure(.illegalArgument)
+            return AXValueGetValue(value, .cgPoint, &point) ? .success(point) : .failure(AXFailure(.illegalArgument))
         }
     }
 
-    private static func sizeValue(_ element: AXUIElement, _ attribute: String) -> Result<CGSize, AXError> {
+    private static func sizeValue(_ element: AXUIElement, _ attribute: String) -> Result<CGSize, AXFailure> {
         axValue(element, attribute, type: .cgSize).flatMap { value in
             var size = CGSize.zero
-            return AXValueGetValue(value, .cgSize, &size) ? .success(size) : .failure(.illegalArgument)
+            return AXValueGetValue(value, .cgSize, &size) ? .success(size) : .failure(AXFailure(.illegalArgument))
         }
     }
 
-    private static func axValue(_ element: AXUIElement, _ attribute: String, type: AXValueType) -> Result<AXValue, AXError> {
+    private static func axValue(_ element: AXUIElement, _ attribute: String, type: AXValueType) -> Result<AXValue, AXFailure> {
         var raw: AnyObject?
         let status = AXUIElementCopyAttributeValue(element, attribute as CFString, &raw)
-        guard status == .success else { return .failure(status) }
+        guard status == .success else { return .failure(AXFailure(status)) }
         guard let raw, CFGetTypeID(raw) == AXValueGetTypeID(), AXValueGetType(raw as! AXValue) == type else {
-            return .failure(.illegalArgument)
+            return .failure(AXFailure(.illegalArgument))
         }
         return .success(raw as! AXValue)
     }
 }
 
-private extension Result where Failure == AXError {
-    var error: AXError {
-        if case .failure(let error) = self { return error }
-        return .success
+private extension Result where Failure == AXFailure {
+    var failure: AXFailure {
+        if case .failure(let failure) = self { return failure }
+        return AXFailure(.success)
     }
 }
