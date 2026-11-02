@@ -2,9 +2,11 @@ import Foundation
 import TOMLDecoder
 
 public enum ConfigParser {
-    /// Parses and validates a config file. The first error wins: top-level settings, then `[shortcuts]`,
-    /// then each layout and its entries, each in file order.
+    /// Parses and validates a config file. The first error in file order wins: the root's keys are
+    /// walked in the order they appear, and `[shortcuts]` and `[[layouts]]` are checked where they stand.
     public static func parse(_ text: String, table: KeyboardLayoutTable) -> Result<Config, ConfigError> {
+        var text = text
+        if text.unicodeScalars.first == "\u{FEFF}" { text.unicodeScalars.removeFirst() }
         let root: TOMLTable
         do {
             root = try TOMLTable(source: text)
@@ -22,26 +24,20 @@ public enum ConfigParser {
 
 private typealias Path = [KeyPathComponent]
 
-/// Who holds a chord. A default has no line, because it isn't in the file.
-private struct Claim {
-    let owner: String
-    let text: String
-    let line: Int?
-}
-
+/// Who holds each chord. Defaults are claimed first and everything else as the walk reaches it in
+/// file order, so a clash is always reported at the claim being added, the later one.
 private struct Claims {
-    private var byChord: [KeyChord: Claim] = [:]
+    private var owners: [KeyChord: String] = [:]
 
-    /// A clash is reported at whichever of the two comes later in the file.
-    mutating func add(_ chord: KeyChord, _ claim: Claim) throws(ConfigError) {
-        guard let existing = byChord[chord] else {
-            byChord[chord] = claim
-            return
+    mutating func addDefault(_ chord: KeyChord, owner: String) {
+        owners[chord] = owner
+    }
+
+    mutating func add(_ chord: KeyChord, owner: String, text: String, line: Int?) throws(ConfigError) {
+        if let existing = owners[chord] {
+            throw ConfigError(line: line, message: "\"\(text)\" is also used by \(existing)")
         }
-        let existingIsLater = (existing.line ?? -1) > (claim.line ?? -1)
-        let reported = existingIsLater ? existing : claim
-        let other = existingIsLater ? claim : existing
-        throw ConfigError(line: reported.line, message: "\"\(reported.text)\" is also used by \(other.owner)")
+        owners[chord] = owner
     }
 }
 
@@ -56,6 +52,15 @@ private struct ConfigWalker {
         var step = Config.defaults.step
         var menuBarIcon = Config.defaults.menuBarIcon
         var launchAtLogin = Config.defaults.launchAtLogin
+
+        var shortcuts: [Action: ShortcutBinding] = [:]
+        var layouts: [LayoutDefinition] = []
+        var claims = Claims()
+        // An action named in [shortcuts], even wrongly, no longer holds its default chord.
+        let moved = Set((try? root.table(forKey: "shortcuts"))?.keys ?? [])
+        for action in Action.allCases where !moved.contains(action.rawValue) {
+            if let chord = DefaultShortcuts.chords[action] { claims.addDefault(chord, owner: action.rawValue) }
+        }
 
         for key in orderedKeys(root, at: []) {
             let path: Path = [.key(key)]
@@ -76,16 +81,15 @@ private struct ConfigWalker {
                 menuBarIcon = try bool(root, key, path)
             case "launch-at-login":
                 launchAtLogin = try bool(root, key, path)
-            case "shortcuts", "layouts":
-                break
+            case "shortcuts":
+                shortcuts = try shortcutBindings(&claims)
+            case "layouts":
+                layouts = try layoutDefinitions(&claims)
             default:
                 throw fail(path, "unknown key \"\(key)\"")
             }
         }
 
-        var claims = Claims()
-        let shortcuts = try shortcutBindings(&claims)
-        let layouts = try layoutDefinitions(&claims)
         return Config(
             shortcuts: shortcuts,
             repeatMode: repeatMode,
@@ -102,33 +106,24 @@ private struct ConfigWalker {
     private func shortcutBindings(_ claims: inout Claims) throws(ConfigError) -> [Action: ShortcutBinding] {
         let sectionPath: Path = [.key("shortcuts")]
         var bindings: [Action: ShortcutBinding] = [:]
-        var customs: [(action: Action, chord: KeyChord, shortcut: Shortcut, line: Int?)] = []
-
-        if root.contains(key: "shortcuts") {
-            let section = try subtable(root, "shortcuts", sectionPath, expected: "a table")
-            for key in orderedKeys(section, at: sectionPath) {
-                let path = sectionPath + [.key(key)]
-                guard let action = Action(rawValue: key) else { throw fail(path, "unknown action \"\(key)\"") }
-                let text = try string(section, key, path)
-                if text.trimmingCharacters(in: .whitespaces).lowercased() == "none" {
-                    bindings[action] = .unbound
-                    continue
-                }
-                let shortcut = try shortcut(text, path)
-                bindings[action] = .custom(shortcut)
-                customs.append((action, try chord(shortcut, path), shortcut, line(path)))
+        let section = try subtable(root, "shortcuts", sectionPath, expected: "a table")
+        for key in orderedKeys(section, at: sectionPath) {
+            let path = sectionPath + [.key(key)]
+            guard let action = Action(rawValue: key) else { throw fail(path, "unknown action \"\(key)\"") }
+            let text = try string(section, key, path)
+            if isNone(text) {
+                bindings[action] = .unbound
+                continue
             }
-        }
-
-        for action in Action.allCases where bindings[action] == nil {
-            if let chord = DefaultShortcuts.chords[action] {
-                try claims.add(chord, Claim(owner: action.rawValue, text: "", line: nil))
-            }
-        }
-        for custom in customs {
-            try claims.add(custom.chord, Claim(owner: custom.action.rawValue, text: custom.shortcut.text, line: custom.line))
+            let shortcut = try shortcut(text, path)
+            try claims.add(try chord(shortcut, path), owner: action.rawValue, text: shortcut.text, line: line(path))
+            bindings[action] = .custom(shortcut)
         }
         return bindings
+    }
+
+    private func isNone(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespaces).lowercased() == "none"
     }
 
     private func shortcut(_ text: String, _ path: Path) throws(ConfigError) -> Shortcut {
@@ -148,7 +143,6 @@ private struct ConfigWalker {
     // MARK: Layouts
 
     private func layoutDefinitions(_ claims: inout Claims) throws(ConfigError) -> [LayoutDefinition] {
-        guard root.contains(key: "layouts") else { return [] }
         let listPath: Path = [.key("layouts")]
         let list = try array(root, "layouts", listPath, expected: "a list of tables")
         var layouts: [LayoutDefinition] = []
@@ -181,7 +175,9 @@ private struct ConfigWalker {
                 guard !list.isEmpty else { throw fail(keyPath, "displays must list at least one display") }
                 displays = list
             case "shortcut":
-                shortcut = try self.shortcut(try string(table, key, keyPath), keyPath)
+                let text = try string(table, key, keyPath)
+                if isNone(text) { throw fail(keyPath, "layout shortcut can't be \"none\"; leave it out instead") }
+                shortcut = try self.shortcut(text, keyPath)
             case "windows":
                 windows = try array(table, key, keyPath, expected: "a list of tables")
             default:
@@ -189,7 +185,9 @@ private struct ConfigWalker {
             }
         }
 
-        guard let name else { throw fail(path, "layout needs a name") }
+        guard let name, !name.trimmingCharacters(in: .whitespaces).isEmpty else {
+            throw fail(path, "layout needs a name")
+        }
         if earlier.contains(where: { $0.name == name }) {
             throw fail(path + [.key("name")], "layout name \"\(name)\" is used twice")
         }
@@ -203,7 +201,9 @@ private struct ConfigWalker {
             let shortcutPath = path + [.key("shortcut")]
             try claims.add(
                 try chord(shortcut, shortcutPath),
-                Claim(owner: "layout \"\(name)\"", text: shortcut.text, line: line(shortcutPath))
+                owner: "layout \"\(name)\"",
+                text: shortcut.text,
+                line: line(shortcutPath)
             )
         }
 
@@ -337,8 +337,11 @@ private struct ConfigWalker {
         guard let list = try? table.array(forKey: key) else { throw wrongType(path, "a list of strings") }
         var values: [String] = []
         for index in 0..<list.count {
-            guard let value = try? list.string(atIndex: index) else { throw wrongType(path, "a list of strings") }
-            values.append(value)
+            do {
+                values.append(try list.string(atIndex: index))
+            } catch {
+                throw readFailure(error, path, "a list of strings")
+            }
         }
         return values
     }

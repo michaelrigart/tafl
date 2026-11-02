@@ -309,4 +309,53 @@ struct ConfigParserTests {
         expect("gap = 500\nstep = 0", line: 1, "gap must be between 0 and 100")
         expect("[shortcuts]\ncenter = \"hyper+c\"\n[[layouts]]\nname = \"A\"", line: 2, "unknown modifier \"hyper\"")
     }
+
+    @Test("Sections are checked where they stand: a layout error above [shortcuts] wins over one below it")
+    func sectionsInFileOrder() {
+        let layout = "[[layouts]]\nname = \"A\"\ndisplays = [\"X\"]\n[[layouts.windows]]\napp = \"a\"\nplace = \"middle\"\n"
+        expect(layout + "[shortcuts]\nbogus = \"ctrl+opt+c\"", line: 6, "unknown placement \"middle\"")
+        expect("[shortcuts]\nbogus = \"ctrl+opt+c\"\n" + layout, line: 2, "unknown action \"bogus\"")
+    }
+
+    @Test("A chord clash is reported at the later of the two, whichever section comes first")
+    func clashesInFileOrder() {
+        let layout = "[[layouts]]\nname = \"A\"\nshortcut = \"ctrl+opt+cmd+1\"\n[[layouts.windows]]\napp = \"a\"\nplace = \"maximize\"\n"
+        expect(layout + "[shortcuts]\ncenter = \"ctrl+opt+cmd+1\"", line: 8,
+               "\"ctrl+opt+cmd+1\" is also used by layout \"A\"")
+        let bad = layout.replacingOccurrences(of: "maximize", with: "middle")
+        expect(bad + "[shortcuts]\ncenter = \"ctrl+opt+cmd+1\"", line: 6, "unknown placement \"middle\"")
+        expect("[shortcuts]\ncenter = \"ctrl+opt+cmd+1\"\n" + layout, line: 5,
+               "\"ctrl+opt+cmd+1\" is also used by center")
+    }
+
+    @Test("Keys inside a table are checked in file order, not in TOMLDecoder's order")
+    func keysInFileOrder() {
+        // TOMLTable lists values before arrays, so an unsorted walk would report the unknown key first.
+        expect("[[layouts]]\nname = \"A\"\ndisplays = []\nbogus = 1", line: 3, "displays must list at least one display")
+    }
+
+    @Test("A bad escape inside a list of strings reports TOMLDecoder's text, not a type error")
+    func badEscapeInList() throws {
+        let failure = try #require(error("[[layouts]]\nname = \"A\"\ndisplays = [\"a\\qb\"]"))
+        #expect(failure.line == 3)
+        #expect(!failure.message.contains("must be"))
+    }
+
+    @Test("An empty or blank layout name counts as no name")
+    func blankName() {
+        expect("[[layouts]]\nname = \"\"\ndisplays = [\"X\"]", line: 1, "layout needs a name")
+        expect("[[layouts]]\nname = \"  \"\ndisplays = [\"X\"]", line: 1, "layout needs a name")
+    }
+
+    @Test("A layout shortcut of \"none\" is refused, because a layout without one just leaves it out")
+    func layoutShortcutNone() {
+        expect("[[layouts]]\nname = \"A\"\ndisplays = [\"X\"]\nshortcut = \"none\"", line: 4,
+               "layout shortcut can't be \"none\"; leave it out instead")
+    }
+
+    @Test("A leading byte order mark doesn't break the file")
+    func byteOrderMark() {
+        #expect(config("\u{FEFF}gap = 3")?.gap == 3)
+        expect("\u{FEFF}gap = 3\ngapp = 1", line: 2, "unknown key \"gapp\"")
+    }
 }
