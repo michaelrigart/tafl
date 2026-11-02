@@ -135,7 +135,7 @@ extension WindowEngine {
         changeOrigin = nil
         isFrozen = false
         rulesStarted = false
-        if let claiming, layoutApplications.isCurrent(application) { activeLayout.activate(claiming.name) }
+        if let claiming, layoutApplications.isCurrent(application) { activeLayout.activate(claiming.name, in: config) }
         let layout = activeLayout.name
         await memory.update { $0.activeLayout = layout }
         await save()

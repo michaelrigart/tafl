@@ -1454,6 +1454,45 @@ private func pollUntilLastKnown(
     #expect(saved.activeLayout == "Second")
 }
 
+@Test(.timeLimit(.minutes(1))) func aReloadThatRemovesARunningLayoutKeepsItInactive() async {
+    let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
+    let desk = layout("Desk", [slot(.topHalf, app: "com.c")])
+    let rig = await Rig(windows: [slow], focused: nil) { $0.hung = [50] }
+    await rig.engine.start(config: config(layouts: [desk]))
+    let applying = Task { await rig.engine.applyLayout(named: "Desk") }
+    // Desk's run waits on the hung app while a reload removes Desk.
+    await rig.clock.waitForSleepers(1)
+    await rig.engine.update(config: config())
+    await rig.clock.advance(by: .milliseconds(500))
+    await applying.value
+    #expect(await rig.engine.activeLayoutName == nil)
+    #expect(await rig.engine.memory.read().activeLayout == nil)
+    // Adding Desk back does not make it active by itself.
+    await rig.engine.update(config: config(layouts: [desk]))
+    #expect(await rig.engine.activeLayoutName == nil)
+}
+
+@Test(.timeLimit(.minutes(1))) func aReloadThatRemovesTheClaimingLayoutDuringTheRulesKeepsItInactive() async {
+    let rig = await Rig(windows: [window(1, frame: start)], focused: nil)
+    await rig.engine.start(config: config(layouts: [dock]))
+    await rig.fake.configure { $0.displays = bothDisplays }
+    // The dock rules' first write is held while a reload removes Dock.
+    let gate = await rig.fake.pause(beforeCall: 0)
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(2)
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: quiet)
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.engine.update(config: config())
+    gate.open()
+    await rig.waitForReport { if case .displayChangeHandled = $0 { true } else { false } }
+    #expect(await rig.engine.activeLayoutName == nil)
+    #expect(await rig.engine.memory.read().activeLayout == nil)
+    await rig.engine.update(config: config(layouts: [dock]))
+    #expect(await rig.engine.activeLayoutName == nil)
+}
+
 @Test(.timeLimit(.minutes(1))) func aLayoutAppliedWhileTheRulesRunStaysActive() async {
     let other = window(2, frame: start, pid: 200, bundleID: "com.b")
     let coding = layout("Coding", [slot(.rightHalf, app: "com.b")])

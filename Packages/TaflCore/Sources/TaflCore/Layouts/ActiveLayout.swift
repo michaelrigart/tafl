@@ -5,7 +5,9 @@ public struct ActiveLayout: Equatable, Sendable {
         self.name = name
     }
 
-    public mutating func activate(_ name: String) {
+    /// Only a layout the config has can become active; asked for one it lacks, nothing changes.
+    public mutating func activate(_ name: String, in config: Config) {
+        guard config.layouts.contains(where: { $0.name == name }) else { return }
         self.name = name
     }
 
