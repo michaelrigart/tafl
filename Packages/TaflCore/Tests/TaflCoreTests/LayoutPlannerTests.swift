@@ -61,8 +61,9 @@ struct LayoutPlannerTests {
     @Test func entryDisplayChoice() {
         let onA = window(1, frame: rect(0, 0, 400, 300), bundleID: terminal)
         let displays = [displayA, displayB]
-        func target(_ definition: LayoutDefinition) -> DisplayIdentity? {
-            LayoutPlanner.requests(definition, windows: [onA], displays: displays, source: .layout("Desk")).first?.display
+        let onB = window(2, frame: rect(1200, 100, 400, 300), bundleID: terminal)
+        func target(_ definition: LayoutDefinition, window: WindowSnapshot? = nil) -> DisplayIdentity? {
+            LayoutPlanner.requests(definition, windows: [window ?? onA], displays: displays, source: .layout("Desk")).first?.display
         }
         // Explicit display wins over the layout's only display.
         #expect(target(layout([entry(terminal, .firstThird, display: "Desk")], displays: ["Built-in"])) == displayB.identity)
@@ -74,7 +75,8 @@ struct LayoutPlannerTests {
         #expect(target(layout([entry(terminal, .firstThird)], displays: ["Built-in", "Desk"])) == displayA.identity)
         // A disconnected named display falls back to the current display.
         #expect(target(layout([entry(terminal, .firstThird, display: "Gone")], displays: [])) == displayA.identity)
-        #expect(target(layout([entry(terminal, .firstThird)], displays: ["Gone"])) == displayA.identity)
+        #expect(target(layout([entry(terminal, .firstThird, display: "Gone")], displays: []), window: onB) == displayB.identity)
+        #expect(target(layout([entry(terminal, .firstThird)], displays: ["Gone"]), window: onB) == displayB.identity)
     }
 
     @Test func currentDisplayFollowsTheWindow() {
@@ -99,6 +101,21 @@ struct LayoutPlannerTests {
         )
         #expect(requests.map(\.window) == [visible.handle])
         #expect(requests.first?.source == .newWindow(layout: "Desk"))
+    }
+
+    @Test func skipsFullScreenWindowsAndSheets() {
+        var fullScreen = window(1, frame: rect(0, 0, 400, 300), bundleID: terminal)
+        fullScreen.isFullscreen = true
+        var sheet = window(2, frame: rect(0, 0, 400, 300), bundleID: terminal)
+        sheet.isSheet = true
+        let plain = window(3, frame: rect(0, 0, 400, 300), bundleID: terminal)
+        let requests = LayoutPlanner.requests(
+            layout([entry(terminal, .firstThird)]),
+            windows: [fullScreen, sheet, plain],
+            displays: [displayA],
+            source: .layout("Desk")
+        )
+        #expect(requests.map(\.window) == [plain.handle])
     }
 
     @Test func windowsMatchingNoEntryAreLeftAlone() {

@@ -40,6 +40,15 @@ struct TitleCheckTests {
         #expect(check.titleChanged(handle, at: .milliseconds(200), touched: false) == nil)
     }
 
+    @Test func creationPrunesWindowsOlderThanTheWindow() {
+        var check = TitleCheck()
+        check.created(handle, at: .zero, applied: applied)
+        check.created(other, at: .milliseconds(1500), applied: nil)
+        #expect(check.pendingCount == 1)
+        #expect(check.titleChanged(handle, at: .milliseconds(1600), touched: false) == nil)
+        #expect(check.titleChanged(other, at: .milliseconds(1600), touched: false) == .some(nil))
+    }
+
     @Test func unknownWindowIsNil() {
         var check = TitleCheck()
         #expect(check.titleChanged(handle, at: .zero, touched: false) == nil)

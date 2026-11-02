@@ -1,3 +1,5 @@
+import Foundation
+
 public enum TitleGlob {
     private enum Token {
         case star
@@ -6,8 +8,8 @@ public enum TitleGlob {
     }
 
     public static func matches(_ pattern: String, _ title: String) -> Bool {
-        let tokens = tokenize(pattern.lowercased())
-        let text = Array(title.lowercased())
+        let tokens = tokenize(fold(pattern))
+        let text = Array(fold(title))
         var tokenIndex = 0
         var textIndex = 0
         var starToken: Int?
@@ -47,6 +49,10 @@ public enum TitleGlob {
             escaped.append(character)
         }
         return escaped
+    }
+
+    private static func fold(_ text: String) -> String {
+        text.folding(options: .caseInsensitive, locale: nil)
     }
 
     private static func tokenize(_ pattern: String) -> [Token] {

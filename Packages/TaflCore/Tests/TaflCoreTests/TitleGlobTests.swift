@@ -45,4 +45,10 @@ struct TitleGlobTests {
         #expect(TitleGlob.matches("docs", "DOCS"))
         #expect(TitleGlob.matches("*ÉCOLE*", "école"))
     }
+
+    @Test func fullCaseFolding() {
+        #expect(TitleGlob.matches("STRASSE", "straße"))
+        #expect(TitleGlob.matches("ΟΔΟΣ", "οδος"))
+        #expect(TitleGlob.matches("Stra\\*SSE", "stra*ße"))
+    }
 }

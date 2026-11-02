@@ -7,9 +7,12 @@ public struct TitleCheck: Sendable {
     private static let window: Duration = .seconds(1)
     private var pending: [WindowHandle: Pending] = [:]
 
+    var pendingCount: Int { pending.count }
+
     public init() {}
 
     public mutating func created(_ window: WindowHandle, at time: Duration, applied: MoveRequest?) {
+        pending = pending.filter { time - $0.value.created <= Self.window }
         pending[window] = Pending(created: time, applied: applied)
     }
 
