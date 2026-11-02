@@ -272,22 +272,28 @@ final class WindowObservation27: Sendable {
     }
 
     /// Announces the windows the app has, which no notification will: each one not yet announced,
-    /// whoever registered it, which pays the launch's debt. When the claim has ended meanwhile (the
-    /// app quit, or observing restarted) it publishes nothing and takes back only the marks it made.
-    /// Its registrations stay while the app runs, for whoever adopts them; once the app is gone it
-    /// withdraws those it made itself.
+    /// whoever registered it, in the registry's one announcing step under this claim. Only a catch-up
+    /// whose every step ran under its current claim pays the launch's debt. A step under an ended
+    /// claim (the app quit, or observing restarted) announces nothing and marks nothing. The
+    /// catch-up's registrations stay while the app runs, for whoever adopts them; once the app is gone
+    /// it withdraws those it made itself.
     private func catchUp(_ app: AppInfo27, claim: Int) async {
         let found = await environment.windows(app)
-        var fresh: [WindowSnapshot] = []
-        if isCurrent(pid: app.pid, claim: claim) {
-            for entry in found {
-                if await registry.announce(entry.snapshot.handle) { fresh.append(entry.snapshot) }
-            }
+        var refused = false
+        for entry in found {
+            let step = await registry.announce(entry.snapshot) { event in self.publish([event], pid: app.pid, claim: claim) }
+            if step == .refused { refused = true }
         }
-        if publish(fresh.map(PlatformEvent.windowCreated), pid: app.pid, claim: claim, paying: true) { return }
-        await registry.unannounce(fresh.map(\.handle))
-        if !environment.isRunning(app.pid) {
+        if !refused { payDebt(of: app.pid, claim: claim) }
+        if !isCurrent(pid: app.pid, claim: claim), !environment.isRunning(app.pid) {
             await registry.withdraw(found.filter(\.isNew).map { ($0.snapshot.handle, $0.element) })
+        }
+    }
+
+    /// Clears the launch's debt, only while the claim the catch-up ran under is current.
+    private func payDebt(of pid: Int32, claim: Int) {
+        state.withLock { state in
+            if state.isActive, state.claims[pid]?.id == claim { state.owed.remove(pid) }
         }
     }
 
@@ -298,13 +304,11 @@ final class WindowObservation27: Sendable {
     }
 
     /// Publishes what was found under a claim, only while the claim holds. It takes the lock `appQuit`
-    /// takes, so nothing an ended claim found arrives after the app's quit. A catch-up that publishes
-    /// pays the app's debt.
-    private func publish(_ found: [PlatformEvent], pid: Int32, claim: Int, paying: Bool = false) -> Bool {
+    /// and `end` take, so nothing an ended claim found arrives after the app's quit or a restart.
+    private func publish(_ found: [PlatformEvent], pid: Int32, claim: Int) -> Bool {
         state.withLock { state in
             guard state.isActive, state.claims[pid]?.id == claim else { return false }
             for event in found { events.yield(event) }
-            if paying { state.owed.remove(pid) }
             return true
         }
     }

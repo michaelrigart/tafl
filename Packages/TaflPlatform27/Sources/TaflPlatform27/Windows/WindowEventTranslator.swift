@@ -76,10 +76,12 @@ final class WindowEventTranslator: Sendable {
             events.yield(.windowDestroyed(known))
         case kAXWindowCreatedNotification:
             // Announced once, whoever registered the window first: a query registers but never announces.
-            guard let entry = await learn(element, pid: pid, resolveID: known == nil),
-                  await registry.announce(entry.snapshot.handle)
-            else { return }
-            events.yield(.windowCreated(entry.snapshot))
+            guard let entry = await learn(element, pid: pid, resolveID: known == nil) else { return }
+            let events = events
+            _ = await registry.announce(entry.snapshot) { event in
+                events.yield(event)
+                return true
+            }
         case kAXWindowMovedNotification:
             if let handle = await handleOf(known, element, pid) { events.yield(.windowMoved(handle)) }
         case kAXWindowResizedNotification:

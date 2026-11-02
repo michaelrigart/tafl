@@ -1,4 +1,5 @@
 import ApplicationServices
+import Synchronization
 import Testing
 import TaflCore
 @testable import TaflPlatform27
@@ -103,20 +104,56 @@ private func guess(_ id: UInt32) -> ResolvedWindowID { ResolvedWindowID(id: id, 
     #expect(await registry.count == 0)
 }
 
-@Test func aWindowsCreationIsAnnouncedOnceWhoeverRegisteredIt() async {
-    let registry = WindowRegistry()
-    let handle = await registry.handle(for: box(10), pid: 10, windowID: exact(7))
-    #expect(await registry.announce(handle))
-    #expect(await !registry.announce(handle))
-    #expect(await !registry.announce(WindowHandle(pid: 10, windowID: 8, isStable: true)))
+private func snapshot(_ handle: WindowHandle) -> WindowSnapshot {
+    WindowSnapshot(
+        handle: handle, bundleID: nil, appName: "App", title: "Doc", frame: ScreenRect(x: 0, y: 0, width: 100, height: 100),
+        canMove: true, canResize: true, minSize: nil, isFullscreen: false, isSheet: false, isMinimized: false, isAppHidden: false)
 }
 
-@Test func anUnpublishedAnnouncementCanBeMadeAgain() async {
+/// Collects what an announcing step publishes, accepting or refusing as told.
+private final class Publisher: Sendable {
+    private let published = Mutex<[PlatformEvent]>([])
+    let accepts: Bool
+
+    init(accepts: Bool = true) { self.accepts = accepts }
+
+    var events: [PlatformEvent] { published.withLock { $0 } }
+
+    func publish(_ event: PlatformEvent) -> Bool {
+        guard accepts else { return false }
+        published.withLock { $0.append(event) }
+        return true
+    }
+}
+
+@Test func aWindowIsAnnouncedInOneStepAndOnlyOnce() async {
     let registry = WindowRegistry()
     let handle = await registry.handle(for: box(10), pid: 10, windowID: exact(7))
-    _ = await registry.announce(handle)
-    await registry.unannounce([handle])
-    #expect(await registry.announce(handle))
+    let publisher = Publisher()
+    #expect(await registry.announce(snapshot(handle), publish: publisher.publish) == .announced)
+    #expect(await registry.announce(snapshot(handle), publish: publisher.publish) == .alreadyAnnounced)
+    let other = WindowHandle(pid: 10, windowID: 8, isStable: true)
+    #expect(await registry.announce(snapshot(other), publish: publisher.publish) == .unregistered)
+    #expect(publisher.events == [.windowCreated(snapshot(handle))])
+}
+
+@Test func aRefusedStepLeavesTheWindowToBeAnnouncedLater() async {
+    let registry = WindowRegistry()
+    let handle = await registry.handle(for: box(10), pid: 10, windowID: exact(7))
+    #expect(await registry.announce(snapshot(handle), publish: Publisher(accepts: false).publish) == .refused)
+    let publisher = Publisher()
+    #expect(await registry.announce(snapshot(handle), publish: publisher.publish) == .announced)
+    #expect(publisher.events == [.windowCreated(snapshot(handle))])
+}
+
+@Test func stepsRacingOnOneWindowAnnounceItOnce() async {
+    let registry = WindowRegistry()
+    let handle = await registry.handle(for: box(10), pid: 10, windowID: exact(7))
+    let publisher = Publisher()
+    await withTaskGroup(of: Void.self) { group in
+        for _ in 0..<8 { group.addTask { _ = await registry.announce(snapshot(handle), publish: publisher.publish) } }
+    }
+    #expect(publisher.events == [.windowCreated(snapshot(handle))])
 }
 
 @Test func onlyTheSameRegistrationIsWithdrawn() async {

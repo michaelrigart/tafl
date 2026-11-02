@@ -10,6 +10,14 @@ struct ResolvedWindowID: Sendable, Equatable {
 /// Whether the window's creation has been announced is kept apart from its registration: a query
 /// registers windows but never announces them.
 actor WindowRegistry {
+    enum Announcement: Equatable {
+        case announced
+        case alreadyAnnounced
+        /// The publisher refused: its claim had ended. The window stays unannounced.
+        case refused
+        case unregistered
+    }
+
     struct Registration: Sendable, Equatable {
         var handle: WindowHandle
         /// False when the element was already registered.
@@ -68,21 +76,15 @@ actor WindowRegistry {
         entries.first { $0.handle == handle }?.element
     }
 
-    /// Marks the window's creation announced. False when it already was, or the window is not
-    /// registered: the caller announces only on true.
-    func announce(_ handle: WindowHandle) -> Bool {
-        guard let index = entries.firstIndex(where: { $0.handle == handle }), !entries[index].announced else {
-            return false
-        }
+    /// Announces a registered window's creation, once, in one step of the registry: if it is not
+    /// yet announced, `publish` checks its claim and yields the event, and the window is marked
+    /// only when it did. Nothing else marks a window announced, and nothing unmarks one.
+    func announce(_ snapshot: WindowSnapshot, publish: @Sendable (PlatformEvent) -> Bool) -> Announcement {
+        guard let index = entries.firstIndex(where: { $0.handle == snapshot.handle }) else { return .unregistered }
+        guard !entries[index].announced else { return .alreadyAnnounced }
+        guard publish(.windowCreated(snapshot)) else { return .refused }
         entries[index].announced = true
-        return true
-    }
-
-    /// Takes back announcement marks that were never published.
-    func unannounce(_ handles: [WindowHandle]) {
-        for index in entries.indices where handles.contains(entries[index].handle) {
-            entries[index].announced = false
-        }
+        return .announced
     }
 
     /// Removes registrations their owner made, each only while it is still the same: the same handle

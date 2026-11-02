@@ -106,7 +106,10 @@ func aCreatedWindowIsAnnouncedOnceAndItsTitleIsReadFresh() async {
 func aWindowTheCatchUpAlreadyAnnouncedIsNotAnnouncedByItsNotification() async {
     var harness = Harness(reader())
     let registered = await harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
-    _ = await harness.registry.announce(registered.handle)
+    let found = WindowSnapshot(
+        handle: registered.handle, bundleID: nil, appName: "App", title: "Doc", frame: ScreenRect(x: 0, y: 0, width: 100, height: 100),
+        canMove: true, canResize: true, minSize: nil, isFullscreen: false, isSheet: false, isMinimized: false, isAppHidden: false)
+    _ = await harness.registry.announce(found) { _ in true }
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
     #expect(await harness.next() == .windowMoved(handle(10, 1010)))
