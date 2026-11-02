@@ -1647,3 +1647,47 @@ private func pollUntilLastKnown(
     #expect(await rig.log.filter { $0 == "begin" }.count == 1)
     #expect(rig.reports == [.memory(.fresh)])
 }
+
+// MARK: Windows that stop being placeable
+
+@Test(.timeLimit(.minutes(1))) func aWindowMinimisedWhileALayoutRunsIsSkipped() async {
+    let first = window(1, frame: start)
+    let second = window(2, frame: rect(150, 150, 400, 300))
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(windows: [first, second], focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    // The run waits on the first window's first write while the user minimises the second.
+    let gate = await rig.fake.pause(beforeCall: 1)
+    let applying = Task { await rig.engine.applyLayout(named: "Desk") }
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.fake.configure { $0.windows[second.handle]?.isMinimized = true }
+    gate.open()
+    await applying.value
+    #expect(await rig.frame(of: second.handle) == second.frame)
+    #expect(await rig.log.filter { $0 == "begin" }.count == 1)
+    #expect(rig.reports == [.memory(.fresh), .layoutApplied(name: "Desk", placed: 1, failed: 0)])
+    #expect(await rig.engine.memory.read().placed[second.handle] == nil)
+}
+
+@Test(.timeLimit(.minutes(1))) func aWindowOfAnAppHiddenWhileTheRulesRunIsSkipped() async {
+    let rig = await Rig(displays: bothDisplays, windows: [strayB1, strayB2], focused: nil)
+    await rig.engine.start(config: config())
+    await rig.fake.configure {
+        $0.displays = [displayA]
+        $0.windows[strayB1.handle]?.frame = rect(50, 50, 300, 300)
+        $0.windows[strayB2.handle]?.frame = rect(400, 400, 300, 300)
+    }
+    // The rules wait on the first window's first write while the user hides the app's second window.
+    let gate = await rig.fake.pause(beforeCall: 0)
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(2)
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: quiet)
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.fake.configure { $0.windows[strayB2.handle]?.isAppHidden = true }
+    gate.open()
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
+    #expect(await rig.frame(of: strayB2.handle) == rect(400, 400, 300, 300))
+    #expect(rig.reports.allSatisfy { if case .failure = $0 { false } else { true } })
+}

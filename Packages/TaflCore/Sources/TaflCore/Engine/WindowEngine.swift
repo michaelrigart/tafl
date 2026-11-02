@@ -347,7 +347,7 @@ public actor WindowEngine {
         touched.insert(focused.handle)
         let pointer = await platform.pointerDisplay()
         let config = config
-        let outcome = await pipeline.run(focused.handle, config: config, plan: { resolved in
+        let outcome = await pipeline.run(focused.handle, config: config, unplaceable: .explained, plan: { resolved in
             let context = ActionContext(
                 window: resolved.snapshot,
                 display: resolved.display,
@@ -470,7 +470,8 @@ public actor WindowEngine {
                         case .placed: count.moved += 1
                         case .unchanged: count.unchanged += 1
                         case .failed(let kind): count.fail(request.window, kind)
-                        case .superseded: break
+                        // Neither placed nor failed: a window that stopped being placeable is skipped.
+                        case .superseded, .skipped: break
                         }
                     }
                     return count
@@ -497,7 +498,7 @@ public actor WindowEngine {
         switch outcome {
         case .placed(let frame): await recordLastKnownLive([KnownFrame(handle: window, frame: frame)], since: since)
         case .failed(.movedDuringPlacement): touched.insert(window)
-        case .unchanged, .failed, .superseded: break
+        case .unchanged, .failed, .superseded, .skipped: break
         }
     }
 

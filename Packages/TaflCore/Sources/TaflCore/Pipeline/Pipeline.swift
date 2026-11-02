@@ -7,6 +7,18 @@ public enum PlacementOutcome: Equatable, Sendable {
     case failed(FailureKind)
     /// A newer request for the window, or a display reconfiguration, cancelled this one.
     case superseded
+    /// The window stopped being placeable before it was written: nothing was done or recorded.
+    case skipped
+}
+
+/// What a request does with a window that can't be placed: full screen, minimised, in a hidden
+/// app, or a sheet.
+public enum Unplaceable: Sendable {
+    /// A user's action on the focused window says why for full screen and a sheet; a minimised
+    /// window or a hidden app's is skipped.
+    case explained
+    /// A run skips the window: no failure, no overlay, nothing recorded.
+    case skipped
 }
 
 /// What Resolve reads for a window, handed to the planner.
@@ -40,6 +52,7 @@ public struct ResolvedWindow: Sendable {
 private enum Resolution {
     case resolved(ResolvedWindow)
     case failed(FailureKind)
+    case skipped
 }
 
 public enum PlanResult: Sendable {
@@ -80,12 +93,13 @@ public actor Pipeline {
     public func run(
         _ window: WindowHandle,
         config: Config,
+        unplaceable: Unplaceable = .skipped,
         plan: @escaping @Sendable (ResolvedWindow) -> PlanResult,
         eligible: @escaping @Sendable () async -> Bool = { true },
         landed: @escaping @Sendable (PlacementOutcome) async -> Void = { _ in }
     ) async -> PlacementOutcome {
         let outcome = await queue.run(window) { [self] in
-            let outcome = await execute(window, config: config, plan: plan, eligible: eligible)
+            let outcome = await execute(window, config: config, unplaceable: unplaceable, plan: plan, eligible: eligible)
             await landed(outcome)
             return outcome
         }
@@ -93,7 +107,8 @@ public actor Pipeline {
     }
 
     public func run(_ request: MoveRequest, config: Config) async -> PlacementOutcome {
-        await run(request.window, config: config) { _ in .request(request) }
+        let unplaceable: Unplaceable = if case .action = request.source { .explained } else { .skipped }
+        return await run(request.window, config: config, unplaceable: unplaceable) { _ in .request(request) }
     }
 
     // MARK: Stages
@@ -101,14 +116,16 @@ public actor Pipeline {
     private func execute(
         _ window: WindowHandle,
         config: Config,
+        unplaceable: Unplaceable,
         plan: @Sendable (ResolvedWindow) -> PlanResult,
         eligible: @Sendable () async -> Bool
     ) async -> PlacementOutcome {
         // Read first: a reconfiguration that begins after this cancels the write.
         let epoch = await writer.epoch
         let resolved: ResolvedWindow
-        switch await resolve(window) {
+        switch await resolve(window, unplaceable: unplaceable) {
         case .failed(let kind): return .failed(kind)
+        case .skipped: return .skipped
         case .resolved(let value): resolved = value
         }
         let snapshot = resolved.snapshot
@@ -168,14 +185,19 @@ public actor Pipeline {
 
     /// Resolve: the window, its display, and the memory about it, reconciled with where the
     /// window is.
-    private func resolve(_ window: WindowHandle) async -> Resolution {
+    private func resolve(_ window: WindowHandle, unplaceable: Unplaceable) async -> Resolution {
         let snapshot: WindowSnapshot
         switch await platform.snapshot(of: window) {
         case .failure(let failure): return .failed(await failureKind(failure, window: window, appName: nil))
         case .success(let value): snapshot = value
         }
-        if snapshot.isFullscreen { return .failed(.fullscreen) }
-        if snapshot.isSheet || !snapshot.canMove { return .failed(.cannotMove) }
+        // The predicate the runs enumerate with, for every request, before anything is recorded.
+        if !snapshot.isPlaceable {
+            if unplaceable == .explained, snapshot.isFullscreen { return .failed(.fullscreen) }
+            if unplaceable == .explained, snapshot.isSheet { return .failed(.cannotMove) }
+            return .skipped
+        }
+        if !snapshot.canMove { return .failed(.cannotMove) }
         let displays = await platform.displays()
         guard let current = DisplayLocator.display(containing: snapshot.frame, in: displays) else {
             return .failed(.cannotMove)
