@@ -1454,10 +1454,12 @@ private func pollUntilLastKnown(
     #expect(saved.activeLayout == "Second")
 }
 
-@Test(.timeLimit(.minutes(1))) func aReloadThatRemovesARunningLayoutKeepsItInactive() async {
+@Test(.timeLimit(.minutes(1))) func aReloadThatRemovesARunningLayoutKeepsItInactiveAndUnsaved() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
     let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
     let desk = layout("Desk", [slot(.topHalf, app: "com.c")])
-    let rig = await Rig(windows: [slow], focused: nil) { $0.hung = [50] }
+    let rig = await Rig(windows: [slow], focused: nil, store: store) { $0.hung = [50] }
     await rig.engine.start(config: config(layouts: [desk]))
     let applying = Task { await rig.engine.applyLayout(named: "Desk") }
     // Desk's run waits on the hung app while a reload removes Desk.
@@ -1467,9 +1469,31 @@ private func pollUntilLastKnown(
     await applying.value
     #expect(await rig.engine.activeLayoutName == nil)
     #expect(await rig.engine.memory.read().activeLayout == nil)
+    #expect(store.load() == .fresh)
     // Adding Desk back does not make it active by itself.
     await rig.engine.update(config: config(layouts: [desk]))
     #expect(await rig.engine.activeLayoutName == nil)
+}
+
+@Test(.timeLimit(.minutes(1))) func aReloadThatKeepsARunningLayoutLetsItBecomeActiveAndSaved() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
+    let desk = layout("Desk", [slot(.topHalf, app: "com.c")])
+    let rig = await Rig(windows: [slow], focused: nil, store: store) { $0.hung = [50] }
+    await rig.engine.start(config: config(layouts: [desk]))
+    let applying = Task { await rig.engine.applyLayout(named: "Desk") }
+    // Desk's run waits on the hung app while an unrelated change to the file is reloaded.
+    await rig.clock.waitForSleepers(1)
+    await rig.engine.update(config: config(gap: 10, layouts: [desk]))
+    await rig.clock.advance(by: .milliseconds(500))
+    await applying.value
+    #expect(await rig.engine.activeLayoutName == "Desk")
+    guard case .loaded(let saved) = store.load() else {
+        Issue.record("Expected the active layout to be saved")
+        return
+    }
+    #expect(saved.activeLayout == "Desk")
 }
 
 @Test(.timeLimit(.minutes(1))) func aReloadThatRemovesTheClaimingLayoutDuringTheRulesKeepsItInactive() async {
@@ -1491,6 +1515,25 @@ private func pollUntilLastKnown(
     #expect(await rig.engine.memory.read().activeLayout == nil)
     await rig.engine.update(config: config(layouts: [dock]))
     #expect(await rig.engine.activeLayoutName == nil)
+}
+
+@Test(.timeLimit(.minutes(1))) func aReloadThatKeepsTheClaimingLayoutDuringTheRulesLetsItBecomeActive() async {
+    let rig = await Rig(windows: [window(1, frame: start)], focused: nil)
+    await rig.engine.start(config: config(layouts: [dock]))
+    await rig.fake.configure { $0.displays = bothDisplays }
+    // The dock rules' first write is held while an unrelated change to the file is reloaded.
+    let gate = await rig.fake.pause(beforeCall: 0)
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(2)
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: quiet)
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.engine.update(config: config(gap: 10, layouts: [dock]))
+    gate.open()
+    await rig.waitForReport { if case .displayChangeHandled = $0 { true } else { false } }
+    #expect(await rig.engine.activeLayoutName == "Dock")
+    #expect(await rig.engine.memory.read().activeLayout == "Dock")
 }
 
 @Test(.timeLimit(.minutes(1))) func aLayoutAppliedWhileTheRulesRunStaysActive() async {

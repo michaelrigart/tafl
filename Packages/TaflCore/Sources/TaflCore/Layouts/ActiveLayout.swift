@@ -5,10 +5,13 @@ public struct ActiveLayout: Equatable, Sendable {
         self.name = name
     }
 
-    /// Only a layout the config has can become active; asked for one it lacks, nothing changes.
-    public mutating func activate(_ name: String, in config: Config) {
-        guard config.layouts.contains(where: { $0.name == name }) else { return }
+    /// Only a layout the config has can become active; asked for one it lacks, nothing changes and
+    /// the answer is false.
+    @discardableResult
+    public mutating func activate(_ name: String, in config: Config) -> Bool {
+        guard config.layouts.contains(where: { $0.name == name }) else { return false }
         self.name = name
+        return true
     }
 
     public mutating func endForDisplayChange() {

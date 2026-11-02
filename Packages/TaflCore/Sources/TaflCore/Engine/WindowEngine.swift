@@ -103,8 +103,8 @@ public actor WindowEngine {
     let pipeline: Pipeline
     /// Display reconfigurations: one that begins stops every run that started before it.
     let reconfigurations = Generation()
-    /// Layout applications, by a shortcut, the menu or a display change, and config reloads: the
-    /// newest one decides the active layout.
+    /// Layout applications, by a shortcut, the menu or a display change: the newest one decides
+    /// the active layout.
     let layoutApplications = Generation()
     /// Observation restarts: only the newest commits what it learned.
     let restarts = Generation()
@@ -231,11 +231,10 @@ public actor WindowEngine {
         await memory.update { $0.forget(pids: gone) }
     }
 
-    /// A reload overtakes the layout applications still running: they were planned against the
-    /// old config, so they no longer activate their layout.
+    /// A layout application still running finishes against the config in force then: a layout the
+    /// reload removed does not become active.
     public func update(config: Config) async {
         self.config = config
-        layoutApplications.begin()
         activeLayout.reconcile(with: config)
         let layout = activeLayout.name
         await memory.update { $0.activeLayout = layout }
@@ -420,8 +419,13 @@ public actor WindowEngine {
         }
     }
 
+    /// A layout the current config lacks neither becomes active nor is saved.
     func setActiveLayout(_ name: String?) async {
-        if let name { activeLayout.activate(name, in: config) } else { activeLayout.endForDisplayChange() }
+        if let name {
+            guard activeLayout.activate(name, in: config) else { return }
+        } else {
+            activeLayout.endForDisplayChange()
+        }
         let active = activeLayout.name
         await memory.update { $0.activeLayout = active }
         await save()
