@@ -52,6 +52,14 @@ final class Platform27: WindowPlatform {
         NSRunningApplication(processIdentifier: pid)?.localizedName
     }
 
+    func launchDates(of pids: Set<Int32>) async -> [Int32: Date] {
+        var dates: [Int32: Date] = [:]
+        for pid in pids {
+            if let date = NSRunningApplication(processIdentifier: pid)?.launchDate { dates[pid] = date }
+        }
+        return dates
+    }
+
     func capabilities() async -> [CapabilityState] {
         let symbol = WindowIDResolver.privateSymbolAvailable
         let list = symbol || !WindowIDResolver.windowList().isEmpty

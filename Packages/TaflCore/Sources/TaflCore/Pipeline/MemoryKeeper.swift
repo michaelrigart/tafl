@@ -44,9 +44,11 @@ public actor MemoryKeeper {
     }
 
     /// Saves nothing when the last load must not be written over, or there is no store. The
-    /// error is the store's: a `MemoryStoreError`, or the file system's.
+    /// error is the store's: a `MemoryStoreError`, or the file system's. A save records when it
+    /// was made.
     public func save() -> Result<Void, any Error> {
         guard let store, mayWrite else { return .success(()) }
+        memory.savedAt = Date()
         return Result { try store.save(memory) }
     }
 }

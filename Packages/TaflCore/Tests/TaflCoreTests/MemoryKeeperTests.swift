@@ -122,6 +122,17 @@ final class MemoryKeeperTests {
         #expect(error as? MemoryStoreError == .unsupportedVersion(2))
     }
 
+    @Test func aSaveRecordsWhenItWasMade() async throws {
+        let keeper = MemoryKeeper(store: store)
+        #expect(await keeper.load() == .fresh)
+        let before = Date()
+        #expect(isSuccess(await keeper.save()))
+        let after = Date()
+        guard case .loaded(let saved) = store.load() else { Issue.record("Nothing was written"); return }
+        let savedAt = try #require(saved.savedAt)
+        #expect(before <= savedAt && savedAt <= after)
+    }
+
     @Test func withoutAStoreSaveSucceeds() async {
         let keeper = MemoryKeeper()
         await change(keeper)

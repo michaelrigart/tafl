@@ -47,7 +47,19 @@ final class MemoryStoreTests {
         memory.recordLastKnown(w2, frame: rect(1200, 150, 800, 600), display: displayB, setup: DisplaySetup([displayA, displayB]))
         memory.activeLayout = "Desk"
         memory.lastDisplays = [displayA, displayB]
+        memory.savedAt = Date(timeIntervalSince1970: 1_800_000_000)
         return memory
+    }
+
+    /// A file written before Tafl kept a save date still loads, without one.
+    @Test func aFileWithoutASaveDateStillLoads() throws {
+        let store = MemoryStore(fileURL: file)
+        var memory = sampleMemory()
+        memory.savedAt = nil
+        try store.save(memory)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(object["savedAt"] == nil)
+        #expect(store.load() == .loaded(memory))
     }
 
     @Test func missingFileIsFresh() {

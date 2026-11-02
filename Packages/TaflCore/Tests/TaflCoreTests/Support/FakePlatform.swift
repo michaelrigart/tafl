@@ -64,6 +64,9 @@ actor FakePlatform: WindowPlatform {
     var hung: Set<Int32> = []
     /// App names by process id; a pid not listed falls back to the name of one of its windows.
     var appNames: [Int32: String] = [:]
+    /// Launch dates by process id. A pid not listed is running since long ago while it has a
+    /// window, and is not running otherwise.
+    var launched: [Int32: Date] = [:]
     var unobserved: [UnobservedApp] = []
 
     private(set) var callLog: [String] = []
@@ -173,6 +176,18 @@ actor FakePlatform: WindowPlatform {
 
     func appName(pid: Int32) async -> String? {
         appNames[pid] ?? windows.values.first { $0.handle.pid == pid }?.appName
+    }
+
+    func launchDates(of pids: Set<Int32>) async -> [Int32: Date] {
+        var dates: [Int32: Date] = [:]
+        for pid in pids {
+            if let date = launched[pid] {
+                dates[pid] = date
+            } else if windows.values.contains(where: { $0.handle.pid == pid }) {
+                dates[pid] = .distantPast
+            }
+        }
+        return dates
     }
 
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> {

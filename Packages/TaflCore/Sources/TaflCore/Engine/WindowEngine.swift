@@ -153,6 +153,7 @@ public actor WindowEngine {
         self.config = config
         let load = await memory.load()
         report(.memory(load))
+        await forgetGoneProcesses()
         let remembered = await memory.read()
         activeLayout = ActiveLayout(name: remembered.activeLayout)
         activeLayout.reconcile(with: config)
@@ -182,6 +183,15 @@ public actor WindowEngine {
             )
             await memory.update { $0.lastDisplays = current }
         }
+    }
+
+    /// The memory names windows by process id. Before any rule reads it, the entries of a process
+    /// that has gone, or whose id a process launched since the save has taken, are dropped:
+    /// losing them beats moving the wrong window.
+    private func forgetGoneProcesses() async {
+        let saved = await memory.read()
+        let gone = saved.goneProcesses(launched: await platform.launchDates(of: saved.windowPids))
+        await memory.update { $0.forget(pids: gone) }
     }
 
     public func update(config: Config) async {
@@ -344,6 +354,7 @@ public actor WindowEngine {
     func setActiveLayout(_ name: String?) async {
         if let name { activeLayout.activate(name) } else { activeLayout.endForDisplayChange() }
         await memory.update { $0.activeLayout = name }
+        await save()
     }
 
     /// Runs the requests: apps side by side, each app's windows in order, so an app that does

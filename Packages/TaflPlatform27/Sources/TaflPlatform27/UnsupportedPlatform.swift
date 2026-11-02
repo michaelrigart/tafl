@@ -1,3 +1,4 @@
+import Foundation
 import TaflCore
 
 /// The platform on a macOS older than 27: every call fails or answers empty, and the one
@@ -16,6 +17,7 @@ final class UnsupportedPlatform: WindowPlatform {
     func visibleWindows() async -> [WindowSnapshot] { [] }
     func snapshot(of handle: WindowHandle) async -> Result<WindowSnapshot, PlatformFailure> { .failure(.noWindow) }
     func appName(pid: Int32) async -> String? { nil }
+    func launchDates(of pids: Set<Int32>) async -> [Int32: Date] { [:] }
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> { .failure(.noWindow) }
     func pointerDisplay() async -> DisplayIdentity? { nil }
     func tilingSettings() async -> TilingSettings {

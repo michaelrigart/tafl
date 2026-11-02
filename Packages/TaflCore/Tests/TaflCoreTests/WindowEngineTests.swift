@@ -705,6 +705,110 @@ private func temporaryStore() -> (MemoryStore, URL) {
     #expect(after.lastKnown.isEmpty)
 }
 
+// MARK: Memory across launches
+
+private let saveDate = Date(timeIntervalSince1970: 1_800_000_000)
+
+/// A memory saved while the app of `handle` ran, last on A alone: it has the window on B for
+/// the docked setup, a placement and a restore chain.
+private func rememberedOnB(savedAt: Date?) -> WindowMemory {
+    var memory = WindowMemory(lastDisplays: [displayA], savedAt: savedAt)
+    memory.recordLastKnown(handle, frame: leftHalfB, display: displayB, setup: DisplaySetup(bothDisplays))
+    memory.openChain(handle, before: start, on: displayA)
+    memory.recordPlaced(handle, PlacedRecord(
+        action: .leftHalf, layout: nil, placement: .leftHalf, cycleStep: 0, achieved: leftHalfA, display: displayA.identity
+    ))
+    return memory
+}
+
+private func storeHolding(_ memory: WindowMemory) throws -> (MemoryStore, URL) {
+    let (store, directory) = temporaryStore()
+    try store.save(memory)
+    return (store, directory)
+}
+
+@Test func aWindowOfAnAppRunningSinceTheSaveIsRemembered() async throws {
+    let (store, directory) = try storeHolding(rememberedOnB(savedAt: saveDate))
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: start)], store: store) {
+        $0.launched = [100: saveDate.addingTimeInterval(-60)]
+    }
+    await rig.engine.start(config: config())
+    // Rule 2: the docked setup was seen before, so the window goes back to where it was on it.
+    #expect(await rig.frame().map { isClose($0, leftHalfB) } == true)
+    #expect(await rig.engine.memory.read().restore[handle] != nil)
+}
+
+@Test func aWindowOfAnAppLaunchedSinceTheSaveIsForgotten() async throws {
+    let (store, directory) = try storeHolding(rememberedOnB(savedAt: saveDate))
+    defer { try? FileManager.default.removeItem(at: directory) }
+    // The pid now belongs to an app launched after the memory was saved, as after a reboot.
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: start)], store: store) {
+        $0.launched = [100: saveDate.addingTimeInterval(60)]
+    }
+    await rig.engine.start(config: config())
+    // Rule 2 has nothing for it: the window stays where it is.
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.frame() == start)
+    let memory = await rig.engine.memory.read()
+    #expect(memory.placed[handle] == nil)
+    #expect(memory.restore[handle] == nil)
+}
+
+@Test func aWindowOfAnAppThatIsGoneIsForgotten() async throws {
+    let gone = WindowHandle(pid: 300, windowID: 9, isStable: true)
+    var memory = WindowMemory(lastDisplays: [displayA], savedAt: saveDate)
+    memory.openChain(gone, before: start, on: displayA)
+    memory.recordLastKnown(gone, frame: start, display: displayA, setup: DisplaySetup(bothDisplays))
+    memory.openChain(handle, before: start, on: displayA)
+    let (store, directory) = try storeHolding(memory)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let rig = await Rig(windows: [window(1, frame: start)], store: store)
+    await rig.engine.start(config: config())
+    let after = await rig.engine.memory.read()
+    #expect(after.restore[gone] == nil)
+    #expect(after.lastKnown(gone, setup: DisplaySetup(bothDisplays)) == nil)
+    #expect(after.restore[handle] != nil)
+}
+
+@Test func aMemoryWithoutASaveDateForgetsEveryWindow() async throws {
+    let (store, directory) = try storeHolding(rememberedOnB(savedAt: nil))
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: start)], store: store)
+    await rig.engine.start(config: config())
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.engine.memory.read().restore[handle] == nil)
+}
+
+@Test func aSettledDisplayChangeIsSaved() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: leftHalfB)], store: store)
+    await rig.engine.start(config: config())
+    await rig.fake.configure { $0.windows[handle]?.frame = rect(0, 25, 600, 500) }
+    await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
+    await rig.waitForReport { if case .displayChangeHandled = $0 { true } else { false } }
+    guard case .loaded(let saved) = store.load() else {
+        Issue.record("Expected the settled change to be saved")
+        return
+    }
+    #expect(saved.lastDisplays == [displayA])
+}
+
+@Test func anActivatedLayoutIsSaved() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(windows: [window(1, frame: start)], store: store)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    guard case .loaded(let saved) = store.load() else {
+        Issue.record("Expected the active layout to be saved")
+        return
+    }
+    #expect(saved.activeLayout == "Desk")
+}
+
 // MARK: Settling and rules runs
 
 /// Two windows on B that macOS moved to A when B went away; each ends where its relative

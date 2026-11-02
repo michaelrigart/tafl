@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import TaflCore
 
@@ -129,6 +130,39 @@ struct WindowMemoryTests {
         }
         #expect(memory.placed[w3] != nil && memory.restore[w3] != nil)
         #expect(memory.lastKnown(w3, setup: setup) != nil)
+    }
+
+    @Test func processesGoneOrLaunchedSinceTheSaveAreGone() {
+        let saved = Date(timeIntervalSince1970: 1_800_000_000)
+        let w4 = WindowHandle(pid: 300, windowID: 1, isStable: true)
+        var memory = WindowMemory(savedAt: saved)
+        memory.recordPlaced(w1, placed())
+        memory.openChain(w3, before: rect(100, 100, 400, 300), on: displayA)
+        memory.recordLastKnown(w4, frame: rect(100, 100, 400, 300), display: displayA, setup: DisplaySetup([displayA]))
+        #expect(memory.windowPids == [100, 200, 300])
+        // 100 ran before the save; 200 was launched after it; 300 is not running.
+        let launched: [Int32: Date] = [100: saved.addingTimeInterval(-1), 200: saved.addingTimeInterval(1)]
+        #expect(memory.goneProcesses(launched: launched) == [200, 300])
+    }
+
+    @Test func withoutASaveDateNoProcessIsKnownToBeTheSame() {
+        var memory = WindowMemory()
+        memory.recordPlaced(w1, placed())
+        memory.recordPlaced(w3, placed())
+        #expect(memory.goneProcesses(launched: [100: .distantPast, 200: .distantPast]) == [100, 200])
+    }
+
+    @Test func forgettingProcessesRemovesTheirWindowsEverywhere() {
+        var memory = WindowMemory()
+        let setup = DisplaySetup([displayA])
+        for window in [w1, w3] {
+            memory.openChain(window, before: rect(100, 100, 400, 300), on: displayA)
+            memory.recordPlaced(window, placed())
+            memory.recordLastKnown(window, frame: rect(100, 100, 400, 300), display: displayA, setup: setup)
+        }
+        memory.forget(pids: [200])
+        #expect(memory.windowPids == [100])
+        #expect(memory.placed[w1] != nil && memory.restore[w1] != nil && memory.lastKnown(w1, setup: setup) != nil)
     }
 
     @Test func forgettingTheLastWindowOfASetupDropsTheSetup() {

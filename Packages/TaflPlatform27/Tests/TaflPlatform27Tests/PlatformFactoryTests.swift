@@ -9,6 +9,7 @@ import TaflCore
     #expect(await platform.displays().isEmpty)
     #expect(await platform.visibleWindows().isEmpty)
     #expect(await platform.appName(pid: 1) == nil)
+    #expect(await platform.launchDates(of: [1]).isEmpty)
     #expect(await platform.focusedWindow() == .failure(.noWindow))
     #expect(await platform.snapshot(of: WindowHandle(pid: 1, windowID: 1, isStable: true)) == .failure(.noWindow))
     #expect(await platform.startObserving().isEmpty)
@@ -27,6 +28,12 @@ import TaflCore
     #expect(await !platform.isAccessibilityGranted())
     #expect(await platform.pointerDisplay() == nil)
     #expect(await platform.tilingSettings() == TilingSettings(edgeDrag: nil, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: nil))
+}
+
+/// pid_max is 99999, so this process never exists.
+@Test func aProcessThatIsNotRunningHasNoLaunchDate() async {
+    let platform = PlatformFactory.make(osVersion: OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 0))
+    #expect(await platform.launchDates(of: [999_999]).isEmpty)
 }
 
 @Test func macOS27AndLaterGetsTheRealPlatform() {

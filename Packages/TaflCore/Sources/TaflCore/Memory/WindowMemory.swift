@@ -58,19 +58,23 @@ public struct WindowMemory: Codable, Equatable, Sendable {
     public var activeLayout: String?
     /// The displays, with their geometry, when Tafl last ran or last settled a change.
     public var lastDisplays: [Display]
+    /// When the memory was last saved; nil in a file from before Tafl kept it.
+    public var savedAt: Date?
 
     public init(
         placed: [WindowHandle: PlacedRecord] = [:],
         restore: [WindowHandle: RestoreRecord] = [:],
         lastKnown: [DisplaySetup: [WindowHandle: StoredFrame]] = [:],
         activeLayout: String? = nil,
-        lastDisplays: [Display] = []
+        lastDisplays: [Display] = [],
+        savedAt: Date? = nil
     ) {
         self.placed = placed
         self.restore = restore
         self.lastKnown = lastKnown
         self.activeLayout = activeLayout
         self.lastDisplays = lastDisplays
+        self.savedAt = savedAt
     }
 
     public var lastSetup: DisplaySetup? {
@@ -147,6 +151,25 @@ public struct WindowMemory: Codable, Equatable, Sendable {
         forget { $0.pid == pid }
     }
 
+    public mutating func forget(pids: Set<Int32>) {
+        forget { pids.contains($0.pid) }
+    }
+
+    /// The processes the window entries belong to.
+    public var windowPids: Set<Int32> {
+        Set(placed.keys.map(\.pid))
+            .union(restore.keys.map(\.pid))
+            .union(lastKnown.values.flatMap { $0.keys.map(\.pid) })
+    }
+
+    /// The processes whose entries name windows that are gone: a process without a launch date
+    /// is not running, and one launched after the save has the id of one that quit. Without a
+    /// save date no process is known to be the one the memory names.
+    public func goneProcesses(launched: [Int32: Date]) -> Set<Int32> {
+        guard let savedAt else { return windowPids }
+        return windowPids.filter { pid in launched[pid].map { $0 > savedAt } ?? true }
+    }
+
     private mutating func forget(where matches: (WindowHandle) -> Bool) {
         placed = placed.filter { !matches($0.key) }
         restore = restore.filter { !matches($0.key) }
@@ -166,7 +189,7 @@ public struct WindowMemory: Codable, Equatable, Sendable {
 // readable and stable.
 extension WindowMemory {
     private enum CodingKeys: String, CodingKey {
-        case version, placed, restore, lastKnown, activeLayout, lastDisplays
+        case version, placed, restore, lastKnown, activeLayout, lastDisplays, savedAt
     }
 
     private struct PlacedEntry: Codable {
@@ -208,6 +231,7 @@ extension WindowMemory {
         lastKnown = known
         activeLayout = try container.decodeIfPresent(String.self, forKey: .activeLayout)
         lastDisplays = try container.decode([Display].self, forKey: .lastDisplays)
+        savedAt = try container.decodeIfPresent(Date.self, forKey: .savedAt)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -232,6 +256,7 @@ extension WindowMemory {
         try container.encode(setups, forKey: .lastKnown)
         try container.encodeIfPresent(activeLayout, forKey: .activeLayout)
         try container.encode(lastDisplays, forKey: .lastDisplays)
+        try container.encodeIfPresent(savedAt, forKey: .savedAt)
     }
 }
 
