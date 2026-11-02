@@ -2,8 +2,8 @@ import Foundation
 import TOMLDecoder
 
 public enum ConfigParser {
-    /// Parses and validates a config file. The first error in file order wins: the root's keys are
-    /// walked in the order they appear, and `[shortcuts]` and `[[layouts]]` are checked where they stand.
+    /// Parses and validates a config file. The first error in file order wins: the root's settings,
+    /// the `[shortcuts]` table and each `[[layouts]]` entry are checked in the order they appear.
     public static func parse(_ text: String, table: KeyboardLayoutTable) -> Result<Config, ConfigError> {
         var text = text
         if text.unicodeScalars.first == "\u{FEFF}" { text.unicodeScalars.removeFirst() }
@@ -25,7 +25,7 @@ public enum ConfigParser {
 private typealias Path = [KeyPathComponent]
 
 /// Who holds each chord. Defaults are claimed first and everything else as the walk reaches it in
-/// file order, so a clash is always reported at the claim being added, the later one.
+/// file order, so the claim being added is always the later one, and a clash is reported at it.
 private struct Claims {
     private var owners: [KeyChord: String] = [:]
 
@@ -62,31 +62,38 @@ private struct ConfigWalker {
             if let chord = DefaultShortcuts.chords[action] { claims.addDefault(chord, owner: action.rawValue) }
         }
 
-        for key in orderedKeys(root, at: []) {
-            let path: Path = [.key(key)]
-            switch key {
-            case "repeat":
-                let value = try string(root, key, path)
-                guard let mode = RepeatMode(rawValue: value) else {
-                    throw fail(path, "repeat must be \"displays\", \"sizes\" or \"none\"")
-                }
-                repeatMode = mode
-            case "gap":
-                gap = try number(root, key, path)
-                guard (0...100).contains(gap) else { throw fail(path, "gap must be between 0 and 100") }
-            case "step":
-                step = try number(root, key, path)
-                guard (1...500).contains(step) else { throw fail(path, "step must be between 1 and 500") }
-            case "menu-bar-icon":
-                menuBarIcon = try bool(root, key, path)
-            case "launch-at-login":
-                launchAtLogin = try bool(root, key, path)
-            case "shortcuts":
+        for item in rootItems() {
+            switch item {
+            case .shortcuts:
                 shortcuts = try shortcutBindings(&claims)
-            case "layouts":
-                layouts = try layoutDefinitions(&claims)
-            default:
-                throw fail(path, "unknown key \"\(key)\"")
+            case .layoutList:
+                throw wrongType([.key("layouts")], "a list of tables")
+            case .layout(let index, let list):
+                let path: Path = [.key("layouts"), .index(index)]
+                let table = try element(list, index, path)
+                layouts.append(try layout(table, path, earlier: layouts, &claims))
+            case .setting(let key):
+                let path: Path = [.key(key)]
+                switch key {
+                case "repeat":
+                    let value = try string(root, key, path)
+                    guard let mode = RepeatMode(rawValue: value) else {
+                        throw fail(path, "repeat must be \"displays\", \"sizes\" or \"none\"")
+                    }
+                    repeatMode = mode
+                case "gap":
+                    gap = try number(root, key, path)
+                    guard (0...100).contains(gap) else { throw fail(path, "gap must be between 0 and 100") }
+                case "step":
+                    step = try number(root, key, path)
+                    guard (1...500).contains(step) else { throw fail(path, "step must be between 1 and 500") }
+                case "menu-bar-icon":
+                    menuBarIcon = try bool(root, key, path)
+                case "launch-at-login":
+                    launchAtLogin = try bool(root, key, path)
+                default:
+                    throw fail(path, "unknown key \"\(key)\"")
+                }
             }
         }
 
@@ -99,6 +106,38 @@ private struct ConfigWalker {
             launchAtLogin: launchAtLogin,
             layouts: layouts
         )
+    }
+
+    private enum RootItem {
+        case setting(String)
+        case shortcuts
+        case layout(Int, TOMLArray)
+        case layoutList
+    }
+
+    /// Every root setting, the shortcuts table and each layout, in the order they appear in the file.
+    private func rootItems() -> [RootItem] {
+        var located: [(line: Int, item: RootItem)] = []
+        for key in root.keys {
+            let keyLine = locator.line(of: [.key(key)]) ?? Int.max
+            switch key {
+            case "shortcuts":
+                located.append((keyLine, .shortcuts))
+            case "layouts":
+                if let list = try? root.array(forKey: key) {
+                    for index in 0..<list.count {
+                        located.append((locator.line(of: [.key(key), .index(index)]) ?? keyLine, .layout(index, list)))
+                    }
+                } else {
+                    located.append((keyLine, .layoutList))
+                }
+            default:
+                located.append((keyLine, .setting(key)))
+            }
+        }
+        return located.enumerated()
+            .sorted { $0.element.line != $1.element.line ? $0.element.line < $1.element.line : $0.offset < $1.offset }
+            .map(\.element.item)
     }
 
     // MARK: Shortcuts
@@ -142,18 +181,6 @@ private struct ConfigWalker {
 
     // MARK: Layouts
 
-    private func layoutDefinitions(_ claims: inout Claims) throws(ConfigError) -> [LayoutDefinition] {
-        let listPath: Path = [.key("layouts")]
-        let list = try array(root, "layouts", listPath, expected: "a list of tables")
-        var layouts: [LayoutDefinition] = []
-        for index in 0..<list.count {
-            let path = listPath + [.index(index)]
-            let table = try element(list, index, path)
-            layouts.append(try layout(table, path, earlier: layouts, &claims))
-        }
-        return layouts
-    }
-
     private func layout(
         _ table: TOMLTable,
         _ path: Path,
@@ -185,7 +212,7 @@ private struct ConfigWalker {
             }
         }
 
-        guard let name, !name.trimmingCharacters(in: .whitespaces).isEmpty else {
+        guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
             throw fail(path, "layout needs a name")
         }
         if earlier.contains(where: { $0.name == name }) {

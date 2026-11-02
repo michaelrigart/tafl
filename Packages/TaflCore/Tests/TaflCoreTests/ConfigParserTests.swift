@@ -338,7 +338,7 @@ struct ConfigParserTests {
     func badEscapeInList() throws {
         let failure = try #require(error("[[layouts]]\nname = \"A\"\ndisplays = [\"a\\qb\"]"))
         #expect(failure.line == 3)
-        #expect(!failure.message.contains("must be"))
+        #expect(failure.message == "Illegal escape character 'q'.")
     }
 
     @Test("An empty or blank layout name counts as no name")
@@ -357,5 +357,29 @@ struct ConfigParserTests {
     func byteOrderMark() {
         #expect(config("\u{FEFF}gap = 3")?.gap == 3)
         expect("\u{FEFF}gap = 3\ngapp = 1", line: 2, "unknown key \"gapp\"")
+    }
+
+    @Test("Interleaved files are checked in true file order, so the later claim or error is the one reported")
+    func interleavedSections() {
+        let head = "[[layouts]]\nname = \"A\"\ndisplays = [\"X\"]\n"
+        // Q1: layout B's shortcut comes after center's, so B is the later claim.
+        expect(head + "[shortcuts]\ncenter = \"ctrl+opt+cmd+1\"\n[[layouts]]\nname = \"B\"\nshortcut = \"ctrl+opt+cmd+1\"",
+               line: 8, "\"ctrl+opt+cmd+1\" is also used by center")
+        // Q2: the [shortcuts] error at line 5 precedes layout B's error at line 8.
+        expect(head + "[shortcuts]\nbogus = \"x\"\n[[layouts]]\nname = \"B\"\ndisplays = []",
+               line: 5, "unknown action \"bogus\"")
+    }
+
+    @Test("A default chord is freed by naming its action in [shortcuts], wherever that table sits")
+    func rebindFreesDefault() {
+        #expect(config("[shortcuts]\ncenter = \"ctrl+opt+left\"\nleft-half = \"ctrl+opt+shift+left\"") != nil)
+        #expect(config("[[layouts]]\nname = \"A\"\nshortcut = \"ctrl+opt+left\"\n[shortcuts]\nleft-half = \"ctrl+opt+shift+left\"") != nil)
+    }
+
+    @Test("Layout names that differ only by surrounding whitespace are the same name")
+    func trimmedNames() throws {
+        expect("[[layouts]]\nname = \"A\"\ndisplays = [\"X\"]\n[[layouts]]\nname = \"A \"\ndisplays = [\"Y\"]",
+               line: 5, "layout name \"A\" is used twice")
+        #expect(try #require(config("[[layouts]]\nname = \" A \"\ndisplays = [\"X\"]")).layouts.first?.name == "A")
     }
 }
