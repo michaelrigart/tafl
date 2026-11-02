@@ -78,6 +78,9 @@ actor FakePlatform: WindowPlatform {
     var visibleWindowsLateGate: FakeGate?
     /// Holds the next `snapshot(of:)` call until the gate opens.
     var snapshotGate: FakeGate?
+    /// How many `snapshot(of:)` calls have started.
+    private(set) var snapshotCount = 0
+    private var snapshotGates: [Int: FakeGate] = [:]
 
     /// How many `beginWriting` calls wait for another session of the same app to end.
     var waitingSessionCount: Int { waiters.values.reduce(0) { $0 + $1.count } }
@@ -132,6 +135,13 @@ actor FakePlatform: WindowPlatform {
         }
     }
 
+    /// Holds the `snapshot(of:)` call with this index, counted from 0, until the returned gate opens.
+    func pauseSnapshot(at index: Int) -> FakeGate {
+        let gate = FakeGate()
+        snapshotGates[index] = gate
+        return gate
+    }
+
     /// Holds the call with this index until the returned gate opens.
     func pause(beforeCall index: Int) -> FakeGate {
         let gate = FakeGate()
@@ -162,6 +172,9 @@ actor FakePlatform: WindowPlatform {
     }
 
     func snapshot(of handle: WindowHandle) async -> Result<WindowSnapshot, PlatformFailure> {
+        let index = snapshotCount
+        snapshotCount += 1
+        if let gate = snapshotGates.removeValue(forKey: index) { await gate.wait() }
         if let gate = snapshotGate {
             snapshotGate = nil
             await gate.wait()

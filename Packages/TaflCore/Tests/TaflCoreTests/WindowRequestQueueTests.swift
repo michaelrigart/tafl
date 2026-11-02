@@ -66,7 +66,7 @@ private func waitForRequests(_ queue: WindowRequestQueue, _ count: Int) async {
         targetVisible: displayB.visibleFrame, crossesDisplays: true, minSize: nil, displays: [displayA, displayB]
     )
 
-    let first = Task { await queue.run(handle) { await writer.write(job, beforeFirstWrite: {}) } }
+    let first = Task { await queue.run(handle) { await writer.write(job, beforeFirstWrite: { true }) } }
     await clock.waitForSleepers(1)
     let second = Task { await queue.run(handle) { 42 } }
 

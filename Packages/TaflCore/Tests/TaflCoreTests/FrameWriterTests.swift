@@ -43,7 +43,7 @@ private struct Rig {
         writer = FrameWriter(platform: fake, clock: clock, adjustments: adjustments, reapplyDelay: reapplyDelay)
     }
 
-    func start(_ job: WriteJob, before: @escaping @Sendable () async -> Void = {}) -> Task<WriteResult, Never> {
+    func start(_ job: WriteJob, before: @escaping @Sendable () async -> Bool = { true }) -> Task<WriteResult, Never> {
         Task { [writer] in await writer.write(job, beforeFirstWrite: before) }
     }
 
@@ -128,7 +128,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
     let target = rect(0, 25, 500, 775)
     let rig = await Rig(start: target)
     let before = Counter()
-    let result = await rig.start(job(start: target, target: target), before: { _ = before.next() }).value
+    let result = await rig.start(job(start: target, target: target), before: { _ = before.next(); return true }).value
     #expect(result == .placed(target))
     #expect(await rig.log == ["begin", "end"])
     #expect(before.count == 0)
@@ -360,11 +360,22 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 @Test func beforeFirstWriteRunsOnceBeforeTheFirstWrite() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let seen = Recorder()
-    let task = rig.start(steppedJob()) { [fake = rig.fake] in seen.record(await fake.callLog) }
+    let task = rig.start(steppedJob()) { [fake = rig.fake] in
+        seen.record(await fake.callLog)
+        return true
+    }
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(25))
     _ = await task.value
     #expect(seen.all == [["begin"]])
+}
+
+@Test func aDeclinedFirstWriteWritesNothing() async {
+    let rig = await Rig(start: crossStart)
+    let result = await rig.start(crossJob(), before: { false }).value
+    #expect(result == .cancelled(lastVerified: nil))
+    #expect(await rig.log == ["begin", "end"])
+    #expect(await rig.fake.windows[handle]?.frame == crossStart)
 }
 
 // MARK: Observations over the whole request
@@ -493,6 +504,7 @@ private func aChangeDuringTheFirstWriteCallbackIsJudgedBeforeTheWrite(_ during: 
     let task = rig.start(crossJob()) {
         _ = entered.next()
         while release.count == 0 { await Task.yield() }
+        return true
     }
     #expect(await pollUntil { entered.count == 1 })
     switch during {
@@ -758,7 +770,7 @@ private func writeReturned(_ rig: Rig, timeout: Duration = .seconds(2)) async ->
 @Test func hungAppFailsWithoutWriting() async {
     let rig = await Rig(start: crossStart) { $0.hung = [100] }
     let before = Counter()
-    let task = rig.start(crossJob(), before: { _ = before.next() })
+    let task = rig.start(crossJob(), before: { _ = before.next(); return true })
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(500))
 
@@ -799,7 +811,7 @@ private func writeReturned(_ rig: Rig, timeout: Duration = .seconds(2)) async ->
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 0)
     let before = Counter()
-    let task = rig.start(crossJob(), before: { _ = before.next() })
+    let task = rig.start(crossJob(), before: { _ = before.next(); return true })
     #expect(await pollUntil { gate.waiterCount == 1 })
     task.cancel()
     gate.open()

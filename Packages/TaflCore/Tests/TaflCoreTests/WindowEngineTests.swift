@@ -459,6 +459,51 @@ private final class Rig: Sendable {
     #expect(await rig.frame() == leftHalfA)
 }
 
+@Test(.timeLimit(.minutes(1))) func aMoveWhileATitlePlacementResolvesWins() async {
+    let desk = layout("Desk", [slot(.rightHalf, title: "*Docs*")])
+    let rig = await Rig()
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = titled(window(1, frame: start), "Untitled")
+    await rig.fake.configure { $0.windows[created.handle] = created }
+    await rig.emit(.windowCreated(created))
+    await rig.waitForEvents(1)
+    // The title placement's own read passes; the pipeline's Resolve read is held while the user drags.
+    let reads = await rig.fake.snapshotCount
+    let resolving = await rig.fake.pauseSnapshot(at: reads + 1)
+    await rig.fake.configure { $0.windows[handle]?.title = "Docs" }
+    await rig.emit(.titleChanged(handle, "Docs"))
+    await rig.fake.waitUntil { _ in resolving.waiterCount == 1 }
+    let dragged = rect(300, 300, 400, 300)
+    await rig.fake.configure { $0.windows[handle]?.frame = dragged }
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(2)
+    resolving.open()
+    await rig.waitForEvents(3)
+    #expect(await rig.frame() == dragged)
+}
+
+@Test(.timeLimit(.minutes(1))) func aMoveWhileANewWindowsPlacementResolvesWins() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig()
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = window(1, frame: start)
+    let reads = await rig.fake.snapshotCount
+    let resolving = await rig.fake.pauseSnapshot(at: reads)
+    await rig.fake.configure { $0.windows[created.handle] = created }
+    await rig.emit(.windowCreated(created))
+    await rig.fake.waitUntil { _ in resolving.waiterCount == 1 }
+    let dragged = rect(300, 300, 400, 300)
+    await rig.fake.configure { $0.windows[handle]?.frame = dragged }
+    await rig.emit(.windowMoved(handle))
+    // The placement counts as an event once it is done, the move once it is judged.
+    await rig.waitForEvents(1)
+    resolving.open()
+    await rig.waitForEvents(2)
+    #expect(await rig.frame() == dragged)
+}
+
 @Test func applyingALayoutEndsANewWindowsTitleCheck() async {
     let desk = layout("Desk", [slot(.rightHalf, title: "*Docs*"), slot(.leftHalf)])
     let rig = await Rig()

@@ -155,9 +155,7 @@ extension WindowEngine {
         since: Int
     ) async {
         let displays = knownDisplays
-        // Touched while it was read: the touch wins.
-        guard case .success(let snapshot) = await platform.snapshot(of: window), !touched.contains(window),
-              snapshot.isPlaceable,
+        guard case .success(let snapshot) = await platform.snapshot(of: window), snapshot.isPlaceable,
               let request = LayoutPlanner.requests(
                   definition, windows: [snapshot], displays: displays, source: .newWindow(layout: definition.name)
               ).first

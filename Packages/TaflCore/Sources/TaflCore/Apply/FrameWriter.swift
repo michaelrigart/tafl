@@ -153,7 +153,9 @@ public actor FrameWriter {
         self.reapplyDelay = reapplyDelay
     }
 
-    public func write(_ job: WriteJob, beforeFirstWrite: @Sendable () async -> Void) async -> WriteResult {
+    /// `beforeFirstWrite` runs once the request is registered, just before its first write; when it
+    /// answers false the request stops with nothing written.
+    public func write(_ job: WriteJob, beforeFirstWrite: @Sendable () async -> Bool) async -> WriteResult {
         if let planned = job.plannedEpoch, planned != epoch { return .cancelled(lastVerified: nil) }
         let request = Request(job: job, startEpoch: epoch)
         requests[job.window] = request
@@ -199,7 +201,7 @@ public actor FrameWriter {
 
     // MARK: The request
 
-    private func run(_ request: Request, _ beforeFirstWrite: @Sendable () async -> Void) async -> WriteResult {
+    private func run(_ request: Request, _ beforeFirstWrite: @Sendable () async -> Bool) async -> WriteResult {
         let job = request.job
         let first = await attempt(request, start: job.start, reapplying: nil, beforeFirstWrite)
         // Rectangle reapplies only when the size came out wrong.
@@ -216,7 +218,7 @@ public actor FrameWriter {
         }
         guard !Task.isCancelled, epoch == request.startEpoch else { return judgePending(request) ? .interrupted : first }
         if judgePending(request) { return .interrupted }
-        return await attempt(request, start: frame, reapplying: first, {})
+        return await attempt(request, start: frame, reapplying: first, { true })
     }
 
     /// One session, from `beginWriting` to `end()`. A reapply (`reapplying` is the earlier
@@ -226,7 +228,7 @@ public actor FrameWriter {
         _ request: Request,
         start: ScreenRect,
         reapplying earlier: WriteResult?,
-        _ beforeFirstWrite: @Sendable () async -> Void
+        _ beforeFirstWrite: @Sendable () async -> Bool
     ) async -> WriteResult {
         request.beginSession(from: start)
         let session: any WriteSession
@@ -252,7 +254,7 @@ public actor FrameWriter {
     private func reapply(
         _ context: Context,
         after earlier: WriteResult,
-        _ beforeFirstWrite: @Sendable () async -> Void
+        _ beforeFirstWrite: @Sendable () async -> Bool
     ) async -> WriteResult {
         let request = context.request
         if Task.isCancelled || epoch != request.startEpoch { return earlier }
@@ -264,7 +266,7 @@ public actor FrameWriter {
 
     // MARK: The write sequence
 
-    private func sequence(_ context: Context, _ beforeFirstWrite: @Sendable () async -> Void) async -> WriteResult {
+    private func sequence(_ context: Context, _ beforeFirstWrite: @Sendable () async -> Bool) async -> WriteResult {
         let request = context.request
         let job = request.job
         let target = job.target
@@ -306,13 +308,13 @@ public actor FrameWriter {
     private func perform(
         _ write: Write,
         _ context: Context,
-        _ beforeFirstWrite: @Sendable () async -> Void
+        _ beforeFirstWrite: @Sendable () async -> Bool
     ) async throws(Stop) {
         let request = context.request
         if let stop = checkpoint(request) { throw Stop(result: stop) }
         if request.awaitingFirstWrite {
             request.awaitingFirstWrite = false
-            await beforeFirstWrite()
+            guard await beforeFirstWrite() else { throw Stop(result: .cancelled(lastVerified: request.lastVerified)) }
             // The callback is a suspension point: the request may have been cancelled or the window
             // changed while it ran.
             if let stop = checkpoint(request) { throw Stop(result: stop) }
@@ -331,7 +333,7 @@ public actor FrameWriter {
     }
 
     /// Moves the window to where a window of `size` belongs, when it isn't there.
-    private func align(_ context: Context, size: ScreenSize, _ beforeFirstWrite: @Sendable () async -> Void) async throws(Stop) {
+    private func align(_ context: Context, size: ScreenSize, _ beforeFirstWrite: @Sendable () async -> Bool) async throws(Stop) {
         let request = context.request
         let destination = alignedOrigin(request.job, size: size)
         if differs(request.expected.origin, destination) {

@@ -73,16 +73,19 @@ public actor Pipeline {
         self.steps = steps
     }
 
-    /// `landed` runs inside the window's request once its outcome is known, so what it records
-    /// comes before anything the window's next request, or a frame read after it, records.
+    /// `eligible` is asked after Resolve, just before the first write: a placement that is no longer
+    /// wanted then writes nothing and comes back superseded. `landed` runs inside the window's
+    /// request once its outcome is known, so what it records comes before anything the window's
+    /// next request, or a frame read after it, records.
     public func run(
         _ window: WindowHandle,
         config: Config,
         plan: @escaping @Sendable (ResolvedWindow) -> PlanResult,
+        eligible: @escaping @Sendable () async -> Bool = { true },
         landed: @escaping @Sendable (PlacementOutcome) async -> Void = { _ in }
     ) async -> PlacementOutcome {
         let outcome = await queue.run(window) { [self] in
-            let outcome = await execute(window, config: config, plan: plan)
+            let outcome = await execute(window, config: config, plan: plan, eligible: eligible)
             await landed(outcome)
             return outcome
         }
@@ -98,7 +101,8 @@ public actor Pipeline {
     private func execute(
         _ window: WindowHandle,
         config: Config,
-        plan: @Sendable (ResolvedWindow) -> PlanResult
+        plan: @Sendable (ResolvedWindow) -> PlanResult,
+        eligible: @Sendable () async -> Bool
     ) async -> PlacementOutcome {
         // Read first: a reconfiguration that begins after this cancels the write.
         let epoch = await writer.epoch
@@ -151,9 +155,10 @@ public actor Pipeline {
         // the old placed record says.
         let writing = Mutex(false)
         let result = await writer.write(job) {
+            guard await eligible() else { return false }
             writing.withLock { $0 = true }
-            guard opensChain else { return }
-            await keeper.update { $0.openChain(window, before: snapshot.frame, on: current) }
+            if opensChain { await keeper.update { $0.openChain(window, before: snapshot.frame, on: current) } }
+            return true
         }
         return await record(
             result, for: request, snapshot: snapshot, displays: resolved.displays, fallback: target,

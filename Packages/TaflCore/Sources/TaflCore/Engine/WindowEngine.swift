@@ -448,8 +448,12 @@ public actor WindowEngine {
                     for request in batch {
                         if Task.isCancelled || !reconfigurations.isCurrent(since) { break }
                         // The check inside the plan closes the gap before the pipeline reads its epoch.
-                        let outcome = await pipeline.run(request.window, config: config, plan: { _ in
+                        let window = request.window
+                        let outcome = await pipeline.run(window, config: config, plan: { _ in
                             reconfigurations.isCurrent(since) ? .request(request) : .nothing
+                        }, eligible: {
+                            guard request.source.yieldsToTouch else { return true }
+                            return await self.isUntouched(window)
                         }, landed: { outcome in
                             await self.landed(outcome, of: request.window, run: runID, since: since)
                         })
@@ -470,6 +474,10 @@ public actor WindowEngine {
         }
         runWindows[runID] = nil
         return total
+    }
+
+    private func isUntouched(_ window: WindowHandle) -> Bool {
+        !touched.contains(window)
     }
 
     /// What one request of a run did, recorded inside the window's request: where it put the

@@ -14,6 +14,13 @@ public enum RequestSource: Equatable, Sendable {
         case .displayChange: false
         }
     }
+
+    /// A placement Tafl makes on its own for a new window, at its creation or its first title
+    /// change, stands down once the window has been touched: moved by someone else, or the target
+    /// of a user action. The display-change rules don't: moves during a change are macOS's.
+    public var yieldsToTouch: Bool {
+        if case .newWindow = self { true } else { false }
+    }
 }
 
 public struct MoveRequest: Equatable, Sendable {
