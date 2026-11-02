@@ -78,6 +78,17 @@ public actor WindowEngine {
     var rulesStarted = false
     /// Apps whose events macOS would not deliver, and which events those are.
     var unobservable: [Int32: Set<ObservedEvent>] = [:]
+    /// The apps already reported, so each is reported once however often it is learned again.
+    var reportedUnobservable: Set<Int32> = []
+    /// The windows of each run in progress that are still alive, so a run records nothing for a
+    /// window that was destroyed, or whose app quit, meanwhile.
+    var runWindows: [Int: Set<WindowHandle>] = [:]
+    var nextRunID = 0
+    /// While start seeds last-known frames: the windows an event recorded a frame for since the
+    /// seed began reading. The seed leaves those alone, since the event is newer than its read.
+    var recordedDuringSeed: Set<WindowHandle>?
+    /// While observation restarts: what events learned meanwhile, which the restart keeps.
+    var learnedDuringRestart: [Int32: Set<ObservedEvent>]?
     /// Windows someone else moved since they were created.
     var movedExternally: Set<WindowHandle> = []
     var eventTask: Task<Void, Never>?
@@ -144,7 +155,13 @@ public actor WindowEngine {
             knownDisplays = current
             listen()
             let since = reconfigurations.current
-            await recordLastKnown(windows: await platform.visibleWindows(), displays: current, since: since)
+            recordedDuringSeed = []
+            let visible = await platform.visibleWindows()
+            let newer = recordedDuringSeed ?? []
+            recordedDuringSeed = nil
+            await recordLastKnown(
+                windows: visible.filter { !newer.contains($0.handle) }, displays: current, since: since
+            )
             await memory.update { $0.lastDisplays = current }
         }
     }
@@ -178,14 +195,21 @@ public actor WindowEngine {
     /// Registers the platform's observers again, as after a wake or a user switch, and learns
     /// which apps cannot be observed now. The event consumer is untouched.
     public func restartObserving() async {
+        learnedDuringRestart = [:]
         await platform.stopObserving()
         let apps = await platform.startObserving()
-        let known = Set(unobservable.keys)
-        unobservable = [:]
+        var current: [Int32: Set<ObservedEvent>] = [:]
         for app in apps {
-            unobservable[app.pid] = app.missing
-            if !known.contains(app.pid) { report(.unobservable(bundleID: app.bundleID)) }
+            current[app.pid] = app.missing
+            if !reportedUnobservable.contains(app.pid) {
+                reportedUnobservable.insert(app.pid)
+                report(.unobservable(bundleID: app.bundleID))
+            }
         }
+        // What an event said meanwhile is newer than the answer.
+        for (pid, missing) in learnedDuringRestart ?? [:] { current[pid, default: []].formUnion(missing) }
+        unobservable = current
+        learnedDuringRestart = nil
     }
 
     // MARK: Unobservable apps
@@ -196,9 +220,9 @@ public actor WindowEngine {
 
     /// An app is reported once; later events for it add to what is known to be missing.
     func learn(pid: Int32, bundleID: String?, missing: Set<ObservedEvent>) {
-        let isNew = unobservable[pid] == nil
         unobservable[pid, default: []].formUnion(missing)
-        if isNew { report(.unobservable(bundleID: bundleID)) }
+        learnedDuringRestart?[pid, default: []].formUnion(missing)
+        if reportedUnobservable.insert(pid).inserted { report(.unobservable(bundleID: bundleID)) }
     }
 
     /// Without its moves and resizes Tafl has no last-known frames for an app, and the display
@@ -280,15 +304,18 @@ public actor WindowEngine {
 
     // MARK: Layouts
 
+    /// A layout run that a reconfiguration stops reports nothing and does not become active.
     public func applyLayout(named name: String) async {
         guard let definition = config.layouts.first(where: { $0.name == name }) else { return }
         // Taken before anything is read: a reconfiguration that begins during the reads stops the run.
         let since = reconfigurations.current
-        await setActiveLayout(name)
         let displays = await platform.displays()
         let windows = await platform.visibleWindows()
+        guard reconfigurations.current == since else { return }
         let requests = LayoutPlanner.requests(definition, windows: windows, displays: displays, source: .layout(name))
         let count = await run(requests, since: since)
+        guard reconfigurations.current == since else { return }
+        await setActiveLayout(name)
         report(.layoutApplied(name: name, placed: count.moved + count.unchanged, failed: count.failed))
     }
 
@@ -312,6 +339,9 @@ public actor WindowEngine {
         let pipeline = pipeline
         let config = config
         let reconfigurations = reconfigurations
+        let runID = nextRunID
+        nextRunID += 1
+        runWindows[runID] = Set(requests.map(\.window))
         let total = await withTaskGroup(of: RunCount.self) { group in
             for pid in order {
                 let batch = byApp[pid] ?? []
@@ -345,7 +375,9 @@ public actor WindowEngine {
         }
         // Someone moved the window while it was placed: a title check must not place it again.
         movedExternally.formUnion(total.interrupted)
-        await recordLastKnownLive(total.placed, since: since)
+        let alive = runWindows[runID] ?? []
+        runWindows[runID] = nil
+        await recordLastKnownLive(total.placed.filter { alive.contains($0.handle) }, since: since)
         return total
     }
 

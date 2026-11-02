@@ -74,5 +74,6 @@ public protocol WindowPlatform: Sendable {
     /// Starts observing every running app. The apps whose events could not be observed are the
     /// result; one that fails later arrives as a `.unobservable` event.
     func startObserving() async -> [UnobservableApp]
+    /// Stops observing. `events` stays open: the engine keeps consuming it across a restart.
     func stopObserving() async
 }

@@ -62,14 +62,17 @@ extension WindowEngine {
             tracker.ended(at: clock.now)
             armSettle()
         } else if tracker.settleIfDue(now: clock.now) {
-            rulesTask = Task { await self.settle() }
+            // Taken here, with the decision: a reconfiguration that begins before the task first
+            // runs must still be seen to have moved the count.
+            let began = reconfigurations.current
+            rulesTask = Task { await self.settle(since: began) }
         } else {
             armSettle()
         }
     }
 
-    private func settle() async {
-        let began = reconfigurations.current
+    private func settle(since began: Int) async {
+        guard reconfigurations.current == began else { return }
         let new = await platform.displays()
         guard reconfigurations.current == began else { return }
         let old = changeOrigin ?? knownDisplays
@@ -80,7 +83,7 @@ extension WindowEngine {
             isFrozen = false
             await memory.update { $0.lastDisplays = new }
         } else {
-            await applyDisplayChange(from: old, to: new)
+            await applyDisplayChange(from: old, to: new, since: began)
         }
     }
 
@@ -92,8 +95,9 @@ extension WindowEngine {
     /// stays frozen until the rules have run, and then the new setup's frames are seeded.
     /// A reconfiguration that begins meanwhile takes over: the run stops and leaves the
     /// state to the change that follows.
-    func applyDisplayChange(from old: [Display], to new: [Display]) async {
-        let began = reconfigurations.current
+    func applyDisplayChange(from old: [Display], to new: [Display], since began: Int? = nil) async {
+        let began = began ?? reconfigurations.current
+        guard reconfigurations.current == began else { return }
         rulesStarted = true
         let oldSetup = DisplaySetup(old)
         let newSetup = DisplaySetup(new)
@@ -117,19 +121,22 @@ extension WindowEngine {
         let count = await run(requests, since: began)
         guard !Task.isCancelled, reconfigurations.current == began else { return }
 
-        if let claiming { await setActiveLayout(claiming.name) }
         let after = await platform.visibleWindows()
         let reconfigurations = reconfigurations
         await recordLastKnown(windows: after, displays: new, since: began)
         await memory.update { memory in
             if reconfigurations.current == began { memory.lastDisplays = new }
         }
-        // No await between this check and the state it protects.
+        // No await between this check and the state it protects. The claiming layout becomes
+        // active only now, so a run that was stopped leaves none behind.
         guard reconfigurations.current == began else { return }
         knownDisplays = new
         changeOrigin = nil
         isFrozen = false
         rulesStarted = false
+        if let claiming { activeLayout.activate(claiming.name) }
+        let layout = activeLayout.name
+        await memory.update { $0.activeLayout = layout }
         report(.displayChangeHandled(moved: count.moved))
     }
 }
