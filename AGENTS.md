@@ -32,8 +32,14 @@ them with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` and don't c
 
 - Run Tafl from `/Applications`, started with `open`. Launched from a terminal, macOS gives
   the Accessibility grant to the terminal.
-- Builds are ad-hoc signed, so every rebuild needs Accessibility granted again. Michael
-  clears a stale entry with `tccutil reset Accessibility com.michaelrigart.tafl`.
+- Builds are ad-hoc signed, so every rebuild needs Accessibility granted again. To reset it,
+  quit Tafl, run `tccutil reset Accessibility com.michaelrigart.tafl`, start Tafl with `open`
+  and switch it on in System Settings, Privacy & Security, Accessibility. The onboarding
+  window's button opens that page, and Check Again picks up the grant.
+- Paths: the config is `~/.config/tafl/config.toml` (it may be a symlink; Tafl never writes
+  it); the window memory is `~/.local/state/tafl/memory.json`.
+- A memory change an older reader can't decode (for example a new `Action` or
+  `NamedPlacement` case) must bump `WindowMemory.fileVersion`.
 - A bare `log` is a zsh builtin. Use `/usr/bin/log`; the subsystem is
   `com.michaelrigart.tafl`.
 - Never write `com.apple.WindowManager` or the user's config file
