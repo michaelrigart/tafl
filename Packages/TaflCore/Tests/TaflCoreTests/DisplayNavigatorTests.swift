@@ -80,6 +80,7 @@ struct DisplayNavigatorTests {
         let r = namedDisplay("R", rect(1512, 0, 1920, 982), serial: 2)
         let r2 = namedDisplay("R2", rect(3432, 0, 1920, 982), serial: 3)
         #expect(target(m, .right, [m, r2, r]) == "R")
+        #expect(target(r2, .left, [m, r2, r]) == "R")
     }
 
     @Test func equidistantTiesIgnoreInputOrder() {
@@ -88,5 +89,12 @@ struct DisplayNavigatorTests {
         let c = namedDisplay("C", rect(100, -200, 100, 100), serial: 3)
         #expect(target(a, .up, [a, b, c]) == "B")
         #expect(target(a, .up, [a, c, b]) == "B")
+    }
+
+    @Test func rowsFormFromOverlapChains() {
+        let a = namedDisplay("A", rect(0, 0, 100, 100), serial: 1)
+        let b = namedDisplay("B", rect(100, 90, 100, 100), serial: 2)
+        let c = namedDisplay("C", rect(-100, 180, 100, 100), serial: 3)
+        #expect(DisplayNavigator.fallbackOrder([b, c, a]).map(\.identity.name) == ["C", "A", "B"])
     }
 }
