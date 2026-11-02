@@ -11,4 +11,6 @@ public enum EngineReport: Equatable, Sendable {
     case displayChangeHandled(moved: Int)
     case unobservable(bundleID: String?)
     case memory(MemoryLoad)
+    /// The window memory could not be written. The reason stays in the log.
+    case memorySaveFailed
 }

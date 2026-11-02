@@ -29,7 +29,9 @@ extension WindowEngine {
     // MARK: Settling
 
     /// Waits on the clock for the tracker's deadline, starting over whenever an input moves it.
-    /// A reconfiguration still open after the timeout counts as ended.
+    /// A reconfiguration still open after the timeout counts as ended. Only the wait is replaced
+    /// by an input: once the change has settled, the rules run in a task of their own, and
+    /// nothing but a new reconfiguration stops them.
     private func armSettle() {
         settleTask?.cancel()
         guard tracker.isChanging else {
@@ -60,7 +62,7 @@ extension WindowEngine {
             tracker.ended(at: clock.now)
             armSettle()
         } else if tracker.settleIfDue(now: clock.now) {
-            await settle()
+            rulesTask = Task { await self.settle() }
         } else {
             armSettle()
         }
@@ -71,7 +73,7 @@ extension WindowEngine {
         let new = await platform.displays()
         guard reconfigurations.current == began else { return }
         let old = changeOrigin ?? knownDisplays
-        if DisplaySetup(old) == DisplaySetup(new) {
+        if DisplaySetup(old) == DisplaySetup(new), !rulesStarted {
             // A display that dropped out and came back, or a change of geometry: nothing moves.
             knownDisplays = new
             changeOrigin = nil
@@ -84,36 +86,41 @@ extension WindowEngine {
 
     // MARK: The rules
 
-    /// Handles a display setup that differs from the one before: the active layout ends; each
-    /// window is handled by the first rule that applies; a layout that claims the new setup
-    /// becomes active. Recording stays frozen until the rules have run, and then the new
-    /// setup's frames are seeded. A reconfiguration that begins meanwhile takes over.
+    /// Handles a display setup that differs from the one before, or whose rules an earlier
+    /// change began and did not finish: the active layout ends; each window is handled by the
+    /// first rule that applies; a layout that claims the new setup becomes active. Recording
+    /// stays frozen until the rules have run, and then the new setup's frames are seeded.
+    /// A reconfiguration that begins meanwhile takes over: the run stops and leaves the
+    /// state to the change that follows.
     func applyDisplayChange(from old: [Display], to new: [Display]) async {
         let began = reconfigurations.current
+        rulesStarted = true
         let oldSetup = DisplaySetup(old)
         let newSetup = DisplaySetup(new)
 
         await setActiveLayout(nil)
         let known = await memory.read()
-        let windows = await platform.visibleWindows().map { window in
+        let visible = await platform.visibleWindows()
+        guard reconfigurations.current == began else { return }
+        let windows = visible.map { window in
             WindowAtChange(
                 snapshot: window,
                 previous: known.lastKnown(window.handle, setup: oldSetup),
                 remembered: known.lastKnown(window.handle, setup: newSetup),
-                isObserved: !unobservablePIDs.contains(window.handle.pid)
+                isObserved: !isLeftOutOfRules(pid: window.handle.pid)
             )
         }
         let claiming = LayoutPlanner.claiming(config.layouts, displays: new)
         let requests = DisplayChangeRules.plan(
             oldDisplays: old, newDisplays: new, windows: windows, claiming: claiming, gap: config.gap
         )
-        let count = await run(requests)
-        guard reconfigurations.current == began else { return }
+        let count = await run(requests, since: began)
+        guard !Task.isCancelled, reconfigurations.current == began else { return }
 
         if let claiming { await setActiveLayout(claiming.name) }
-        let visible = await platform.visibleWindows()
+        let after = await platform.visibleWindows()
         let reconfigurations = reconfigurations
-        await recordLastKnown(visible, displays: new, ifUnchangedSince: began)
+        await recordLastKnown(windows: after, displays: new, since: began)
         await memory.update { memory in
             if reconfigurations.current == began { memory.lastDisplays = new }
         }
@@ -122,6 +129,7 @@ extension WindowEngine {
         knownDisplays = new
         changeOrigin = nil
         isFrozen = false
+        rulesStarted = false
         report(.displayChangeHandled(moved: count.moved))
     }
 }

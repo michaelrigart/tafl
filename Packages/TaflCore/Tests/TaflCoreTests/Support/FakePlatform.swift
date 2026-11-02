@@ -67,6 +67,10 @@ actor FakePlatform: WindowPlatform {
     var unobserved: [UnobservedApp] = []
 
     private(set) var callLog: [String] = []
+    /// Holds the next `visibleWindows()` call until the gate opens.
+    var visibleWindowsGate: FakeGate?
+    /// Holds the next `snapshot(of:)` call until the gate opens.
+    var snapshotGate: FakeGate?
 
     /// How many `beginWriting` calls wait for another session of the same app to end.
     var waitingSessionCount: Int { waiters.values.reduce(0) { $0 + $1.count } }
@@ -138,10 +142,18 @@ actor FakePlatform: WindowPlatform {
     }
 
     func visibleWindows() async -> [WindowSnapshot] {
-        windows.values.sorted { ($0.handle.pid, $0.handle.windowID) < ($1.handle.pid, $1.handle.windowID) }
+        if let gate = visibleWindowsGate {
+            visibleWindowsGate = nil
+            await gate.wait()
+        }
+        return windows.values.sorted { ($0.handle.pid, $0.handle.windowID) < ($1.handle.pid, $1.handle.windowID) }
     }
 
     func snapshot(of handle: WindowHandle) async -> Result<WindowSnapshot, PlatformFailure> {
+        if let gate = snapshotGate {
+            snapshotGate = nil
+            await gate.wait()
+        }
         if hung.contains(handle.pid) {
             await hungWait()
             return .failure(.notResponding)
@@ -175,7 +187,10 @@ actor FakePlatform: WindowPlatform {
 
     func capabilities() async -> [CapabilityState] { capabilityStates }
 
-    func startObserving() async { startObservingCount += 1 }
+    func startObserving() async -> [UnobservableApp] {
+        startObservingCount += 1
+        return unobserved.map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
+    }
 
     func stopObserving() async { stopObservingCount += 1 }
 

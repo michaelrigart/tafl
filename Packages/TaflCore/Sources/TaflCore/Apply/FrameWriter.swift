@@ -183,6 +183,11 @@ public actor FrameWriter {
         achieved[window] = nil
     }
 
+    /// Drops the last achieved frames of an app's windows, for an app that quit.
+    public func forget(pid: Int32) {
+        achieved = achieved.filter { $0.key.pid != pid }
+    }
+
     /// True from the start of a `write` for this window until it returns, the reapply wait included.
     public func isWriting(_ window: WindowHandle) -> Bool {
         requests[window] != nil

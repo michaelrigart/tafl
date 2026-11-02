@@ -156,7 +156,7 @@ private func session(_ fake: FakePlatform, _ handle: WindowHandle) async throws 
 @Test func eventsObservationAndUnobservedApps() async {
     let w = window(1, frame: rect(0, 0, 100, 100))
     let (fake, _) = await makeFake(w)
-    await fake.startObserving()
+    _ = await fake.startObserving()
     await fake.stopObserving()
     #expect(await fake.startObservingCount == 1)
     #expect(await fake.stopObservingCount == 1)

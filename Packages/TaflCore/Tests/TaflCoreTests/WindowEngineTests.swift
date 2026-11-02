@@ -274,13 +274,14 @@ private final class Rig: Sendable {
 
 // MARK: Layouts
 
-@Test func hungAppDoesNotBlockOthers() async {
+// The hung app has the lowest pid, so a run that went through the apps one by one would wait for it first.
+@Test(.timeLimit(.minutes(1))) func hungAppDoesNotBlockOthers() async {
     let a = window(1, frame: start, pid: 100, bundleID: "com.a")
     let b = window(2, frame: start, pid: 200, bundleID: "com.b")
-    let c = window(3, frame: start, pid: 300, bundleID: "com.c")
+    let c = window(3, frame: start, pid: 50, bundleID: "com.c")
     let desk = layout("Work", [slot(.leftHalf, app: "com.a"), slot(.rightHalf, app: "com.b"), slot(.topHalf, app: "com.c")])
     let elsewhere = window(4, frame: start, pid: 400, bundleID: "com.d")
-    let rig = await Rig(windows: [a, b, c, elsewhere], focused: elsewhere.handle) { $0.hung = [300] }
+    let rig = await Rig(windows: [a, b, c, elsewhere], focused: elsewhere.handle) { $0.hung = [50] }
     await rig.engine.start(config: config(layouts: [desk]))
 
     let applying = Task { await rig.engine.applyLayout(named: "Work") }
@@ -447,6 +448,8 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
     await rig.waitForEvents(3)
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(500))
+    // The wait that was due now has been replaced by one that ends 1.5 s after the move.
+    #expect(rig.clock.sleeperCount == 1)
     #expect(await rig.engine.isFrozen)
     await rig.clock.advance(by: .seconds(1))
     await rig.waitUntilChangeIsSettled()
@@ -580,6 +583,8 @@ private func temporaryStore() -> (MemoryStore, URL) {
     let second = await Rig(windows: [window(1, frame: rect(300, 300, 400, 300))], store: store, steps: steps)
     await second.engine.start(config: gapped)
     #expect(await second.frame() == expected)
+    // A's first third with the gap: 10 from the screen edges, 5 on the inner edge.
+    #expect(expected.map { isClose($0, rect(10, 35, 1000.0 / 3 - 15, 755)) } == true)
     await second.waitForReport { $0 == .displayChangeHandled(moved: 1) }
 }
 
@@ -649,4 +654,330 @@ private func temporaryStore() -> (MemoryStore, URL) {
     let after = await rig.engine.memory.read()
     #expect(after.placed.isEmpty)
     #expect(after.lastKnown.isEmpty)
+}
+
+// MARK: Settling and rules runs
+
+/// Two windows on B that macOS moved to A when B went away; each ends where its relative
+/// position on B puts it on A.
+private let strayB1 = window(1, frame: rect(1100, 100, 400, 300))
+private let strayB2 = window(2, frame: rect(1500, 500, 400, 300))
+private let strayA1 = rect(50, 75, 200, 150)
+private let strayA2 = rect(250, 275, 200, 150)
+
+@Test(.timeLimit(.minutes(1))) func aStrayEndedDuringTheRulesDoesNotStopThem() async {
+    let rig = await Rig(displays: bothDisplays, windows: [strayB1, strayB2], focused: nil)
+    await rig.engine.start(config: config())
+    await rig.fake.configure {
+        $0.displays = [displayA]
+        $0.windows[strayB1.handle]?.frame = rect(50, 50, 300, 300)
+        $0.windows[strayB2.handle]?.frame = rect(400, 400, 300, 300)
+    }
+    // The first write is held, so the rules are running when the stray callback arrives.
+    let gate = await rig.fake.pause(beforeCall: 0)
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(2)
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: quiet)
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(3)
+    gate.open()
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 2) }
+    #expect(await rig.frame(of: strayB1.handle).map { isClose($0, strayA1) } == true)
+    #expect(await rig.frame(of: strayB2.handle).map { isClose($0, strayA2) } == true)
+    #expect(await rig.engine.isFrozen == false)
+}
+
+@Test(.timeLimit(.minutes(1))) func aReconfigurationDuringTheRulesReadsStopsTheRun() async {
+    let rig = await Rig(displays: bothDisplays, windows: [strayB1], focused: nil)
+    await rig.engine.start(config: config())
+    await rig.fake.configure { $0.displays = [displayA]; $0.windows[strayB1.handle]?.frame = rect(50, 50, 300, 300) }
+    let reads = FakeGate()
+    await rig.fake.configure { $0.visibleWindowsGate = reads }
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(2)
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: quiet)
+    await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    // Another change begins while the rules are reading the windows.
+    await rig.emit(.reconfigurationBegan)
+    await rig.waitForEvents(3)
+    reads.open()
+    await rig.engine.rulesTask?.value
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.engine.isFrozen)
+    #expect(rig.reports.allSatisfy { if case .displayChangeHandled = $0 { false } else { true } })
+}
+
+@Test(.timeLimit(.minutes(1))) func aReconfigurationDuringALayoutsReadsStopsTheLayout() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config(layouts: [desk]))
+    let reads = FakeGate()
+    await rig.fake.configure { $0.visibleWindowsGate = reads }
+    let applying = Task { await rig.engine.applyLayout(named: "Desk") }
+    await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    await rig.emit(.reconfigurationBegan)
+    await rig.waitForEvents(1)
+    reads.open()
+    await applying.value
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.frame() == start)
+}
+
+@Test(.timeLimit(.minutes(1))) func interruptedRulesRunAgainWhenTheSetupIsBackWhereItBegan() async {
+    let rig = await Rig(displays: bothDisplays, windows: [strayB1], focused: nil)
+    await rig.engine.start(config: config())
+    await rig.fake.configure { $0.displays = [displayA]; $0.windows[strayB1.handle]?.frame = rect(50, 50, 300, 300) }
+    let gate = await rig.fake.pause(beforeCall: 0)
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(2)
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: quiet)
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+
+    // B comes back before the undock's first write is made.
+    await rig.fake.configure { $0.displays = bothDisplays }
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(4)
+    gate.open()
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: quiet)
+    await rig.waitForReport { if case .displayChangeHandled = $0 { true } else { false } }
+    // The window was left half way: the remembered frame brings it back.
+    #expect(await rig.frame(of: strayB1.handle).map { isClose($0, rect(1100, 100, 400, 300)) } == true)
+}
+
+// MARK: Last-known frames
+
+@Test(.timeLimit(.minutes(1))) func aFrameJudgedDuringTheWriteIsLastKnown() async {
+    let free = rect(1100, 100, 400, 300)
+    let reference = await Rig(displays: bothDisplays, windows: [window(1, frame: free)])
+    await reference.engine.start(config: config())
+    await reference.engine.perform(.leftHalf)
+    let calls = await reference.log.count
+
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: free)])
+    await rig.engine.start(config: config())
+    // Hold the session's last call, so the event is judged while the write is still running.
+    let gate = await rig.fake.pause(beforeCall: calls - 1)
+    let acting = Task { await rig.engine.perform(.leftHalf) }
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(1)
+    let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup(bothDisplays))
+    #expect(known?.display == displayB.identity)
+    #expect(known?.relative == leftHalfB.relative(to: displayB.visibleFrame))
+    gate.open()
+    await acting.value
+
+    // macOS moves the window when B goes away; the left half it was in carries over.
+    await rig.fake.configure { $0.windows[handle]?.frame = rect(50, 50, 300, 300) }
+    await rig.changeDisplays(to: [displayA], eventsHandledAfter: 3)
+    await rig.waitForChanges(1)
+    #expect(await rig.frame() == leftHalfA)
+}
+
+@Test func whereAnActionLeavesAWindowIsLastKnown() async {
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: rect(1100, 100, 400, 300))])
+    await rig.engine.start(config: config())
+    await rig.engine.perform(.leftHalf)
+    let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup(bothDisplays))
+    #expect(known?.relative == leftHalfB.relative(to: displayB.visibleFrame))
+}
+
+@Test func whereALayoutLeavesWindowsIsLastKnown() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA]))
+    #expect(known?.relative == rightHalfA.relative(to: displayA.visibleFrame))
+}
+
+@Test(.timeLimit(.minutes(1))) func aLateFrameForADestroyedWindowRecordsNothing() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    let reads = FakeGate()
+    await rig.fake.configure { $0.snapshotGate = reads; $0.windows[handle]?.frame = rect(200, 200, 300, 300) }
+    await rig.emit(.windowMoved(handle))
+    await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    await rig.emit(.windowDestroyed(handle))
+    await rig.waitForEvents(1)
+    reads.open()
+    await rig.waitForEvents(2)
+    let after = await rig.engine.memory.read()
+    #expect(after.lastKnown.values.allSatisfy { $0[handle] == nil })
+    #expect(await rig.engine.movedExternally.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func aLateFrameForAQuitAppRecordsNothing() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    let reads = FakeGate()
+    await rig.fake.configure { $0.snapshotGate = reads; $0.windows[handle]?.frame = rect(200, 200, 300, 300) }
+    await rig.emit(.windowMoved(handle))
+    await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    await rig.emit(.appQuit(pid: 100))
+    await rig.waitForEvents(1)
+    reads.open()
+    await rig.waitForEvents(2)
+    let after = await rig.engine.memory.read()
+    #expect(after.lastKnown.isEmpty)
+    #expect(await rig.engine.movedExternally.isEmpty)
+}
+
+@Test func aQuitAppIsForgottenByTheWriter() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    await rig.engine.perform(.rightHalf)
+    await rig.emit(.appQuit(pid: 100))
+    await rig.waitForEvents(1)
+    // The same frame again: the writer no longer knows it as its own.
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(2)
+    #expect(await rig.engine.movedExternally.contains(handle))
+}
+
+@Test func aWindowMovedWhileItWasPlacedIsNotPlacedAgainByATitleChange() async {
+    let desk = layout("Desk", [slot(.rightHalf, title: "*Docs*")])
+    let rig = await Rig()
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = titled(window(1, frame: start), "Docs")
+    // Something drags the window during the placement's third call.
+    await rig.fake.configure {
+        $0.windows[created.handle] = created
+        $0.beforeCall = [2: { $0.frame = rect(333, 444, 222, 111) }]
+    }
+    await rig.emit(.windowCreated(created))
+    await rig.fake.waitUntil { $0.callLog.last == "end" }
+    await rig.waitForEvents(1)
+    #expect(await rig.engine.movedExternally.contains(handle))
+
+    let dragged = await rig.frame()
+    await rig.emit(.titleChanged(handle, "Docs again"))
+    await rig.waitForEvents(2)
+    #expect(await rig.frame() == dragged)
+}
+
+// MARK: Unobservable apps
+
+private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.moved])
+
+@Test(.timeLimit(.minutes(1))) func anAppUnobservableAtLaunchIsLeftOutOfTheLaunchRules() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let other = window(2, frame: leftHalfB, pid: 200, bundleID: "com.b")
+    let first = await Rig(displays: bothDisplays, windows: [other], store: store)
+    await first.engine.start(config: config())
+    await first.engine.stop()
+
+    // The next launch finds B gone, and finds the app unobservable while it starts observing.
+    var moved = other
+    moved.frame = rect(0, 25, 600, 500)
+    let second = await Rig(windows: [moved], store: store) {
+        $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.moved])]
+    }
+    await second.engine.start(config: config())
+    #expect(await second.frame(of: other.handle) == moved.frame)
+    #expect(await second.log.isEmpty)
+    await second.waitForReport { $0 == .unobservable(bundleID: "com.b") }
+}
+
+@Test(.timeLimit(.minutes(1))) func aReconfigurationDuringStartStopsItsRules() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let first = await Rig(displays: bothDisplays, windows: [strayB1], store: store)
+    await first.engine.start(config: config())
+    await first.engine.stop()
+
+    let second = await Rig(windows: [window(1, frame: rect(50, 50, 300, 300))], store: store)
+    let reads = FakeGate()
+    await second.fake.configure { $0.visibleWindowsGate = reads }
+    let starting = Task { await second.engine.start(config: config()) }
+    await second.fake.waitUntil { _ in reads.waiterCount == 1 }
+    await second.emit(.reconfigurationBegan)
+    await second.waitForEvents(1)
+    reads.open()
+    await starting.value
+    #expect(await second.log.isEmpty)
+    #expect(await second.engine.isFrozen)
+}
+
+@Test func anAppMissingOnlyTitleChangesIsHandledNormally() async {
+    let desk = layout("Desk", [slot(.rightHalf, app: "com.b")])
+    let app = window(2, frame: leftHalfB, pid: 200, bundleID: "com.b")
+    let rig = await Rig(displays: bothDisplays, windows: [app]) {
+        $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.titleChanged])]
+    }
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.fake.configure { $0.windows[app.handle]?.frame = rect(0, 25, 600, 500) }
+    await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1) }
+    #expect(await rig.frame(of: app.handle) == leftHalfA)
+
+    await rig.engine.applyLayout(named: "Desk")
+    let created = window(3, frame: start, pid: 200, bundleID: "com.b")
+    await rig.fake.configure { $0.windows[created.handle] = created }
+    await rig.emit(.windowCreated(created))
+    await rig.waitForFrame(rightHalfA, of: created.handle)
+}
+
+@Test func anAppMissingCreationsIsStillHandledByTheRules() async {
+    let app = window(2, frame: leftHalfB, pid: 200, bundleID: "com.b")
+    let rig = await Rig(displays: bothDisplays, windows: [app]) {
+        $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.created])]
+    }
+    await rig.engine.start(config: config())
+    await rig.fake.configure { $0.windows[app.handle]?.frame = rect(0, 25, 600, 500) }
+    await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1) }
+    #expect(await rig.frame(of: app.handle) == leftHalfA)
+}
+
+@Test func restartingObservationRefreshesTheUnobservableApps() async {
+    let rig = await Rig(windows: [window(1, frame: start)]) {
+        $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.moved])]
+    }
+    await rig.engine.start(config: config())
+    await rig.fake.configure { $0.unobserved = [.init(pid: 300, bundleID: "com.c", missing: [.created])] }
+    await rig.engine.restartObserving()
+    #expect(await rig.fake.startObservingCount == 2)
+    #expect(await rig.fake.stopObservingCount == 1)
+    #expect(await rig.engine.unobservable == [300: [.created]])
+    await rig.waitForReport { $0 == .unobservable(bundleID: "com.c") }
+    #expect(rig.reports.filter { $0 == .unobservable(bundleID: "com.b") }.count == 1)
+    // The event consumer carries on.
+    await rig.emit(.appLaunched(pid: 5, bundleID: nil))
+    await rig.waitForEvents(1)
+}
+
+// MARK: Failures and saving
+
+@Test(.timeLimit(.minutes(1))) func aHungFocusedAppIsNotReportedAsNoWindow() async {
+    let rig = await Rig(windows: [window(1, frame: start)]) { $0.hung = [100] }
+    await rig.engine.start(config: config())
+    let acting = Task { await rig.engine.perform(.leftHalf) }
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: .milliseconds(500))
+    await acting.value
+    await rig.waitForReport { $0 == .failure(.notResponding(app: "The app"), display: nil) }
+}
+
+@Test func aFailedSaveIsReported() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let rig = await Rig(windows: [window(1, frame: start)], store: store)
+    await rig.engine.start(config: config())
+    // Another version of Tafl has written the file since the load.
+    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try? Data(#"{"version": 99}"#.utf8).write(to: directory.appendingPathComponent("memory.json"))
+    await rig.engine.save()
+    await rig.waitForReport { $0 == .memorySaveFailed }
 }

@@ -42,6 +42,19 @@ public protocol WriteSession: Sendable {
     func end() async
 }
 
+/// An app whose window events macOS would not deliver, found when observing started.
+public struct UnobservableApp: Equatable, Sendable {
+    public var pid: Int32
+    public var bundleID: String?
+    public var missing: Set<ObservedEvent>
+
+    public init(pid: Int32, bundleID: String?, missing: Set<ObservedEvent>) {
+        self.pid = pid
+        self.bundleID = bundleID
+        self.missing = missing
+    }
+}
+
 public protocol WindowPlatform: Sendable {
     func displays() async -> [Display]
     func focusedWindow() async -> Result<WindowSnapshot, PlatformFailure>
@@ -58,6 +71,8 @@ public protocol WindowPlatform: Sendable {
     func isAccessibilityGranted() async -> Bool
     func capabilities() async -> [CapabilityState]
     var events: AsyncStream<PlatformEvent> { get }
-    func startObserving() async
+    /// Starts observing every running app. The apps whose events could not be observed are the
+    /// result; one that fails later arrives as a `.unobservable` event.
+    func startObserving() async -> [UnobservableApp]
     func stopObserving() async
 }
