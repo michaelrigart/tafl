@@ -54,6 +54,16 @@ public enum WriteResult: Equatable, Sendable {
     case cancelled(lastVerified: ScreenRect?)
 }
 
+/// Whose a frame read for a window is, as `FrameWriter.observe` decides it.
+public enum Observation: Equatable, Sendable {
+    /// A write for the window is running; the frame was kept and is judged against it.
+    case heldForWrite
+    /// Within a point of where the window's last write left it.
+    case own
+    /// Neither: someone else moved the window.
+    case external
+}
+
 /// Applies a frame as a sequence of checked writes: each write is read back and the part it
 /// did not set must be unchanged (or explained by a named macOS adjustment), otherwise
 /// something else moved the window and the request stops. One request per window at a time;
@@ -63,7 +73,7 @@ public actor FrameWriter {
     private static let shortfallLimit = 30.0
     private static let tolerance = 1.0
 
-    private struct Observation {
+    private struct PendingFrame {
         var frame: ScreenRect
         /// The part in flight when the frame was observed.
         var part: WritePart?
@@ -74,7 +84,10 @@ public actor FrameWriter {
         let job: WriteJob
         let startEpoch: Int
         /// Frames observed since the last check, kept across sessions.
-        var observed: [Observation] = []
+        var observed: [PendingFrame] = []
+        /// Every frame read back and verified in this request, in any session: a notification
+        /// for one of them that is read late is still Tafl's own.
+        var verified: [ScreenRect] = []
         /// The last frame read back that passed its check, in any session.
         var lastOwn: ScreenRect?
         // The current session's.
@@ -146,27 +159,33 @@ public actor FrameWriter {
         requests[job.window] = request
         achieved[job.window] = nil
         let result = await run(request, beforeFirstWrite)
-        requests[job.window] = nil
-        achieved[job.window] = result.frame ?? request.lastOwn
+        if requests[job.window] === request {
+            requests[job.window] = nil
+            achieved[job.window] = result.frame ?? request.lastOwn
+        }
         return result
     }
 
-    /// Records a frame read while a request writes this window; ignored otherwise.
-    public func observed(_ window: WindowHandle, frame: ScreenRect) {
-        guard let request = requests[window] else { return }
-        request.observed.append(Observation(frame: frame, part: request.inFlight))
+    /// Decides in one step what a frame read for this window is: `.heldForWrite` while a write
+    /// for it runs (the frame is kept and judged against the request), else `.own` when it is
+    /// where the window's last write left it, else `.external`.
+    public func observe(_ window: WindowHandle, frame: ScreenRect) -> Observation {
+        if let request = requests[window] {
+            request.observed.append(PendingFrame(frame: frame, part: request.inFlight))
+            return .heldForWrite
+        }
+        if let own = achieved[window], !differs(own, frame) { return .own }
+        return .external
+    }
+
+    /// Drops the window's last achieved frame, for a window that is gone.
+    public func forget(_ window: WindowHandle) {
+        achieved[window] = nil
     }
 
     /// True from the start of a `write` for this window until it returns, the reapply wait included.
     public func isWriting(_ window: WindowHandle) -> Bool {
         requests[window] != nil
-    }
-
-    /// True when the frame is within a point of where the window's last `write` left it, until
-    /// that window's next `write`.
-    public func isOwnFrame(_ window: WindowHandle, frame: ScreenRect) -> Bool {
-        guard let own = achieved[window] else { return false }
-        return !differs(own, frame)
     }
 
     public func reconfigurationBegan() {
@@ -178,10 +197,13 @@ public actor FrameWriter {
     private func run(_ request: Request, _ beforeFirstWrite: @Sendable () async -> Void) async -> WriteResult {
         let job = request.job
         let first = await attempt(request, start: job.start, reapplying: nil, beforeFirstWrite)
-        // Rectangle reapplies only when the first pass fell short.
-        guard job.crossesDisplays, let delay = reapplyDelay, let frame = first.frame, first.isAchievement,
-              differs(frame, job.target)
-        else { return first }
+        // Rectangle reapplies only when the size came out wrong.
+        let frame: ScreenRect
+        switch first {
+        case .placed(let achieved), .sizeRefused(let achieved): frame = achieved
+        default: return first
+        }
+        guard job.crossesDisplays, let delay = reapplyDelay, differs(frame.size, job.target.size) else { return first }
         do {
             try await clock.sleep(for: delay)
         } catch {
@@ -204,7 +226,9 @@ public actor FrameWriter {
         request.beginSession(from: start)
         let session: any WriteSession
         switch await platform.beginWriting(request.job.window) {
-        case .failure(let failure): return earlier ?? .failed(failure, lastVerified: nil)
+        case .failure(let failure):
+            guard let earlier else { return .failed(failure, lastVerified: nil) }
+            return judgePending(request) ? .interrupted : earlier
         case .success(let opened): session = opened
         }
         let context = Context(request: request, session: session)
@@ -340,13 +364,15 @@ public actor FrameWriter {
         return judgePending(request) ? .interrupted : nil
     }
 
-    /// Judges the frames observed since the last check against the expected frame: each may
-    /// differ in the part that was in flight when it was observed, and in no other.
+    /// Judges the frames observed since the last check: a frame this request already verified
+    /// is its own; any other may differ from the expected frame in the part that was in flight
+    /// when it was observed, and in no other.
     /// Returns whether one is an external change.
     private func judgePending(_ request: Request) -> Bool {
         let pending = request.observed
         request.observed = []
         return pending.contains { observation in
+            if request.verified.contains(where: { !differs($0, observation.frame) }) { return false }
             let positionMoved = differs(observation.frame.origin, request.expected.origin) && observation.part != .position
             let sizeChanged = differs(observation.frame.size, request.expected.size) && observation.part != .size
             return positionMoved || sizeChanged
@@ -371,6 +397,7 @@ public actor FrameWriter {
         request.expected = read
         request.lastVerified = read
         request.lastOwn = read
+        request.verified.append(read)
         return true
     }
 
