@@ -637,16 +637,40 @@ func theFrameBeforeAClampIsOwnWhenReadLate(call: Int) async {
 
 // MARK: What triggers and ends a reapply
 
+/// Waits until `write` has returned (nothing is writing the window, so no reapply wait is pending).
+private func writeReturned(_ rig: Rig, timeout: Duration = .seconds(2)) async -> Bool {
+    let start = ContinuousClock.now
+    while await rig.writer.isWriting(handle) {
+        if start.duration(to: ContinuousClock.now) > timeout { return false }
+        await Task.yield()
+    }
+    return true
+}
+
 @Test func aRefusedPositionIsNotReapplied() async {
     // The size also falls short, which alone would reapply; a refused position is not Rectangle's case.
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25)) {
         steppedSize($0)
         $0.positionRule = { window, _ in window.frame.origin }
     }
-    let result = await rig.start(steppedJob()).value
-    #expect(result == .positionRefused(rect(100, 100, 1200, 900)))
-    #expect(rig.clock.sleeperCount == 0)
+    let task = rig.start(steppedJob())
+    let returned = await writeReturned(rig)
+    if !returned { await rig.clock.advance(by: .milliseconds(25)) }
+    #expect(returned)
+    #expect(await task.value == .positionRefused(rect(100, 100, 1200, 900)))
     #expect(await rig.log.filter { $0 == "begin" }.count == 1)
+}
+
+@Test func aRefusedSizeAcrossDisplaysIsReapplied() async {
+    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25)) {
+        $0.sizeRule = { _, asked in ScreenSize(width: max(asked.width, 1300), height: asked.height) }
+    }
+    let task = rig.start(crossJob())
+    let slept = await pollUntil(timeout: .seconds(2)) { rig.clock.sleeperCount == 1 }
+    #expect(slept)
+    if slept { await rig.clock.advance(by: .milliseconds(25)) }
+    #expect(await task.value == .sizeRefused(rect(1000, 0, 1300, 900)))
+    #expect(await rig.log.filter { $0 == "begin" }.count == 2)
 }
 
 @Test func aReapplyWhoseBeginFailsStillJudgesWhatWasObserved() async {
@@ -674,6 +698,57 @@ func theFrameBeforeAClampIsOwnWhenReadLate(call: Int) async {
     gate.open()
 
     #expect(await task.value == .placed(steppedAchieved))
+}
+
+@Test func anAppThatRefusesTheSizeCannotSnapTheWindowBackUnnoticed() async {
+    // The refused size write reads back the start frame, but that is not a frame this request put there.
+    // Calls: begin, size, read, position, read, size, read, end.
+    let rig = await Rig(start: crossStart) { $0.windows[handle]?.canResize = false }
+    let result = await observeDuring(rig, call: 7, frame: crossStart, job: crossJob())
+    #expect(await rig.log.count == 8)
+    #expect(result == .interrupted)
+}
+
+@Test func anExternalMoveDuringTheWaitIsJudgedWhenAReconfigurationEndsIt() async {
+    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
+    let task = rig.start(steppedJob())
+    await rig.clock.waitForSleepers(1)
+    #expect(await rig.writer.observe(handle, frame: rect(300, 300, 1200, 900)) == .heldForWrite)
+    await rig.writer.reconfigurationBegan()
+    await rig.clock.advance(by: .milliseconds(25))
+
+    #expect(await task.value == .interrupted)
+    #expect(await rig.log == steppedLog)
+}
+
+@Test func anExternalMoveDuringTheWaitIsJudgedWhenACancellationEndsIt() async {
+    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
+    let task = rig.start(steppedJob())
+    await rig.clock.waitForSleepers(1)
+    #expect(await rig.writer.observe(handle, frame: rect(300, 300, 1200, 900)) == .heldForWrite)
+    task.cancel()
+
+    #expect(await task.value == .interrupted)
+    #expect(await rig.log == steppedLog)
+}
+
+@Test func aWriteCanOnlyClearItsOwnRequest() async {
+    // Two writes for one window outside the queue: A returns while B waits for the app's session slot.
+    let rig = await Rig(start: crossStart)
+    let gateA = await rig.fake.pause(beforeCall: 1)
+    let gateB = await rig.fake.pause(beforeCall: 6)
+    let a = rig.start(crossJob())
+    #expect(await pollUntil { gateA.waiterCount == 1 })
+    let b = rig.start(job(start: crossTarget, target: crossStart, crosses: true))
+    await rig.fake.waitUntil { $0.waitingSessionCount == 1 }
+    gateA.open()
+    #expect(await a.value == .placed(crossTarget))
+    #expect(await pollUntil { gateB.waiterCount == 1 })
+
+    #expect(await rig.writer.isWriting(handle))
+    #expect(await rig.writer.observe(handle, frame: rect(500, 500, 400, 300)) == .heldForWrite)
+    gateB.open()
+    #expect(await b.value == .interrupted)
 }
 
 // MARK: Failures and exits

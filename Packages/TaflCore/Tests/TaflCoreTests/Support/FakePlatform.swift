@@ -65,6 +65,9 @@ actor FakePlatform: WindowPlatform {
     var unobserved: [UnobservedApp] = []
 
     private(set) var callLog: [String] = []
+
+    /// How many `beginWriting` calls wait for another session of the same app to end.
+    var waitingSessionCount: Int { waiters.values.reduce(0) { $0 + $1.count } }
     private(set) var startObservingCount = 0
     private(set) var stopObservingCount = 0
 

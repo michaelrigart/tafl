@@ -207,9 +207,9 @@ public actor FrameWriter {
         do {
             try await clock.sleep(for: delay)
         } catch {
-            return first
+            return judgePending(request) ? .interrupted : first
         }
-        guard !Task.isCancelled, epoch == request.startEpoch else { return first }
+        guard !Task.isCancelled, epoch == request.startEpoch else { return judgePending(request) ? .interrupted : first }
         if judgePending(request) { return .interrupted }
         return await attempt(request, start: frame, reapplying: first, {})
     }
@@ -372,7 +372,10 @@ public actor FrameWriter {
         let pending = request.observed
         request.observed = []
         return pending.contains { observation in
-            if request.verified.contains(where: { !differs($0, observation.frame) }) { return false }
+            // The start is read back by any write the app refuses, but it isn't a frame this request
+            // put there: the window snapping back to it is an external change.
+            if differs(observation.frame, request.job.start),
+               request.verified.contains(where: { !differs($0, observation.frame) }) { return false }
             let positionMoved = differs(observation.frame.origin, request.expected.origin) && observation.part != .position
             let sizeChanged = differs(observation.frame.size, request.expected.size) && observation.part != .size
             return positionMoved || sizeChanged
