@@ -52,6 +52,42 @@ import Testing
     #expect(clock.now == .milliseconds(100))
 }
 
+private actor Hopper {
+    func hop() {}
+}
+
+/// An engine-like task wakes, does work across actor hops, then sleeps again. Another task
+/// registers a sleep meanwhile; that must not cut short the wait for the engine's next sleep.
+@Test func anotherTasksSleepDoesNotEndTheWakeGrace() async throws {
+    let clock = ManualClock()
+    let hopper = Hopper()
+    let (wakeUp, wakeUpSink) = AsyncStream.makeStream(of: Void.self)
+    let wakes = Mutex<[Duration]>([])
+    let engine = Task {
+        try await clock.sleep(for: .milliseconds(100))
+        wakes.withLock { $0.append(clock.now) }
+        wakeUpSink.yield()
+        for _ in 0..<5 { await hopper.hop() }
+        try await clock.sleep(for: .milliseconds(25))
+        wakes.withLock { $0.append(clock.now) }
+    }
+    let other = Task {
+        for await _ in wakeUp { break }
+        await hopper.hop()
+        try await clock.sleep(for: .seconds(5))
+    }
+    await clock.waitForSleepers(1)
+
+    await clock.advance(by: .milliseconds(200))
+    _ = await pollUntil { wakes.withLock { $0.count } >= 2 }
+    #expect(wakes.withLock { $0 } == [.milliseconds(100), .milliseconds(125)])
+    await clock.waitForSleepers(1)
+    #expect(clock.sleeperCount == 1)
+    #expect(clock.now == .milliseconds(200))
+    engine.cancel()
+    other.cancel()
+}
+
 @Test func manualClockSleepFailsWhenAlreadyCancelled() async {
     let clock = ManualClock()
     let task = Task {

@@ -13,6 +13,9 @@ final class FakeGate: Sendable {
 
     private let state = Mutex(State())
 
+    /// How many calls are held at this gate.
+    var waiterCount: Int { state.withLock { $0.waiters.count } }
+
     func open() {
         let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
             state.isOpen = true

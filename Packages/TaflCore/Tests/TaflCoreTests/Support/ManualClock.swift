@@ -12,6 +12,8 @@ import Testing
 final class ManualClock: TaflClock {
     private struct Sleeper {
         let id: Int
+        /// The task that called `sleep(for:)`.
+        let owner: Int
         let deadline: Duration
         let continuation: CheckedContinuation<Void, any Error>
     }
@@ -19,7 +21,6 @@ final class ManualClock: TaflClock {
     private struct State {
         var now: Duration = .zero
         var nextID = 0
-        var registrations = 0
         var sleepers: [Sleeper] = []
     }
 
@@ -39,14 +40,14 @@ final class ManualClock: TaflClock {
             defer { state.nextID += 1 }
             return state.nextID
         }
+        let owner = withUnsafeCurrentTask { $0?.hashValue ?? 0 }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
                 let outcome: Result<Void, any Error>? = state.withLock { state in
                     if Task.isCancelled { return .failure(CancellationError()) }
                     let deadline = state.now + duration
                     if deadline <= state.now { return .success(()) }
-                    state.sleepers.append(Sleeper(id: id, deadline: deadline, continuation: continuation))
-                    state.registrations += 1
+                    state.sleepers.append(Sleeper(id: id, owner: owner, deadline: deadline, continuation: continuation))
                     return nil
                 }
                 if let outcome { continuation.resume(with: outcome) }
@@ -63,13 +64,14 @@ final class ManualClock: TaflClock {
     /// Moves time forward to `now + duration`, waking sleepers in deadline order. For each one
     /// `now` is set to its deadline first; when time remains, the woken task gets a short
     /// wall-clock grace to start its next sleep, which is then due in turn if it falls in range.
+    /// Only a sleep by that same task ends the grace, so other tasks' sleeps cannot cut it short.
     func advance(by duration: Duration) async {
         let target = state.withLock { $0.now + duration }
-        while let (sleeper, registrationsBefore) = takeNextSleeper(due: target) {
+        while let sleeper = takeNextSleeper(due: target) {
             sleeper.continuation.resume()
             guard sleeper.deadline < target else { continue }
             _ = await pollUntil(timeout: Self.wakeGrace) {
-                state.withLock { $0.registrations > registrationsBefore }
+                state.withLock { state in state.sleepers.contains { $0.owner == sleeper.owner } }
             }
         }
         state.withLock { $0.now = max($0.now, target) }
@@ -91,7 +93,7 @@ final class ManualClock: TaflClock {
         }
     }
 
-    private func takeNextSleeper(due target: Duration) -> (Sleeper, Int)? {
+    private func takeNextSleeper(due target: Duration) -> Sleeper? {
         state.withLock { state in
             let next = state.sleepers.indices
                 .filter { state.sleepers[$0].deadline <= target }
@@ -99,7 +101,7 @@ final class ManualClock: TaflClock {
             guard let next else { return nil }
             let sleeper = state.sleepers.remove(at: next)
             state.now = max(state.now, sleeper.deadline)
-            return (sleeper, state.registrations)
+            return sleeper
         }
     }
 }

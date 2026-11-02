@@ -199,7 +199,7 @@ private func session(_ fake: FakePlatform, _ handle: WindowHandle) async throws 
     let gate = await fake.pause(beforeCall: 1)
     let s = try await session(fake, w.handle)
     let write = Task { await s.setSize(ScreenSize(width: 500, height: 400)) }
-    for _ in 0..<20 { await Task.yield() }
+    #expect(await pollUntil { gate.waiterCount == 1 })
     write.cancel()
     for _ in 0..<100 { await Task.yield() }
     #expect(await fake.callLog == ["begin"])
@@ -261,9 +261,11 @@ private func session(_ fake: FakePlatform, _ handle: WindowHandle) async throws 
     let (fake, _) = await makeFake(w)
     let s = try await session(fake, w.handle)
     await s.end()
+    var result: Result<ScreenRect, PlatformFailure>?
     await withKnownIssue {
-        #expect(await s.readFrame() == .failure(.cannotMove))
+        result = await s.readFrame()
     }
+    #expect(result == .failure(.cannotMove))
     #expect(await fake.callLog == ["begin", "end"])
 }
 
