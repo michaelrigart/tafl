@@ -66,21 +66,22 @@ public final class AXObserverHub: @unchecked Sendable { // reason: run-loop stat
         CFRunLoopStop(runLoop)
     }
 
-    /// Registers the notifications for one app and returns the names that failed to register.
-    public func observe(pid: pid_t, bundleID: String?, handler: @escaping Handler) -> Set<String> {
+    /// Registers the notifications for one app and returns the ones that failed, each with its error.
+    public func observe(pid: pid_t, bundleID: String?, handler: @escaping Handler) -> [String: AXError] {
         stopObserving(pid: pid)
         let registration = Registration(pid: pid, bundleID: bundleID, handler: handler)
         var observer: AXObserver?
-        guard AXObserverCreate(pid, observerCallback, &observer) == .success, let observer else {
-            return Set(Self.notifications)
+        let created = AXObserverCreate(pid, observerCallback, &observer)
+        guard created == .success, let observer else {
+            return Dictionary(uniqueKeysWithValues: Self.notifications.map { ($0, created == .success ? .failure : created) })
         }
         registration.observer = observer
         let app = AXUIElementCreateApplication(pid)
         let context = Unmanaged.passUnretained(registration).toOpaque()
-        var failed = Set<String>()
+        var failed: [String: AXError] = [:]
         for name in Self.notifications {
             let status = AXObserverAddNotification(observer, app, name as CFString, context)
-            if status != .success && status != .notificationAlreadyRegistered { failed.insert(name) }
+            if status != .success && status != .notificationAlreadyRegistered { failed[name] = status }
         }
         CFRunLoopAddSource(runLoop, AXObserverGetRunLoopSource(observer), .defaultMode)
         CFRunLoopWakeUp(runLoop)

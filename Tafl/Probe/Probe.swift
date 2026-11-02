@@ -420,7 +420,7 @@ enum Probe {
                 }
             }
             if !failed.isEmpty {
-                ProbeLog.write("registration failed bundle=\(bundleID ?? "?") pid=\(pid) notifications=\(failed.sorted().joined(separator: ","))")
+                ProbeLog.write("registration failed bundle=\(bundleID ?? "?") pid=\(pid) notifications=\(failed.keys.sorted().joined(separator: ","))")
             }
         }
         ProbeLog.write("observing \(apps.count) apps for \(seconds) s")

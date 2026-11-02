@@ -40,14 +40,22 @@ private func sessionEvents(
     #expect(sessionEvents(bundleID: "com.apple.Safari", initial: nil) == ["read", "adjust"])
 }
 
-@Test func chromiumFamiliesMatchByBundleIDOrItsHelperSuffix() {
-    for bundleID in ["com.google.Chrome", "com.google.Chrome.canary", "com.microsoft.edgemac", "company.thebrowser.Browser", "com.openai.atlas"] {
-        #expect(EnhancedUIPolicy.isKnownChromiumBrowser(bundleID: bundleID), "\(bundleID)")
-    }
-    for bundleID in ["com.apple.Safari", "com.google.ChromeFake", "org.mozilla.firefox"] {
-        #expect(!EnhancedUIPolicy.isKnownChromiumBrowser(bundleID: bundleID), "\(bundleID)")
-    }
-    #expect(!EnhancedUIPolicy.isKnownChromiumBrowser(bundleID: nil))
+/// Rectangle's `testKnownChromiumBrowserBundleIdentifiers`, whole.
+@Test func chromiumBrowsersMatchByFamilyAndDottedSuffix() {
+    let matching = [
+        "com.google.Chrome", "com.google.Chrome.canary", "org.chromium.Chromium", "com.microsoft.edgemac",
+        "com.microsoft.edgemac.Beta", "com.brave.Browser", "com.brave.Browser.nightly", "com.vivaldi.Vivaldi",
+        "com.operasoftware.Opera", "com.operasoftware.OperaNext", "com.operasoftware.OperaDeveloper",
+        "com.operasoftware.OperaNightly", "com.operasoftware.OperaGX", "com.operasoftware.OperaGXNext",
+        "com.operasoftware.OperaGXDeveloper", "com.operasoftware.OperaGXNightly", "company.thebrowser.Browser",
+        "company.thebrowser.dia", "ai.perplexity.comet", "com.openai.atlas",
+    ]
+    let notMatching: [String?] = [
+        nil, "com.apple.Safari", "com.google.Chromecast", "com.google.ChromeHelper", "com.brave.BrowserHelper",
+        "com.google.ChromeFake", "org.mozilla.firefox",
+    ]
+    for bundleID in matching { #expect(EnhancedUIPolicy.isKnownChromiumBrowser(bundleID: bundleID), "\(bundleID)") }
+    for bundleID in notMatching { #expect(!EnhancedUIPolicy.isKnownChromiumBrowser(bundleID: bundleID), "\(String(describing: bundleID))") }
 }
 
 @Test func restorePolicyIsRectanglesAutomaticMode() {

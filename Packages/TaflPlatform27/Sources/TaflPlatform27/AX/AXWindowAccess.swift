@@ -9,15 +9,43 @@ public struct AXFailure: Error, Equatable, Sendable {
 
 public enum AXWindowAccess {
     public static func focusedWindow(of pid: pid_t) -> AXUIElement? {
-        let app = AXUIElementCreateApplication(pid)
-        if let focused = elementValue(app, kAXFocusedWindowAttribute) { return focused }
-        if let first = windows(of: pid).first { return first }
-        return systemWideFocusedWindow(pid: pid)
+        try? findFocusedWindow(of: pid).get()
+    }
+
+    /// Rectangle's front-window lookup. It stops at the first `kAXErrorCannotComplete`, so an app that
+    /// does not answer costs one timeout, not one per fallback; any other failure tries the next lookup.
+    public static func findFocusedWindow(of pid: pid_t) -> Result<AXUIElement, AXFailure> {
+        lookUpFocusedWindow(
+            focused: { elementResult(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute) },
+            first: { windowsResult(of: pid).map(\.first) },
+            systemWide: { systemWideFocusedWindow(pid: pid) })
+    }
+
+    static func lookUpFocusedWindow<Element>(
+        focused: () -> Result<Element, AXFailure>,
+        first: () -> Result<Element?, AXFailure>,
+        systemWide: () -> Element?
+    ) -> Result<Element, AXFailure> {
+        switch focused() {
+        case .success(let window): return .success(window)
+        case .failure(let failure) where failure.code == .cannotComplete: return .failure(failure)
+        case .failure: break
+        }
+        switch first() {
+        case .success(let window?): return .success(window)
+        case .failure(let failure) where failure.code == .cannotComplete: return .failure(failure)
+        case .success(nil), .failure: break
+        }
+        if let window = systemWide() { return .success(window) }
+        return .failure(AXFailure(.noValue))
     }
 
     public static func windows(of pid: pid_t) -> [AXUIElement] {
-        guard let value = copyValue(AXUIElementCreateApplication(pid), kAXWindowsAttribute) else { return [] }
-        return value as? [AXUIElement] ?? []
+        (try? windowsResult(of: pid).get()) ?? []
+    }
+
+    public static func windowsResult(of pid: pid_t) -> Result<[AXUIElement], AXFailure> {
+        copyResult(AXUIElementCreateApplication(pid), kAXWindowsAttribute).map { $0 as? [AXUIElement] ?? [] }
     }
 
     public static func frame(_ element: AXUIElement) -> Result<CGRect, AXFailure> {
@@ -41,9 +69,14 @@ public enum AXWindowAccess {
     }
 
     public static func isSettable(_ element: AXUIElement, attribute: String) -> Bool {
+        (try? settability(element, attribute: attribute).get()) ?? false
+    }
+
+    /// Whether the attribute is settable, or why that could not be told (a timeout is not "no").
+    public static func settability(_ element: AXUIElement, attribute: String) -> Result<Bool, AXFailure> {
         var settable = DarwinBoolean(false)
         let result = AXUIElementIsAttributeSettable(element, attribute as CFString, &settable)
-        return result == .success && settable.boolValue
+        return result == .success ? .success(settable.boolValue) : .failure(AXFailure(result))
     }
 
     public static func title(_ element: AXUIElement) -> String? {
@@ -59,14 +92,20 @@ public enum AXWindowAccess {
     }
 
     public static func isMinimized(_ element: AXUIElement) -> Bool? {
-        guard let window = windowElement(for: element) else { return nil }
-        return copyValue(window, kAXMinimizedAttribute) as? Bool
+        windowElement(for: element).flatMap(isMinimized(window:))
+    }
+
+    public static func isMinimized(window: AXUIElement) -> Bool? {
+        copyValue(window, kAXMinimizedAttribute) as? Bool
     }
 
     /// Rectangle's test: a full-screen window's AXFullScreenButton has the zoom subrole.
     public static func isFullscreen(_ element: AXUIElement) -> Bool? {
-        guard let window = windowElement(for: element),
-              let button = elementValue(window, kAXFullScreenButtonAttribute),
+        windowElement(for: element).flatMap(isFullscreen(window:))
+    }
+
+    public static func isFullscreen(window: AXUIElement) -> Bool? {
+        guard let button = elementValue(window, kAXFullScreenButtonAttribute),
               let subrole = subrole(button)
         else { return nil }
         return subrole == kAXZoomButtonSubrole
@@ -112,11 +151,16 @@ public enum AXWindowAccess {
     }
 
     private static func windowElement(for element: AXUIElement) -> AXUIElement? {
+        windowElement(for: element, role: role(element), subrole: { subrole(element) })
+    }
+
+    /// `windowElement` from a role already read, so a caller that has it asks once.
+    public static func windowElement(for element: AXUIElement, role: String?, subrole: () -> String?) -> AXUIElement? {
         resolveWindowElement(
             element,
-            isWindow: (copyValue(element, kAXRoleAttribute) as? String).map { $0 == kAXWindowRole },
+            isWindow: role.map { $0 == kAXWindowRole },
             containingWindow: { elementValue(element, kAXWindowAttribute) },
-            subrole: { subrole(element) })
+            subrole: subrole)
     }
 
     /// The last resort in Rectangle's front-window lookup: the system-wide focused element,
@@ -129,15 +173,26 @@ public enum AXWindowAccess {
         return window
     }
 
-    private static func copyValue(_ element: AXUIElement, _ attribute: String) -> AnyObject? {
+    private static func copyResult(_ element: AXUIElement, _ attribute: String) -> Result<AnyObject, AXFailure> {
         var value: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
-        return value
+        let status = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard status == .success else { return .failure(AXFailure(status)) }
+        guard let value else { return .failure(AXFailure(.noValue)) }
+        return .success(value)
+    }
+
+    private static func copyValue(_ element: AXUIElement, _ attribute: String) -> AnyObject? {
+        try? copyResult(element, attribute).get()
+    }
+
+    private static func elementResult(_ element: AXUIElement, _ attribute: String) -> Result<AXUIElement, AXFailure> {
+        copyResult(element, attribute).flatMap { value in
+            CFGetTypeID(value) == AXUIElementGetTypeID() ? .success(value as! AXUIElement) : .failure(AXFailure(.illegalArgument))
+        }
     }
 
     private static func elementValue(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
-        guard let value = copyValue(element, attribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return (value as! AXUIElement)
+        try? elementResult(element, attribute).get()
     }
 
     private static func pointValue(_ element: AXUIElement, _ attribute: String) -> Result<CGPoint, AXFailure> {

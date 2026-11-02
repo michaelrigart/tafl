@@ -1,8 +1,19 @@
 import TaflCore
 
+struct ResolvedWindowID: Sendable, Equatable {
+    var id: UInt32
+    var by: WindowIDResolver.ResolvedBy
+}
+
 /// Maps each `WindowHandle` to its element. A window keeps its handle for as long as its element
 /// is registered; when no window id resolves, the handle is synthetic (`isStable == false`).
 actor WindowRegistry {
+    struct Registration: Sendable, Equatable {
+        var handle: WindowHandle
+        /// False when the element was already registered.
+        var isNew: Bool
+    }
+
     private struct Entry {
         var handle: WindowHandle
         var element: AXElementBox
@@ -13,24 +24,41 @@ actor WindowRegistry {
 
     var count: Int { entries.count }
 
-    /// The handle of a registered element, or a new registration: from `windowID` when it
-    /// resolved, otherwise a synthetic one. A registered element keeps the handle it has.
-    func handle(for element: AXElementBox, pid: Int32, windowID: UInt32?) -> WindowHandle {
-        if let known = knownHandle(of: element) { return known }
+    func handle(for element: AXElementBox, pid: Int32, windowID: ResolvedWindowID?) -> WindowHandle {
+        register(element, pid: pid, windowID: windowID).handle
+    }
+
+    /// The handle of a registered element, or a new registration: from `windowID` when it resolved,
+    /// otherwise a synthetic one. A registered element keeps the handle it has.
+    ///
+    /// An id from the private symbol names its window exactly, so a new element for it replaces the old
+    /// one. An id from the window list is a guess (a pid and a frame), so when another element already
+    /// holds it the newcomer gets a synthetic handle and the holder keeps its own.
+    func register(_ element: AXElementBox, pid: Int32, windowID: ResolvedWindowID?) -> Registration {
+        if let known = knownHandle(of: element) { return Registration(handle: known, isNew: false) }
         let handle: WindowHandle
-        if let windowID {
-            handle = WindowHandle(pid: pid, windowID: windowID, isStable: true)
+        if let windowID, windowID.by == .privateSymbol || !isHeld(pid: pid, windowID: windowID.id) {
+            handle = WindowHandle(pid: pid, windowID: windowID.id, isStable: true)
             entries.removeAll { $0.handle == handle }
         } else {
             handle = WindowHandle(pid: pid, windowID: nextSyntheticID, isStable: false)
             nextSyntheticID += 1
         }
         entries.append(Entry(handle: handle, element: element))
-        return handle
+        return Registration(handle: handle, isNew: true)
+    }
+
+    private func isHeld(pid: Int32, windowID: UInt32) -> Bool {
+        entries.contains { $0.handle == WindowHandle(pid: pid, windowID: windowID, isStable: true) }
     }
 
     func knownHandle(of element: AXElementBox) -> WindowHandle? {
         entries.first { $0.element == element }?.handle
+    }
+
+    /// The registered elements of one app, so a reader on its queue can skip id resolution for them.
+    func elements(pid: Int32) -> [AXElementBox] {
+        entries.filter { $0.handle.pid == pid }.map(\.element)
     }
 
     func element(for handle: WindowHandle) -> AXElementBox? {

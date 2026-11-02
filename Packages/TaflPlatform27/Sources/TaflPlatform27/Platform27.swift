@@ -11,14 +11,21 @@ final class Platform27: WindowPlatform {
     private let axQueue = AXQueue()
     private let registry = WindowRegistry()
     private let leases = WriteLeases()
+    private let catalog: WindowCatalog27
     private let observation: WindowObservation27
     private let watcher = Mutex<WorkspaceWatcher27?>(nil)
+    /// Lives as long as the platform, so no reconfiguration callback is lost while observing restarts.
+    private let reconfiguration: ReconfigurationMonitor27
 
     init() {
         let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream(bufferingPolicy: .unbounded)
         events = stream
         eventContinuation = continuation
-        observation = WindowObservation27(axQueue: axQueue, registry: registry, events: continuation)
+        catalog = WindowCatalog27(registry: registry, axQueue: axQueue)
+        observation = WindowObservation27(axQueue: axQueue, registry: registry, catalog: catalog, events: continuation)
+        reconfiguration = ReconfigurationMonitor27 { phase, _ in
+            continuation.yield(phase == .began ? .reconfigurationBegan : .reconfigurationEnded)
+        }
     }
 
     // MARK: Displays, settings, permission
@@ -27,8 +34,10 @@ final class Platform27: WindowPlatform {
         await Displays27.current(axQueue: axQueue)
     }
 
+    /// Located against the displays' own frames: the pointer needs no Dock read.
     func pointerDisplay() async -> DisplayIdentity? {
-        Pointer27.display(in: await displays())
+        let raw = await MainActor.run(body: DisplayReader27.displays)
+        return Pointer27.display(in: Displays27.displays(from: raw, dock: nil))
     }
 
     func tilingSettings() async -> TilingSettings {
@@ -64,20 +73,22 @@ final class Platform27: WindowPlatform {
 
     // MARK: Windows
 
+    /// Any window element the front-window lookup finds, dialogs and palettes included.
     func focusedWindow() async -> Result<WindowSnapshot, PlatformFailure> {
         guard let app = await MainActor.run(body: AppInfo27.frontmost) else { return .failure(.noWindow) }
         let pid = app.pid
-        let read = await axQueue.run(pid: pid) { () -> Result<ElementRead, AXFailure>? in
-            guard let element = AXWindowAccess.focusedWindow(of: pid) else { return nil }
-            return Windows27.read(element, pid: pid, resolveID: true)
+        Task { [observation] in await observation.discover(app) }
+        let read = await axQueue.run(pid: pid) { () -> Result<ElementRead, AXFailure> in
+            switch AXWindowAccess.findFocusedWindow(of: pid) {
+            case .failure(let failure): .failure(failure)
+            case .success(let element): Windows27.read(element, pid: pid, resolveID: true)
+            }
         }
-        guard let read else { return .failure(.noWindow) }
         switch read {
         case .failure(let failure):
             return .failure(Windows27.failure(for: failure.code))
         case .success(let window):
-            guard let snapshot = await register(window, app: app) else { return .failure(.noWindow) }
-            return .success(snapshot)
+            return .success(await catalog.register(window, app: app).snapshot)
         }
     }
 
@@ -85,7 +96,10 @@ final class Platform27: WindowPlatform {
         let apps = await MainActor.run(body: AppInfo27.regularApps)
         return await withTaskGroup(of: (Int, [WindowSnapshot]).self) { group in
             for (index, app) in apps.enumerated() {
-                group.addTask { (index, await self.windows(of: app)) }
+                group.addTask {
+                    await self.observation.discover(app)
+                    return (index, await self.catalog.windows(of: app).map(\.snapshot))
+                }
             }
             var parts: [(Int, [WindowSnapshot])] = []
             for await part in group { parts.append(part) }
@@ -103,10 +117,7 @@ final class Platform27: WindowPlatform {
             if failure.code == .invalidUIElement { await registry.remove(handle) }
             return .failure(Windows27.failure(for: failure.code))
         case .success(let window):
-            guard let snapshot = Windows27.snapshot(handle: handle, app: app, attributes: window.attributes) else {
-                return .failure(.noWindow)
-            }
-            return .success(snapshot)
+            return .success(Windows27.snapshot(handle: handle, app: app, attributes: window.attributes))
         }
     }
 
@@ -122,39 +133,22 @@ final class Platform27: WindowPlatform {
         return .success(session)
     }
 
-    private func windows(of app: AppInfo27) async -> [WindowSnapshot] {
-        let pid = app.pid
-        let reads = await axQueue.run(pid: pid) {
-            AXWindowAccess.windows(of: pid).compactMap { element -> ElementRead? in
-                guard case .success(let window) = Windows27.read(element, pid: pid, resolveID: true) else { return nil }
-                return window
-            }
-        }
-        var snapshots: [WindowSnapshot] = []
-        for window in reads {
-            if let snapshot = await register(window, app: app) { snapshots.append(snapshot) }
-        }
-        return snapshots
-    }
-
-    private func register(_ window: ElementRead, app: AppInfo27) async -> WindowSnapshot? {
-        guard Windows27.isTracked(window.attributes) else { return nil }
-        let handle = await registry.handle(for: window.element, pid: app.pid, windowID: window.windowID)
-        return Windows27.snapshot(handle: handle, app: app, attributes: window.attributes)
-    }
-
     // MARK: Observing
 
     func startObserving() async -> [UnobservableApp] {
-        await stopObserving()
-        let events = eventContinuation
+        observation.end()
+        observation.begin()
         let observation = observation
         let installed = await MainActor.run {
             let created = WorkspaceWatcher27()
-            created.start(observation: observation, events: events)
+            created.start(observation: observation)
             return created
         }
-        watcher.withLock { $0 = installed }
+        let previous = watcher.withLock { current in
+            defer { current = installed }
+            return current
+        }
+        if let previous { await MainActor.run { previous.stop() } }
         let apps = await MainActor.run(body: AppInfo27.regularApps)
         let unobservable = await withTaskGroup(of: UnobservableApp?.self) { group in
             for app in apps { group.addTask { await observation.observe(app) } }
@@ -169,8 +163,8 @@ final class Platform27: WindowPlatform {
     }
 
     func stopObserving() async {
+        observation.end()
         let installed = watcher.withLock { $0.take() }
         if let installed { await MainActor.run { installed.stop() } }
-        observation.stopAll()
     }
 }

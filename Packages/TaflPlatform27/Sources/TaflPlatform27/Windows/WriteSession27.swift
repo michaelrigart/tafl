@@ -54,14 +54,12 @@ final class WriteSession27: WriteSession {
 
     func setPosition(_ point: ScreenPoint) async -> Result<Void, PlatformFailure> {
         let element = element
-        return await axQueue.run(pid: pid) { () -> Result<Void, PlatformFailure> in
+        return await axQueue.run(pid: pid) {
             let target = element.element
-            guard AXWindowAccess.isSettable(target, attribute: kAXPositionAttribute) else {
-                return .failure(Windows27.positionFailure(for: .failure, isFullscreen: { AXWindowAccess.isFullscreen(target) ?? false }))
-            }
-            let code = AXWindowAccess.setPosition(target, CGPoint(x: point.x, y: point.y))
-            guard code != .success else { return .success(()) }
-            return .failure(Windows27.positionFailure(for: code, isFullscreen: { AXWindowAccess.isFullscreen(target) ?? false }))
+            return Windows27.writePosition(
+                settable: { AXWindowAccess.settability(target, attribute: kAXPositionAttribute) },
+                write: { AXWindowAccess.setPosition(target, CGPoint(x: point.x, y: point.y)) },
+                isFullscreen: { AXWindowAccess.isFullscreen(target) ?? false })
         }
     }
 

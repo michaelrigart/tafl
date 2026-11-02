@@ -1,22 +1,55 @@
 import ApplicationServices
+import Synchronization
 import TaflCore
 
-/// Turns the hub's Accessibility notifications into `PlatformEvent`s. Events arrive one at a time and
-/// in order; a window the registry does not know yet, and a title, are read on a task of their own so a
-/// slow app never holds the rest back. No frame or title is read on the hub thread.
+/// Turns the hub's Accessibility notifications into `PlatformEvent`s. Each app has a lane: its events
+/// are handled one at a time and in order, including the reads for a window the registry does not
+/// know yet, and a slow app delays only its own lane. Nothing is read on the hub thread.
 final class WindowEventTranslator: Sendable {
     private let registry: WindowRegistry
-    private let axQueue: AXQueue
+    private let reader: WindowReader27
     private let events: AsyncStream<PlatformEvent>.Continuation
+    private let lanes = Mutex<[pid_t: AsyncStream<AXObserverHub.Event>.Continuation]>([:])
 
-    init(registry: WindowRegistry, axQueue: AXQueue, events: AsyncStream<PlatformEvent>.Continuation) {
+    init(registry: WindowRegistry, reader: WindowReader27, events: AsyncStream<PlatformEvent>.Continuation) {
         self.registry = registry
-        self.axQueue = axQueue
+        self.reader = reader
         self.events = events
     }
 
-    func handle(_ event: AXObserverHub.Event) async {
+    /// Never blocks: it only hands the event to its app's lane.
+    func enqueue(_ event: AXObserverHub.Event) {
+        lane(for: event.pid).yield(event)
+    }
+
+    /// The lane ends after the events already in it.
+    func closeLane(pid: pid_t) {
+        lanes.withLock { $0.removeValue(forKey: pid) }?.finish()
+    }
+
+    func closeAll() {
+        let all = lanes.withLock { table in
+            defer { table.removeAll() }
+            return Array(table.values)
+        }
+        all.forEach { $0.finish() }
+    }
+
+    private func lane(for pid: pid_t) -> AsyncStream<AXObserverHub.Event>.Continuation {
+        lanes.withLock { table in
+            if let existing = table[pid] { return existing }
+            let (stream, continuation) = AsyncStream<AXObserverHub.Event>.makeStream(bufferingPolicy: .unbounded)
+            table[pid] = continuation
+            Task {
+                for await event in stream { await self.handle(event) }
+            }
+            return continuation
+        }
+    }
+
+    private func handle(_ event: AXObserverHub.Event) async {
         let element = AXElementBox(event.element)
+        let pid = event.pid
         let known = await registry.knownHandle(of: element)
         switch event.notification {
         case kAXUIElementDestroyedNotification:
@@ -24,48 +57,34 @@ final class WindowEventTranslator: Sendable {
             await registry.remove(known)
             events.yield(.windowDestroyed(known))
         case kAXWindowCreatedNotification:
-            spawn { if let snapshot = await $0.register(element, pid: event.pid) { $0.events.yield(.windowCreated(snapshot)) } }
+            guard known == nil, let entry = await learn(element, pid: pid), entry.isNew else { return }
+            events.yield(.windowCreated(entry.snapshot))
         case kAXWindowMovedNotification:
-            emit(known, element: element, pid: event.pid) { .windowMoved($0) }
+            if let handle = await handleOf(known, element, pid) { events.yield(.windowMoved(handle)) }
         case kAXWindowResizedNotification:
-            emit(known, element: element, pid: event.pid) { .windowResized($0) }
+            if let handle = await handleOf(known, element, pid) { events.yield(.windowResized(handle)) }
         case kAXTitleChangedNotification:
-            guard let known else {
-                spawn { if let snapshot = await $0.register(element, pid: event.pid) { $0.events.yield(.titleChanged(snapshot.handle, snapshot.title)) } }
-                return
-            }
-            spawn { translator in
-                let title = await translator.axQueue.run(pid: event.pid) { AXWindowAccess.title(element.element) ?? "" }
-                translator.events.yield(.titleChanged(known, title))
+            if let known {
+                events.yield(.titleChanged(known, await reader.title(element, pid)))
+            } else if let entry = await learn(element, pid: pid) {
+                events.yield(.titleChanged(entry.snapshot.handle, entry.snapshot.title))
             }
         default:
             return
         }
     }
 
-    private func emit(
-        _ known: WindowHandle?, element: AXElementBox, pid: pid_t, _ event: @escaping @Sendable (WindowHandle) -> PlatformEvent
-    ) {
-        if let known {
-            events.yield(event(known))
-        } else {
-            spawn { translator in
-                if let snapshot = await translator.register(element, pid: pid) { translator.events.yield(event(snapshot.handle)) }
-            }
-        }
+    private func handleOf(_ known: WindowHandle?, _ element: AXElementBox, _ pid: pid_t) async -> WindowHandle? {
+        if let known { return known }
+        return await learn(element, pid: pid)?.snapshot.handle
     }
 
-    private func spawn(_ work: @escaping @Sendable (WindowEventTranslator) async -> Void) {
-        Task { await work(self) }
-    }
-
-    /// Registers a window the registry has not seen. Windows that are not standard windows or sheets
-    /// are never registered, so their events stop here.
-    private func register(_ element: AXElementBox, pid: pid_t) async -> WindowSnapshot? {
-        let read = await axQueue.run(pid: pid) { Windows27.read(element.element, pid: pid, resolveID: true) }
-        guard case .success(let window) = read, Windows27.isTracked(window.attributes) else { return nil }
-        let handle = await registry.handle(for: window.element, pid: pid, windowID: window.windowID)
-        let app = AppInfo27.running(pid: pid) ?? AppInfo27(pid: pid, bundleID: nil, name: "App", isHidden: false)
-        return Windows27.snapshot(handle: handle, app: app, attributes: window.attributes)
+    /// Registers a window the registry has not seen. Anything that is not a standard window or sheet,
+    /// and a window whose process is gone, is never registered.
+    private func learn(_ element: AXElementBox, pid: pid_t) async -> WindowCatalog27.Entry? {
+        guard let window = await reader.readTracked(element, pid, true), let app = reader.app(pid) else { return nil }
+        let registration = await registry.register(window.element, pid: pid, windowID: window.windowID)
+        let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: window.attributes)
+        return WindowCatalog27.Entry(snapshot: snapshot, isNew: registration.isNew)
     }
 }

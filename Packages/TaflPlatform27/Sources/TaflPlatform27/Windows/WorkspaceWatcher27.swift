@@ -1,42 +1,35 @@
 import AppKit
-import TaflCore
 
-/// Launch and quit of regular apps, and display reconfiguration, for as long as it runs.
+/// Launch and quit notifications for as long as it runs. Every app quit is reported; only regular apps
+/// are observed when they launch, and an app that becomes regular later is met by a query.
 @MainActor
 final class WorkspaceWatcher27 {
     private var tokens: [any NSObjectProtocol] = []
-    private var monitor: ReconfigurationMonitor27?
 
-    func start(observation: WindowObservation27, events: AsyncStream<PlatformEvent>.Continuation) {
+    func start(observation: WindowObservation27) {
         stop()
         let center = NSWorkspace.shared.notificationCenter
         tokens = [
             center.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { note in
-                guard let app = Self.regularApp(in: note) else { return }
+                guard let app = Self.app(in: note), app.activationPolicy == .regular else { return }
                 let info = AppInfo27(app)
                 Task { await observation.appLaunched(info) }
             },
             center.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { note in
-                guard let app = Self.regularApp(in: note) else { return }
+                guard let app = Self.app(in: note) else { return }
                 let pid = app.processIdentifier
                 Task { await observation.appQuit(pid: pid) }
             },
         ]
-        monitor = ReconfigurationMonitor27 { phase, _ in
-            events.yield(phase == .began ? .reconfigurationBegan : .reconfigurationEnded)
-        }
     }
 
     func stop() {
         let center = NSWorkspace.shared.notificationCenter
         tokens.forEach(center.removeObserver)
         tokens = []
-        monitor?.invalidate()
-        monitor = nil
     }
 
-    private nonisolated static func regularApp(in note: Notification) -> NSRunningApplication? {
-        let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-        return app?.activationPolicy == .regular ? app : nil
+    private nonisolated static func app(in note: Notification) -> NSRunningApplication? {
+        note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
     }
 }
