@@ -103,14 +103,18 @@ extension WindowEngine {
     // MARK: New windows
 
     /// Records the window's frame, and places it when a layout is active and has an entry for it.
-    /// The engine's state for a window begins when it first sees it, whatever the source, and an
-    /// announcement that comes later resets none of it: a window touched since is left where it is.
+    /// The engine's state for a window begins when it first sees it, whatever the source. An
+    /// announcement for a window it already knows comes late, with a snapshot older than what the
+    /// engine has: it writes nothing and places nothing.
     private func windowCreated(_ snapshot: WindowSnapshot) async {
+        guard await !knows(snapshot.handle) else {
+            eventsHandled += 1
+            return
+        }
         await memory.processStarted(pid: snapshot.handle.pid)
         let context = currentContext
         await recordLastKnownLive([snapshot], context)
         guard let since = context.since,
-              !touched.contains(snapshot.handle),
               snapshot.isPlaceable,
               !isLeftOutOfPlacement(pid: snapshot.handle.pid),
               let definition = activeLayout.definition(in: config)
@@ -127,6 +131,13 @@ extension WindowEngine {
             return
         }
         track { _ = await self.run([request], since: since) }
+    }
+
+    /// Whether the engine has state for the window: it was touched, a frame event for it was
+    /// judged, or the memory holds something about it.
+    private func knows(_ window: WindowHandle) async -> Bool {
+        if touched.contains(window) || frameTasks[window] != nil { return true }
+        return await memory.knows(window)
     }
 
     /// The first title change of a new window gets one more look at the layout's entries. Whether

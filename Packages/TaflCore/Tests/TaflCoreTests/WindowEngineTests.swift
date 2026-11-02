@@ -389,7 +389,20 @@ private final class Rig: Sendable {
     #expect(await rig.engine.touched.contains(handle))
 }
 
-@Test func aWindowAQuerySawFirstIsPlacedWhenItsCreationIsAnnounced() async {
+@Test func aLateAnnouncementLeavesAKnownWindowsMemoryAlone() async {
+    let rig = await Rig()
+    await rig.engine.start(config: config())
+    let found = window(1, frame: start)
+    await rig.fake.configure { $0.windows[found.handle] = found }
+    // A catch-up read the window at `start`; a shortcut then places it, and the old read is announced.
+    await rig.engine.perform(.leftHalf)
+    await rig.emit(.windowCreated(found))
+    await rig.waitForEvents(1)
+    let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA]))
+    #expect(known?.relative == leftHalfA.relative(to: v))
+}
+
+@Test func aWindowTheSeedSawIsLeftAloneWhenItsCreationIsAnnounced() async {
     let (store, directory) = temporaryStore()
     defer { try? FileManager.default.removeItem(at: directory) }
     let desk = layout("Desk", [slot(.rightHalf)])
@@ -397,12 +410,14 @@ private final class Rig: Sendable {
     await first.engine.start(config: config(layouts: [desk]))
     await first.engine.applyLayout(named: "Desk")
     await first.engine.stop()
-    // The next launch's seed meets the window untouched; its creation is announced later.
+    // The next launch's seed knows the window; its creation is announced later.
     let found = window(1, frame: start)
     let rig = await Rig(windows: [found], store: store)
     await rig.engine.start(config: config(layouts: [desk]))
     await rig.emit(.windowCreated(found))
-    await rig.waitForFrame(rightHalfA)
+    await rig.waitForEvents(1)
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.frame() == start)
 }
 
 @Test func newWindowIsLeftAloneWithoutAnActiveLayout() async {

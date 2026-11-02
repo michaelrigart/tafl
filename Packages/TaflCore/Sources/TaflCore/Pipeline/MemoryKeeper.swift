@@ -89,6 +89,10 @@ public actor MemoryKeeper {
         memory.forget(pid: pid)
     }
 
+    public func knows(_ window: WindowHandle) -> Bool {
+        memory.holdsWindow { $0 == window }
+    }
+
     /// A process started with this id, so a quit process that had it stands in its way no longer.
     public func processStarted(pid: Int32) {
         gone.started(pid)
