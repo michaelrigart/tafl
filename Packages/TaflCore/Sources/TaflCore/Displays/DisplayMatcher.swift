@@ -7,6 +7,13 @@ public enum DisplayMatcher {
         return displays.first { $0.identity.identifier == reference }
     }
 
+    /// What to write in the config to name `display`: its name, or its identifier where another
+    /// connected display shares the name.
+    public static func reference(for display: Display, among displays: [Display]) -> String {
+        let repeated = displays.filter { $0.identity.name == display.identity.name }.count > 1
+        return repeated ? display.identity.identifier : display.identity.name
+    }
+
     public static func claims(_ references: [String], _ displays: [Display]) -> Bool {
         guard references.count == displays.count else { return false }
         var matched: [DisplayIdentity] = []

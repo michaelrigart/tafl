@@ -6,6 +6,7 @@ import TaflPlatform27
 /// shortcut gate, the one place that registers hotkeys.
 final class CompositionRoot {
     private let permission = Permission27()
+    private let platform: any WindowPlatform
     private let engine: WindowEngine
     private let registrar = CarbonHotkeyRegistrar()
     private let activator: ShortcutActivator
@@ -23,8 +24,19 @@ final class CompositionRoot {
     /// Whether Accessibility was granted when last looked at.
     private var trusted = false
     private var engineStarted = false
+    /// The categories of the last failures, newest last, for diagnostics.
+    private var recentFailures: [String] = []
+    private var platformInfoTask: Task<Void, Never>?
 
     private lazy var onboarding = OnboardingWindow { [unowned self] in syncPermission() }
+    private let settingsModel = SettingsModel()
+    private lazy var settingsActions = SettingsActions(
+        model: settingsModel,
+        platform: platform,
+        table: { [unowned self] in table },
+        gap: { [unowned self] in configController.config.gap },
+        onStarterFileCreated: { [unowned self] in configController.reload() })
+    private lazy var settingsWindow = SettingsWindow(model: settingsModel, actions: settingsActions)
     private lazy var configController = ConfigController(
         path: Self.configPath,
         engine: engine,
@@ -38,8 +50,10 @@ final class CompositionRoot {
 
     init() {
         let clock = SystemClock()
+        let platform = PlatformFactory.make()
+        self.platform = platform
         engine = WindowEngine(
-            platform: PlatformFactory.make(),
+            platform: platform,
             store: MemoryStore(fileURL: Self.memoryURL),
             clock: clock,
             timing: .provisional,
@@ -72,6 +86,8 @@ final class CompositionRoot {
         statusItem.onApplyLayout = { [unowned self] name in
             Task { await engine.applyLayout(named: name) }
         }
+        statusItem.onOpenSettings = { [unowned self] in showSettings() }
+        statusItem.onCapture = { [unowned self] in capture() }
         refreshMenu()
         let events = SessionEvents(
             onWake: { [unowned self] in resume(after: "wake") },
@@ -104,12 +120,56 @@ final class CompositionRoot {
         Log.app.notice("Tafl quit")
     }
 
-    /// The app was opened again from Finder or Spotlight.
+    /// The app was opened again from Finder or Spotlight: onboarding while Accessibility is missing,
+    /// otherwise Settings, which is the only way in when the menu bar icon is off.
     func reopen() {
         if !trusted {
             onboarding.show()
         } else {
-            Log.ui.notice("Reopened; Settings is not available yet")
+            showSettings()
+        }
+    }
+
+    // MARK: Settings
+
+    private func showSettings(_ section: SettingsSection? = nil) {
+        refreshSettings()
+        refreshPlatformInfo()
+        settingsWindow.show(section)
+    }
+
+    private func capture() {
+        showSettings(.layouts)
+        Task { await settingsActions.capture() }
+    }
+
+    /// Hands the model what the controllers know. Cheap, so every menu refresh does it.
+    private func refreshSettings() {
+        let model = settingsModel
+        model.configPath = Self.configPath
+        model.fileExists = (try? FileManager.default.attributesOfItem(atPath: Self.configPath)) != nil
+        model.status = configController.state.status
+        model.config = configController.config
+        model.activationFailures = configController.activationFailures
+        model.activeLayout = activeLayout
+        model.table = table
+        model.trusted = trusted
+        model.recentFailures = recentFailures
+        if settingsWindow.isVisible { refreshPlatformInfo() }
+    }
+
+    /// The displays, macOS tiling settings and capabilities come from the platform, which answers
+    /// asynchronously; a newer read replaces one still running.
+    private func refreshPlatformInfo() {
+        platformInfoTask?.cancel()
+        platformInfoTask = Task { [platform, settingsModel] in
+            let displays = await platform.displays()
+            let tiling = await platform.tilingSettings()
+            let capabilities = await platform.capabilities()
+            guard !Task.isCancelled else { return }
+            settingsModel.displays = displays
+            settingsModel.tiling = tiling
+            settingsModel.capabilities = capabilities
         }
     }
 
@@ -202,6 +262,8 @@ final class CompositionRoot {
         switch report {
         case .failure(let kind, let display):
             Log.engine.notice("Failure \(kind.category, privacy: .public)")
+            recentFailures = Array((recentFailures + [kind.category]).suffix(Diagnostics.recentFailureLimit))
+            settingsModel.recentFailures = recentFailures
             overlay.show(kind, on: display)
             if kind == .permissionMissing { permissionLost() }
         case .layoutApplied(let name, let placed, let failed):
@@ -246,5 +308,6 @@ final class CompositionRoot {
             activeLayout: activeLayout,
             issues: issues,
             canApplyLayouts: engineStarted && trusted)
+        refreshSettings()
     }
 }

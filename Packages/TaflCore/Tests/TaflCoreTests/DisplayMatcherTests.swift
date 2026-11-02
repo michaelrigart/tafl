@@ -15,6 +15,15 @@ struct DisplayMatcherTests {
         #expect(DisplayMatcher.display(for: "Missing", in: [lg1, lg2]) == nil)
     }
 
+    @Test func referenceIsTheNameUnlessNamesRepeat() {
+        #expect(DisplayMatcher.reference(for: hdr, among: [builtIn, hdr]) == "LG HDR")
+        #expect(DisplayMatcher.reference(for: lg2, among: [lg1, lg2]) == "7789-30648-2")
+        for display in [lg1, lg2] {
+            let reference = DisplayMatcher.reference(for: display, among: [lg1, lg2])
+            #expect(DisplayMatcher.display(for: reference, in: [lg1, lg2]) == display)
+        }
+    }
+
     @Test func claimsNeedEveryDisplayMatchedOnce() {
         let references = ["LG HDR", "Built-in Retina Display"]
         #expect(DisplayMatcher.claims(references, [builtIn, hdr]))
