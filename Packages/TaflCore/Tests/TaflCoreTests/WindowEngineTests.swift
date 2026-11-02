@@ -402,6 +402,27 @@ private final class Rig: Sendable {
     #expect(known?.relative == leftHalfA.relative(to: v))
 }
 
+@Test(.timeLimit(.minutes(1))) func aLateAnnouncementWhileTheWindowsFrameIsJudgedDoesNothing() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let found = window(1, frame: start)
+    let reads = FakeGate()
+    await rig.fake.configure { $0.windows[found.handle] = found; $0.snapshotGate = reads }
+    // A move is being judged for the window: its read is held, so it is neither touched nor in memory yet.
+    await rig.emit(.windowMoved(handle))
+    await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    await rig.emit(.windowCreated(found))
+    await rig.waitForEvents(1)
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA])) == nil)
+    #expect(await !rig.engine.touched.contains(handle))
+    reads.open()
+    await rig.waitForEvents(2)
+    #expect(await rig.log.isEmpty)
+}
+
 @Test func aWindowTheSeedSawIsLeftAloneWhenItsCreationIsAnnounced() async {
     let (store, directory) = temporaryStore()
     defer { try? FileManager.default.removeItem(at: directory) }

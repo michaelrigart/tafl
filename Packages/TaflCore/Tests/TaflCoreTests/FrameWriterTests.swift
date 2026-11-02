@@ -807,6 +807,29 @@ private func writeReturned(_ rig: Rig, timeout: Duration = .seconds(2)) async ->
     #expect(await rig.log == ["begin", "size 1200x900", "read", "end"])
 }
 
+private enum Cancellation: CaseIterable {
+    case reconfiguration
+    /// As the request queue cancels an older request when a newer one for the window comes.
+    case newerRequest
+}
+
+@Test(arguments: Cancellation.allCases)
+private func aRequestCancelledMidSequenceJudgesTheFramesItHeld(_ cancellation: Cancellation) async {
+    let rig = await Rig(start: crossStart)
+    let gate = await rig.fake.pause(beforeCall: 2)
+    let task = rig.start(crossJob())
+    #expect(await pollUntil { gate.waiterCount == 1 })
+    switch cancellation {
+    case .reconfiguration: await rig.writer.reconfigurationBegan()
+    case .newerRequest: task.cancel()
+    }
+    // Someone moves the window while the size's read-back is in flight.
+    _ = await rig.writer.observe(handle, frame: rect(400, 400, 1200, 900))
+    gate.open()
+    #expect(await task.value == .interrupted)
+    #expect(await rig.log == ["begin", "size 1200x900", "read", "end"])
+}
+
 @Test func cancelledBeforeTheFirstWriteWritesNothing() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 0)
