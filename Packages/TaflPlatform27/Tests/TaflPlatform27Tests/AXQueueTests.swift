@@ -1,3 +1,4 @@
+import Dispatch
 import Synchronization
 import Testing
 @testable import TaflPlatform27
@@ -14,12 +15,31 @@ import Testing
     #expect(queue.queueCount == 1)
 }
 
-@Test func forgettingWaitsForWorkAlreadyOnTheQueue() async {
+@Test(.timeLimit(.minutes(1)))
+func forgettingWaitsForWorkAlreadyOnTheQueue() async {
     let queue = AXQueue()
     let order = Mutex<[String]>([])
-    let work = Task { await queue.run(pid: 7) { order.withLock { $0.append("work") } } }
-    _ = await work.value
-    await queue.forget(pid: 7)
-    order.withLock { $0.append("forgotten") }
-    #expect(order.withLock { $0 } == ["work", "forgotten"])
+    let (started, didStart) = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    let work = Task {
+        await queue.run(pid: 7) {
+            didStart.yield()
+            release.wait()
+            order.withLock { $0.append("work finished") }
+        }
+    }
+    for await _ in started { break }
+    let forgetting = Task {
+        await queue.forget(pid: 7)
+        order.withLock { $0.append("forgotten") }
+    }
+    // While the work is still running, the queue must still be registered and forget must not have returned.
+    for _ in 0..<50 { await Task.yield() }
+    #expect(queue.queueCount == 1)
+    #expect(order.withLock { $0 }.isEmpty)
+    release.signal()
+    await work.value
+    await forgetting.value
+    #expect(order.withLock { $0 } == ["work finished", "forgotten"])
+    #expect(queue.queueCount == 0)
 }

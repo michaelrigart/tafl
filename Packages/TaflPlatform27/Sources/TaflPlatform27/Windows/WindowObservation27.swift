@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import Synchronization
 import TaflCore
@@ -12,14 +13,25 @@ import TaflCore
 final class WindowObservation27: Sendable {
     /// What the observation asks of the system, so a test can stand in for it.
     struct Environment: Sendable {
+        /// Whether the process is still there. A pid that is not running is never registered or reported.
+        var isRunning: @Sendable (Int32) -> Bool
         var isLaunching: @Sendable (Int32) -> Bool
         var untilFinishedLaunching: @Sendable (Int32) async -> Void
         var register: @Sendable (AXObserverHub, Int32, String?, @escaping AXObserverHub.Handler) -> [String: AXError]
+        /// The app's windows that the registry did not have, as snapshots.
+        var newWindows: @Sendable (AppInfo27) async -> [WindowSnapshot]
 
-        static let live = Environment(
-            isLaunching: { LaunchWait.isLaunching(pid: $0) },
-            untilFinishedLaunching: { await LaunchWait.untilFinished(pid: $0) },
-            register: { hub, pid, bundleID, handler in hub.observe(pid: pid, bundleID: bundleID, handler: handler) })
+        static func live(catalog: WindowCatalog27) -> Environment {
+            Environment(
+                isRunning: { pid in
+                    guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
+                    return !app.isTerminated
+                },
+                isLaunching: { LaunchWait.isLaunching(pid: $0) },
+                untilFinishedLaunching: { await LaunchWait.untilFinished(pid: $0) },
+                register: { hub, pid, bundleID, handler in hub.observe(pid: pid, bundleID: bundleID, handler: handler) },
+                newWindows: { app in await catalog.windows(of: app).filter(\.isNew).map(\.snapshot) })
+        }
     }
 
     enum Outcome {
@@ -38,7 +50,6 @@ final class WindowObservation27: Sendable {
     private let hub = AXObserverHub()
     private let axQueue: AXQueue
     private let registry: WindowRegistry
-    private let catalog: WindowCatalog27
     private let translator: WindowEventTranslator
     private let events: AsyncStream<PlatformEvent>.Continuation
     private let environment: Environment
@@ -47,13 +58,12 @@ final class WindowObservation27: Sendable {
     init(
         axQueue: AXQueue, registry: WindowRegistry, catalog: WindowCatalog27,
         events: AsyncStream<PlatformEvent>.Continuation,
-        environment: Environment = .live
+        environment: Environment? = nil
     ) {
         self.axQueue = axQueue
         self.registry = registry
-        self.catalog = catalog
         self.events = events
-        self.environment = environment
+        self.environment = environment ?? .live(catalog: catalog)
         translator = WindowEventTranslator(registry: registry, reader: .live(axQueue: axQueue), events: events)
     }
 
@@ -86,7 +96,13 @@ final class WindowObservation27: Sendable {
 
     func attempt(_ app: AppInfo27, announcingWindows: Bool = false) async -> Outcome {
         let pid = app.pid
-        guard let claim = claim(pid) else { return .observed }
+        guard environment.isRunning(pid), let claim = claim(pid) else { return .observed }
+        // The app may have quit between the check and the claim, after its quit was handled: the claim
+        // would then never be released.
+        guard environment.isRunning(pid) else {
+            release(pid: pid, claim: claim)
+            return .observed
+        }
         guard let failures = await register(app, claim: claim) else { return .observed }
         if failures.isEmpty {
             if announcingWindows { await announceWindows(of: app) }
@@ -98,11 +114,12 @@ final class WindowObservation27: Sendable {
                 guard let again = await self.register(app, claim: claim) else { return }
                 if again.isEmpty {
                     await self.announceWindows(of: app)
-                } else {
+                } else if self.isLive(pid: pid, claim: claim) {
                     self.yieldUnobservable(Self.unobservable(app, again))
                 }
             })
         }
+        guard isLive(pid: pid, claim: claim) else { return .observed }
         return .unobservable(Self.unobservable(app, failures))
     }
 
@@ -162,20 +179,33 @@ final class WindowObservation27: Sendable {
         return claim
     }
 
+    private func release(pid: Int32, claim: Int) {
+        state.withLock { state in
+            if state.claims[pid] == claim { state.claims[pid] = nil }
+        }
+    }
+
     private func isCurrent(pid: Int32, claim: Int) -> Bool {
         state.withLock { $0.isActive && $0.claims[pid] == claim }
     }
 
-    /// Runs on the app's `AXQueue`. Nil when the claim had ended, before or while the call was in flight;
-    /// in the second case the registration is taken back.
+    /// The claim is still held and the process is still there.
+    private func isLive(pid: Int32, claim: Int) -> Bool {
+        isCurrent(pid: pid, claim: claim) && environment.isRunning(pid)
+    }
+
+    /// Runs on the app's `AXQueue`. Nil when the claim had ended or the process was gone, before the hop
+    /// (so no queue is made for a dead pid) or while the call was in flight; in the second case the
+    /// registration is taken back.
     private func register(_ app: AppInfo27, claim: Int) async -> [String: AXError]? {
+        guard isLive(pid: app.pid, claim: claim) else { return nil }
         let hub = hub
         let translator = translator
         let register = environment.register
         let pid = app.pid
         let bundleID = app.bundleID
         return await axQueue.run(pid: pid) { () -> [String: AXError]? in
-            guard self.isCurrent(pid: pid, claim: claim) else { return nil }
+            guard self.isLive(pid: pid, claim: claim) else { return nil }
             let failures = register(hub, pid, bundleID) { event in translator.enqueue(event) }
             guard self.isCurrent(pid: pid, claim: claim) else {
                 hub.stopObserving(pid: pid)
@@ -187,8 +217,8 @@ final class WindowObservation27: Sendable {
 
     /// The windows the app already has when its events start: the ones no notification will announce.
     private func announceWindows(of app: AppInfo27) async {
-        for entry in await catalog.windows(of: app) where entry.isNew {
-            events.yield(.windowCreated(entry.snapshot))
+        for snapshot in await environment.newWindows(app) {
+            events.yield(.windowCreated(snapshot))
         }
     }
 
