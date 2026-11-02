@@ -150,9 +150,9 @@ public struct WindowMemory: Codable, Equatable, Sendable {
     private mutating func forget(where matches: (WindowHandle) -> Bool) {
         placed = placed.filter { !matches($0.key) }
         restore = restore.filter { !matches($0.key) }
-        for setup in lastKnown.keys {
-            lastKnown[setup] = lastKnown[setup]?.filter { !matches($0.key) }
-        }
+        lastKnown = lastKnown
+            .mapValues { $0.filter { !matches($0.key) } }
+            .filter { !$0.value.isEmpty }
     }
 
     func droppingUnstableHandles() -> WindowMemory {

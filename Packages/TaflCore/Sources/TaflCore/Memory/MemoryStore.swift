@@ -5,11 +5,15 @@ public enum MemoryLoad: Equatable, Sendable {
     case loaded(WindowMemory)
     case recoveredFromCorrupt
     case refused(version: Int)
+    /// The file exists but could be neither read nor moved aside. Nothing is written while it stays that way.
+    case unavailable
 }
 
 public enum MemoryStoreError: Error, Equatable, Sendable {
     /// The file on disk was written by another version of Tafl and is left untouched.
     case unsupportedVersion(Int)
+    /// The file exists but cannot be read, so it is not overwritten.
+    case unreadable
 }
 
 public final class MemoryStore: Sendable {
@@ -47,10 +51,17 @@ public final class MemoryStore: Sendable {
     }
 
     public func save(_ memory: WindowMemory) throws {
-        if let existing = try? Data(contentsOf: fileURL),
-           let probe = try? JSONDecoder().decode(VersionProbe.self, from: existing),
-           probe.version != WindowMemory.fileVersion {
-            throw MemoryStoreError.unsupportedVersion(probe.version)
+        do {
+            let existing = try Data(contentsOf: fileURL)
+            if let probe = try? JSONDecoder().decode(VersionProbe.self, from: existing),
+               probe.version != WindowMemory.fileVersion {
+                throw MemoryStoreError.unsupportedVersion(probe.version)
+            }
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+        } catch let error as MemoryStoreError {
+            throw error
+        } catch {
+            throw MemoryStoreError.unreadable
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -65,7 +76,11 @@ public final class MemoryStore: Sendable {
     private func moveCorruptAside() -> MemoryLoad {
         let manager = FileManager.default
         try? manager.removeItem(at: corruptURL)
-        try? manager.moveItem(at: fileURL, to: corruptURL)
-        return .recoveredFromCorrupt
+        do {
+            try manager.moveItem(at: fileURL, to: corruptURL)
+            return .recoveredFromCorrupt
+        } catch {
+            return .unavailable
+        }
     }
 }

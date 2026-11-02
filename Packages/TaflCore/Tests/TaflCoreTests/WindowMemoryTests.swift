@@ -130,4 +130,14 @@ struct WindowMemoryTests {
         #expect(memory.placed[w3] != nil && memory.restore[w3] != nil)
         #expect(memory.lastKnown(w3, setup: setup) != nil)
     }
+
+    @Test func forgettingTheLastWindowOfASetupDropsTheSetup() {
+        var memory = WindowMemory()
+        memory.recordLastKnown(w1, frame: rect(100, 100, 400, 300), display: displayA, setup: DisplaySetup([displayA]))
+        memory.recordLastKnown(w3, frame: rect(100, 100, 400, 300), display: displayA, setup: DisplaySetup([displayA, displayB]))
+        memory.forget(w1)
+        #expect(memory.lastKnown[DisplaySetup([displayA])] == nil)
+        memory.forget(pid: 200)
+        #expect(memory.lastKnown.isEmpty)
+    }
 }

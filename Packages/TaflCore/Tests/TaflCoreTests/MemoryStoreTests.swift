@@ -153,4 +153,64 @@ final class MemoryStoreTests {
         #expect(loaded.lastKnown(stable, setup: setup) != nil)
         #expect(loaded.lastKnown(unstable, setup: setup) == nil)
     }
+
+    @Test func wellFormedFileOfTheWrongShapeIsCorrupt() throws {
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let bytes = Data(#"{"version": 1, "placed": "nope"}"#.utf8)
+        try bytes.write(to: file)
+        #expect(MemoryStore(fileURL: file).load() == .recoveredFromCorrupt)
+        let corrupt = file.deletingLastPathComponent().appendingPathComponent("memory.corrupt.json")
+        #expect(try Data(contentsOf: corrupt) == bytes)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test func aDirectoryInPlaceOfTheFileIsMovedAside() throws {
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
+        #expect(MemoryStore(fileURL: file).load() == .recoveredFromCorrupt)
+        var isDirectory: ObjCBool = false
+        let corrupt = file.deletingLastPathComponent().appendingPathComponent("memory.corrupt.json")
+        #expect(FileManager.default.fileExists(atPath: corrupt.path, isDirectory: &isDirectory) && isDirectory.boolValue)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test func aDirectoryInPlaceOfTheFileIsNeverOverwritten() throws {
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
+        #expect(throws: MemoryStoreError.unreadable) { try MemoryStore(fileURL: file).save(sampleMemory()) }
+        var isDirectory: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory) && isDirectory.boolValue)
+    }
+
+    @Test func anUnreadableFileThatCannotBeMovedIsUnavailableAndNeverOverwritten() throws {
+        let parent = file.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let original = Data("precious".utf8)
+        try original.write(to: file)
+        let manager = FileManager.default
+        try manager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        try manager.setAttributes([.posixPermissions: 0o555], ofItemAtPath: parent.path)
+        defer {
+            try? manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path)
+            try? manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        }
+        let store = MemoryStore(fileURL: file)
+        #expect(store.load() == .unavailable)
+        #expect(throws: MemoryStoreError.unreadable) { try store.save(sampleMemory()) }
+        try manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        #expect(try Data(contentsOf: file) == original)
+    }
+
+    @Test func emptySetupsDoNotSurviveASave() throws {
+        let stable = WindowHandle(pid: 100, windowID: 1, isStable: true)
+        let unstable = WindowHandle(pid: 100, windowID: 2, isStable: false)
+        let onlyUnstable = DisplaySetup([displayB])
+        var memory = WindowMemory()
+        memory.recordLastKnown(stable, frame: rect(100, 100, 400, 300), display: displayA, setup: DisplaySetup([displayA]))
+        memory.recordLastKnown(unstable, frame: rect(100, 100, 400, 300), display: displayB, setup: onlyUnstable)
+        let store = MemoryStore(fileURL: file)
+        try store.save(memory)
+        var expected = memory
+        expected.forget(unstable)
+        #expect(expected.lastKnown[onlyUnstable] == nil)
+        #expect(store.load() == .loaded(expected))
+    }
 }
