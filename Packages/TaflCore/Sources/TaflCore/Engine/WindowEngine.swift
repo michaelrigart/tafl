@@ -157,6 +157,8 @@ public actor WindowEngine {
     var nextBackgroundID = 0
     /// How many platform events have been dealt with, for tests to wait on.
     var eventsHandled = 0
+    /// Set once `stop` begins: no new request starts, and nothing but `stop` saves.
+    var isStopping = false
 
     public nonisolated let reports: AsyncStream<EngineReport>
 
@@ -243,11 +245,19 @@ public actor WindowEngine {
     }
 
     public func save() async {
+        guard !isStopping else { return }
+        await writeMemory()
+    }
+
+    private func writeMemory() async {
         if case .failure = await memory.save() { report(.memorySaveFailed) }
     }
 
-    /// Stops observing and saves the memory. The engine does not start again.
+    /// Refuses new requests, stops the ones queued or running, waits until each has ended its
+    /// session and recorded what it did, stops observing and saves the memory. The engine does not
+    /// start again.
     public func stop() async {
+        isStopping = true
         eventTask?.cancel()
         settleTask?.cancel()
         rulesTask?.cancel()
@@ -257,8 +267,9 @@ public actor WindowEngine {
         rulesTask = nil
         background = [:]
         frameTasks = [:]
+        await queue.stop()
         await platform.stopObserving()
-        await save()
+        await writeMemory()
     }
 
     /// Registers the platform's observers again, as after a wake or a user switch, and learns
@@ -320,6 +331,7 @@ public actor WindowEngine {
     // MARK: Actions
 
     public func perform(_ action: Action) async {
+        guard !isStopping else { return }
         let since = reconfigurations.current
         guard await platform.isAccessibilityGranted() else {
             report(.failure(.permissionMissing, display: nil))
@@ -387,6 +399,7 @@ public actor WindowEngine {
     /// A layout run that a reconfiguration stops reports nothing and does not become active. A run
     /// that a newer layout application overtook still reports, but leaves the active layout to it.
     public func applyLayout(named name: String) async {
+        guard !isStopping else { return }
         guard await platform.isAccessibilityGranted() else {
             report(.failure(.permissionMissing, display: nil))
             return
@@ -400,7 +413,7 @@ public actor WindowEngine {
         guard reconfigurations.isCurrent(since) else { return }
         let requests = LayoutPlanner.requests(definition, windows: windows, displays: displays, source: .layout(name))
         let count = await run(requests, since: since)
-        guard reconfigurations.isCurrent(since) else { return }
+        guard !isStopping, reconfigurations.isCurrent(since) else { return }
         if layoutApplications.isCurrent(application) { await setActiveLayout(name) }
         report(.layoutApplied(name: name, placed: count.moved + count.unchanged, failed: count.failed))
         // One overlay for the run, saying why its first failure failed.

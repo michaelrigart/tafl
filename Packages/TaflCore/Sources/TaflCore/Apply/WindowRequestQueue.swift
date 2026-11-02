@@ -10,14 +10,16 @@ public actor WindowRequestQueue {
     }
 
     private var entries: [WindowHandle: Entry] = [:]
+    private var isStopped = false
     /// How many requests have been made.
     private(set) var requestCount = 0
 
     public init() {}
 
     /// Returns nil when a newer request for the window cancelled this one, even if the body had
-    /// finished by then.
+    /// finished by then, and straight away after `stop`.
     public func run<T: Sendable>(_ window: WindowHandle, _ body: @Sendable @escaping () async -> T) async -> T? {
+        guard !isStopped else { return nil }
         let id = requestCount
         requestCount += 1
         let previous = entries[window]
@@ -32,6 +34,15 @@ public actor WindowRequestQueue {
         }
         entries[window] = Entry(id: id, cancel: { task.cancel() }, finished: { _ = await task.value })
         return await task.value
+    }
+
+    /// Refuses every later request, cancels the queued and running ones, and returns once each has
+    /// finished: a running write stops before its next write and ends its session.
+    public func stop() async {
+        isStopped = true
+        let pending = Array(entries.values)
+        for entry in pending { entry.cancel() }
+        for entry in pending { await entry.finished() }
     }
 
     private func release(_ window: WindowHandle, _ id: Int) {

@@ -160,6 +160,17 @@ private final class Rig: Sendable {
         if !found { Issue.record("Timed out waiting for \(count) restarts", sourceLocation: sourceLocation) }
     }
 
+    func waitUntilStopping(sourceLocation: SourceLocation = #_sourceLocation) async {
+        let begun = ContinuousClock.now
+        while await engine.isStopping == false {
+            if begun.duration(to: .now) > .seconds(2) {
+                Issue.record("Timed out waiting for stop to begin", sourceLocation: sourceLocation)
+                return
+            }
+            await Task.yield()
+        }
+    }
+
     func waitUntilChangeIsSettled(sourceLocation: SourceLocation = #_sourceLocation) async {
         let begun = ContinuousClock.now
         while await engine.isFrozen {
@@ -1369,4 +1380,55 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
     await first.value
     await second.value
     #expect(await rig.engine.unobservable == [300: [.moved]])
+}
+
+// MARK: Stopping
+
+@Test(.timeLimit(.minutes(1))) func stoppingDuringAReapplyDrainsTheWriteBeforeTheSave() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let reapplying = EngineTiming(quietPeriod: quiet, reapplyDelay: .milliseconds(25))
+    // An app that comes out 10 points narrow: a placement on another display is applied again.
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: start)], store: store, timing: reapplying) {
+        $0.sizeRule = { _, asked in ScreenSize(width: asked.width - 10, height: asked.height) }
+    }
+    await rig.engine.start(config: config())
+    let acting = Task { await rig.engine.perform(.displayRight) }
+    // The first pass has ended its session; the reapply waits on the clock.
+    await rig.clock.waitForSleepers(1)
+    let written = await rig.log
+    #expect(written.last == "end")
+    await rig.engine.stop()
+    await rig.clock.advance(by: .milliseconds(25))
+    await acting.value
+    // No write after stop, and the save holds where the first pass left the window.
+    #expect(await rig.log == written)
+    guard case .loaded(let saved) = store.load() else {
+        Issue.record("Expected stop to save the memory")
+        return
+    }
+    #expect(saved.placed[handle]?.display == displayB.identity)
+    #expect(rig.reports == [.memory(.fresh)])
+}
+
+@Test(.timeLimit(.minutes(1))) func aRequestAfterStopBeganIsRefused() async {
+    let other = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let desk = layout("Desk", [slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [window(1, frame: start), other])
+    await rig.engine.start(config: config(layouts: [desk]))
+    // The first write is held, so stop is still waiting for it when the next requests come.
+    let gate = await rig.fake.pause(beforeCall: 1)
+    let acting = Task { await rig.engine.perform(.leftHalf) }
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    let stopping = Task { await rig.engine.stop() }
+    await rig.waitUntilStopping()
+    await rig.fake.configure { $0.focused = other.handle }
+    await rig.engine.perform(.rightHalf)
+    await rig.engine.applyLayout(named: "Desk")
+    gate.open()
+    await acting.value
+    await stopping.value
+    #expect(await rig.frame(of: other.handle) == start)
+    #expect(await rig.log.filter { $0 == "begin" }.count == 1)
+    #expect(rig.reports == [.memory(.fresh)])
 }

@@ -97,7 +97,7 @@ extension WindowEngine {
     /// takes over: the run stops and leaves the state to the change that follows.
     func applyDisplayChange(from old: [Display], to new: [Display], since began: Int? = nil) async {
         let began = began ?? reconfigurations.current
-        guard reconfigurations.isCurrent(began) else { return }
+        guard !isStopping, reconfigurations.isCurrent(began) else { return }
         let application = layoutApplications.begin()
         rulesStarted = true
         let oldSetup = DisplaySetup(old)
@@ -120,7 +120,7 @@ extension WindowEngine {
             oldDisplays: old, newDisplays: new, windows: windows, claiming: claiming, gap: config.gap
         )
         let count = await run(requests, since: began)
-        guard !Task.isCancelled, reconfigurations.isCurrent(began) else { return }
+        guard !Task.isCancelled, !isStopping, reconfigurations.isCurrent(began) else { return }
 
         let after = await platform.visibleWindows()
         let reconfigurations = reconfigurations

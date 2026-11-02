@@ -141,6 +141,7 @@ extension WindowEngine {
         let touched = movedExternally.contains(window)
         guard let applied = titleCheck.titleChanged(window, at: time, touched: touched),
               let since,
+              !isStopping,
               !isFrozen,
               !isLeftOutOfPlacement(pid: window.pid),
               let definition = activeLayout.definition(in: config)
