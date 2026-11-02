@@ -98,14 +98,15 @@ public enum ActionResolver {
 
     private static func planGrid(_ action: Action, _ placement: NamedPlacement, _ context: ActionContext) -> ActionPlan {
         let first = ActionPlan.move(.named(placement), to: context.display, placement: placement, cycleStep: 0)
-        guard let placed = context.placed, placed.action == action, context.isAtAchieved else { return first }
+        guard let placed = context.placed, context.isAtAchieved else { return first }
         switch context.config.repeatMode {
         case .none:
-            return .nothing
+            return placed.action == action ? .nothing : first
         case .displays:
-            guard placed.placement == placement else { return first }
+            guard placed.placement == placement, placed.action == .leftHalf || placed.action == .rightHalf else { return first }
             return repeatOnOtherDisplay(placement, context) ?? first
         case .sizes:
+            guard placed.action == action else { return first }
             return repeatSize(placement, placed, context) ?? first
         }
     }

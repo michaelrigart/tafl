@@ -241,25 +241,74 @@ struct ActionResolverTests {
             == .move(.named(.leftHalf), to: b, placement: .leftHalf, cycleStep: 0))
     }
 
-    @Test func leftHalfPressesWalkAcrossDisplaysLikeRectangle() {
+    private func walk(_ action: Action, presses: Int = 5) -> [(NamedPlacement, String)] {
         var placed: PlacedRecord?
         var current = a
         var steps: [(NamedPlacement, String)] = []
-        for _ in 0..<5 {
+        for _ in 0..<presses {
             let ctx = context(on: current, placed: placed, atAchieved: placed != nil)
-            guard case .move(.named(let half), let target, let kept, let cycleStep) = ActionResolver.plan(.leftHalf, ctx) else {
+            guard case .move(.named(let half), let target, let kept, let cycleStep) = ActionResolver.plan(action, ctx) else {
                 Issue.record("expected a named move")
-                return
+                return steps
             }
             steps.append((half, target.identity.name))
             placed = PlacedRecord(
-                action: .leftHalf, layout: nil, placement: kept, cycleStep: cycleStep,
+                action: action, layout: nil, placement: kept, cycleStep: cycleStep,
                 achieved: target.visibleFrame, display: target.identity
             )
             current = target
         }
+        return steps
+    }
+
+    @Test func leftHalfPressesWalkAcrossDisplaysLikeRectangle() {
+        let steps = walk(.leftHalf)
         #expect(steps.map(\.0) == [.leftHalf, .rightHalf, .leftHalf, .rightHalf, .leftHalf])
         #expect(steps.map(\.1) == ["Built-in", "Desk", "Desk", "Built-in", "Built-in"])
+    }
+
+    @Test func rightHalfPressesWalkAcrossDisplaysLikeRectangle() {
+        let steps = walk(.rightHalf)
+        #expect(steps.map(\.0) == [.rightHalf, .leftHalf, .rightHalf, .leftHalf, .rightHalf])
+        #expect(steps.map(\.1) == ["Built-in", "Desk", "Desk", "Built-in", "Built-in"])
+    }
+
+    @Test func oppositeHalfRepeatsOnTheResultingHalf() {
+        let onB = context(on: b, placed: record(.leftHalf, placement: .rightHalf, on: b), atAchieved: true)
+        #expect(ActionResolver.plan(.rightHalf, onB)
+            == .move(.named(.leftHalf), to: a, placement: .leftHalf, cycleStep: 0))
+    }
+
+    @Test func leftRightLeftReturnsToTheFirstDisplay() {
+        var placed: PlacedRecord?
+        var current = a
+        var last: ActionPlan = .nothing
+        for action in [Action.leftHalf, .leftHalf, .rightHalf] {
+            last = ActionResolver.plan(action, context(on: current, placed: placed, atAchieved: placed != nil))
+            guard case .move(_, let target, let kept, let cycleStep) = last else { break }
+            placed = PlacedRecord(
+                action: action, layout: nil, placement: kept, cycleStep: cycleStep,
+                achieved: target.visibleFrame, display: target.identity
+            )
+            current = target
+        }
+        #expect(last == .move(.named(.leftHalf), to: a, placement: .leftHalf, cycleStep: 0))
+    }
+
+    @Test func layoutPlacementIsNotARepeat() {
+        let layoutPlaced = PlacedRecord(
+            action: nil, layout: "Desk", placement: .leftHalf, cycleStep: 0,
+            achieved: rect(0, 25, 500, 775), display: a.identity
+        )
+        let ctx = context(frame: rect(0, 25, 500, 775), placed: layoutPlaced, atAchieved: true)
+        #expect(ActionResolver.plan(.leftHalf, ctx)
+            == .move(.named(.leftHalf), to: a, placement: .leftHalf, cycleStep: 0))
+    }
+
+    @Test func recordedPlacementBeatsTheRecogniserWhenTheyDisagree() {
+        let ctx = context(frame: rect(0, 25, 667, 775), placed: record(.leftHalf, placement: .leftHalf, on: a), atAchieved: true)
+        #expect(ActionResolver.plan(.displayRight, ctx)
+            == .move(.named(.leftHalf), to: b, placement: .leftHalf, cycleStep: 0))
     }
 
     @Test func leftHalfOnTheOtherHalfsResultIsAFirstPress() {
