@@ -9,7 +9,15 @@ final class WindowEventTranslator: Sendable {
     private let registry: WindowRegistry
     private let reader: WindowReader27
     private let events: AsyncStream<PlatformEvent>.Continuation
-    private let lanes = Mutex<[pid_t: AsyncStream<AXObserverHub.Event>.Continuation]>([:])
+    private struct Lanes {
+        var open: [pid_t: AsyncStream<AXObserverHub.Event>.Continuation] = [:]
+        /// Apps whose lane was closed: a late callback must not start a lane that nothing would end.
+        var closed = Set<pid_t>()
+    }
+
+    private let lanes = Mutex(Lanes())
+
+    var laneCount: Int { lanes.withLock { $0.open.count } }
 
     init(registry: WindowRegistry, reader: WindowReader27, events: AsyncStream<PlatformEvent>.Continuation) {
         self.registry = registry
@@ -19,27 +27,37 @@ final class WindowEventTranslator: Sendable {
 
     /// Never blocks: it only hands the event to its app's lane.
     func enqueue(_ event: AXObserverHub.Event) {
-        lane(for: event.pid).yield(event)
+        lane(for: event.pid)?.yield(event)
     }
 
-    /// The lane ends after the events already in it.
+    /// The lane ends after the events already in it, and the app gets none until `reopen`.
     func closeLane(pid: pid_t) {
-        lanes.withLock { $0.removeValue(forKey: pid) }?.finish()
+        let lane = lanes.withLock { lanes -> AsyncStream<AXObserverHub.Event>.Continuation? in
+            lanes.closed.insert(pid)
+            return lanes.open.removeValue(forKey: pid)
+        }
+        lane?.finish()
+    }
+
+    /// The pid belongs to a new registration: its events are wanted again.
+    func reopen(pid: pid_t) {
+        lanes.withLock { _ = $0.closed.remove(pid) }
     }
 
     func closeAll() {
-        let all = lanes.withLock { table in
-            defer { table.removeAll() }
-            return Array(table.values)
+        let all = lanes.withLock { lanes in
+            defer { lanes.open.removeAll() }
+            return Array(lanes.open.values)
         }
         all.forEach { $0.finish() }
     }
 
-    private func lane(for pid: pid_t) -> AsyncStream<AXObserverHub.Event>.Continuation {
-        lanes.withLock { table in
-            if let existing = table[pid] { return existing }
+    private func lane(for pid: pid_t) -> AsyncStream<AXObserverHub.Event>.Continuation? {
+        lanes.withLock { lanes in
+            if let existing = lanes.open[pid] { return existing }
+            guard !lanes.closed.contains(pid) else { return nil }
             let (stream, continuation) = AsyncStream<AXObserverHub.Event>.makeStream(bufferingPolicy: .unbounded)
-            table[pid] = continuation
+            lanes.open[pid] = continuation
             Task {
                 for await event in stream { await self.handle(event) }
             }

@@ -6,13 +6,33 @@ import TaflCore
 /// notifications to the translator.
 ///
 /// An app is registered once per observing run: at start, when it launches, or when a query first meets
-/// it (an app can become a regular app after it launches). A run ends at `end()`; work still in flight
-/// from the earlier run does nothing.
+/// it (an app can become a regular app after it launches). Each registration holds a claim on its pid.
+/// A claim ends when the app quits or the run ends, and work still in flight under an ended claim does
+/// nothing, even if the pid is claimed again by a new app.
 final class WindowObservation27: Sendable {
+    /// What the observation asks of the system, so a test can stand in for it.
+    struct Environment: Sendable {
+        var isLaunching: @Sendable (Int32) -> Bool
+        var untilFinishedLaunching: @Sendable (Int32) async -> Void
+        var register: @Sendable (AXObserverHub, Int32, String?, @escaping AXObserverHub.Handler) -> [String: AXError]
+
+        static let live = Environment(
+            isLaunching: { LaunchWait.isLaunching(pid: $0) },
+            untilFinishedLaunching: { await LaunchWait.untilFinished(pid: $0) },
+            register: { hub, pid, bundleID, handler in hub.observe(pid: pid, bundleID: bundleID, handler: handler) })
+    }
+
+    enum Outcome {
+        case observed
+        case unobservable(UnobservableApp)
+        /// The first try timed out on an app still launching; the task tries again when it has finished.
+        case retrying(Task<Void, Never>)
+    }
+
     private struct State {
-        var generation = 0
         var isActive = false
-        var pids = Set<Int32>()
+        var nextClaim = 0
+        var claims: [Int32: Int] = [:]
     }
 
     private let hub = AXObserverHub()
@@ -21,13 +41,19 @@ final class WindowObservation27: Sendable {
     private let catalog: WindowCatalog27
     private let translator: WindowEventTranslator
     private let events: AsyncStream<PlatformEvent>.Continuation
+    private let environment: Environment
     private let state = Mutex(State())
 
-    init(axQueue: AXQueue, registry: WindowRegistry, catalog: WindowCatalog27, events: AsyncStream<PlatformEvent>.Continuation) {
+    init(
+        axQueue: AXQueue, registry: WindowRegistry, catalog: WindowCatalog27,
+        events: AsyncStream<PlatformEvent>.Continuation,
+        environment: Environment = .live
+    ) {
         self.axQueue = axQueue
         self.registry = registry
         self.catalog = catalog
         self.events = events
+        self.environment = environment
         translator = WindowEventTranslator(registry: registry, reader: .live(axQueue: axQueue), events: events)
     }
 
@@ -37,17 +63,15 @@ final class WindowObservation27: Sendable {
 
     func begin() {
         state.withLock { state in
-            state.generation += 1
             state.isActive = true
-            state.pids = []
+            state.claims = [:]
         }
     }
 
     func end() {
         state.withLock { state in
-            state.generation += 1
             state.isActive = false
-            state.pids = []
+            state.claims = [:]
         }
         hub.stopAll()
     }
@@ -56,26 +80,30 @@ final class WindowObservation27: Sendable {
     /// events cannot be observed. An app that was still launching gets one more try when it finishes,
     /// and the outcome of that arrives as an event.
     func observe(_ app: AppInfo27, announcingWindows: Bool = false) async -> UnobservableApp? {
-        guard let generation = claim(app.pid) else { return nil }
-        let failures = await register(app, generation: generation)
+        if case .unobservable(let unobservable) = await attempt(app, announcingWindows: announcingWindows) { return unobservable }
+        return nil
+    }
+
+    func attempt(_ app: AppInfo27, announcingWindows: Bool = false) async -> Outcome {
+        let pid = app.pid
+        guard let claim = claim(pid) else { return .observed }
+        guard let failures = await register(app, claim: claim) else { return .observed }
         if failures.isEmpty {
             if announcingWindows { await announceWindows(of: app) }
-            return nil
+            return .observed
         }
-        if Self.needsRetry(failures), LaunchWait.isLaunching(pid: app.pid) {
-            Task {
-                await LaunchWait.untilFinished(pid: app.pid)
-                guard self.isCurrent(generation) else { return }
-                let again = await self.register(app, generation: generation)
+        if Self.needsRetry(failures), environment.isLaunching(pid) {
+            return .retrying(Task {
+                await self.environment.untilFinishedLaunching(pid)
+                guard let again = await self.register(app, claim: claim) else { return }
                 if again.isEmpty {
                     await self.announceWindows(of: app)
                 } else {
                     self.yieldUnobservable(Self.unobservable(app, again))
                 }
-            }
-            return nil
+            })
         }
-        return Self.unobservable(app, failures)
+        return .unobservable(Self.unobservable(app, failures))
     }
 
     /// Meets an app a query found: observes it if this run has not.
@@ -88,13 +116,17 @@ final class WindowObservation27: Sendable {
         if let unobservable = await observe(app, announcingWindows: true) { yieldUnobservable(unobservable) }
     }
 
+    /// Ends the app's claim, so nothing still in flight for it reports or registers, and frees what it held.
     func appQuit(pid: Int32) async {
         events.yield(.appQuit(pid: pid))
-        state.withLock { _ = $0.pids.remove(pid) }
-        let hub = hub
-        await axQueue.run(pid: pid) { hub.stopObserving(pid: pid) }
+        let wasClaimed = state.withLock { $0.claims.removeValue(forKey: pid) != nil }
+        if wasClaimed {
+            let hub = hub
+            await axQueue.run(pid: pid) { hub.stopObserving(pid: pid) }
+        }
         translator.closeLane(pid: pid)
         await registry.removeApp(pid: pid)
+        await axQueue.forget(pid: pid)
     }
 
     static func needsRetry(_ failures: [String: AXError]) -> Bool {
@@ -118,28 +150,37 @@ final class WindowObservation27: Sendable {
         UnobservableApp(pid: app.pid, bundleID: app.bundleID, missing: observedEvents(for: Set(failures.keys)))
     }
 
-    /// The generation this registration belongs to, or nil when observing is off or the app is registered.
+    /// A claim on the pid, or nil when observing is off, the app has one, or the app is Tafl itself.
     private func claim(_ pid: Int32) -> Int? {
-        state.withLock { state in
-            guard state.isActive, state.pids.insert(pid).inserted else { return nil }
-            return state.generation
+        let claim = state.withLock { state -> Int? in
+            guard state.isActive, pid != getpid(), state.claims[pid] == nil else { return nil }
+            state.nextClaim += 1
+            state.claims[pid] = state.nextClaim
+            return state.nextClaim
         }
+        if claim != nil { translator.reopen(pid: pid) }
+        return claim
     }
 
-    private func isCurrent(_ generation: Int) -> Bool {
-        state.withLock { $0.isActive && $0.generation == generation }
+    private func isCurrent(pid: Int32, claim: Int) -> Bool {
+        state.withLock { $0.isActive && $0.claims[pid] == claim }
     }
 
-    /// Runs on the app's `AXQueue`. A run that ends while the call is in flight takes its registration back.
-    private func register(_ app: AppInfo27, generation: Int) async -> [String: AXError] {
+    /// Runs on the app's `AXQueue`. Nil when the claim had ended, before or while the call was in flight;
+    /// in the second case the registration is taken back.
+    private func register(_ app: AppInfo27, claim: Int) async -> [String: AXError]? {
         let hub = hub
         let translator = translator
+        let register = environment.register
         let pid = app.pid
         let bundleID = app.bundleID
-        return await axQueue.run(pid: pid) {
-            guard self.isCurrent(generation) else { return [:] }
-            let failures = hub.observe(pid: pid, bundleID: bundleID) { event in translator.enqueue(event) }
-            if !self.isCurrent(generation) { hub.stopObserving(pid: pid) }
+        return await axQueue.run(pid: pid) { () -> [String: AXError]? in
+            guard self.isCurrent(pid: pid, claim: claim) else { return nil }
+            let failures = register(hub, pid, bundleID) { event in translator.enqueue(event) }
+            guard self.isCurrent(pid: pid, claim: claim) else {
+                hub.stopObserving(pid: pid)
+                return nil
+            }
             return failures
         }
     }

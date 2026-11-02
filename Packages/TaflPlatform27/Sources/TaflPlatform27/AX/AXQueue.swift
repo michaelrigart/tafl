@@ -16,6 +16,19 @@ public final class AXQueue: Sendable {
         }
     }
 
+    /// Drops the pid's queue once the work already on it has run, so a quit app leaves nothing behind.
+    public func forget(pid: pid_t) async {
+        guard let queue = queues.withLock({ $0[pid] }) else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async {
+                self.queues.withLock { if $0[pid] === queue { $0[pid] = nil } }
+                continuation.resume()
+            }
+        }
+    }
+
+    var queueCount: Int { queues.withLock { $0.count } }
+
     private func queue(for pid: pid_t) -> DispatchQueue {
         queues.withLock { queues in
             if let existing = queues[pid] { return existing }

@@ -78,9 +78,10 @@ func eventsForWindowsThatAreNotStandardOrSheetsAreDropped() async {
 @Test(.timeLimit(.minutes(1)))
 func aWindowOfAProcessThatIsGoneIsNotRegistered() async {
     var harness = Harness(reader(gone: [10]))
+    _ = await harness.registry.register(box(2020), pid: 10, windowID: ResolvedWindowID(id: 2020, by: .privateSymbol))
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
-    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 11, element: box(2021)))
-    #expect(await harness.next() == .windowMoved(handle(11, 2021)))
+    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
+    #expect(await harness.next() == .windowMoved(handle(10, 2020)))
     #expect(await harness.registry.knownHandle(of: box(1010)) == nil)
     harness.translator.closeAll()
 }
@@ -141,5 +142,21 @@ func aSlowAppDelaysOnlyItselfAndKeepsItsOwnOrder() async {
     }
     #expect(snapshot.handle == handle(10, 1010))
     #expect(await harness.next() == .titleChanged(handle(10, 1010), "Fresh"))
+    harness.translator.closeAll()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aLateCallbackAfterTheLaneClosedStartsNoLaneUntilTheNextClaim() async {
+    var harness = Harness(reader())
+    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
+    #expect(await harness.next() == .windowMoved(handle(10, 1010)))
+    harness.translator.closeLane(pid: 10)
+    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
+    #expect(harness.translator.laneCount == 0)
+
+    harness.translator.reopen(pid: 10)
+    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
+    #expect(await harness.next() == .windowMoved(handle(10, 2020)))
+    #expect(harness.translator.laneCount == 1)
     harness.translator.closeAll()
 }
