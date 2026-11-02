@@ -153,6 +153,13 @@ private final class Rig: Sendable {
         }
     }
 
+    /// Waits until observation restarts have been asked for `count` times in all.
+    func waitForRestarts(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async {
+        let restarts = await engine.restarts
+        let found = await pollUntil { restarts.current >= count }
+        if !found { Issue.record("Timed out waiting for \(count) restarts", sourceLocation: sourceLocation) }
+    }
+
     func waitUntilChangeIsSettled(sourceLocation: SourceLocation = #_sourceLocation) async {
         let begun = ContinuousClock.now
         while await engine.isFrozen {
@@ -1265,4 +1272,90 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
     await rig.engine.perform(.leftHalf)
     await rig.waitForReport { $0 == .failure(.permissionMissing, display: nil) }
     #expect(rig.reports.allSatisfy { if case .layoutApplied = $0 { false } else { true } })
+}
+
+// MARK: The newest operation of a kind wins
+
+@Test(.timeLimit(.minutes(1))) func theNewestLayoutApplicationIsActiveAndSaved() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
+    let other = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let first = layout("First", [slot(.topHalf, app: "com.c")])
+    let second = layout("Second", [slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [slow, other], focused: nil, store: store) { $0.hung = [50] }
+    await rig.engine.start(config: config(layouts: [first, second]))
+    let applyingFirst = Task { await rig.engine.applyLayout(named: "First") }
+    // First's run waits on the hung app while Second is applied.
+    await rig.clock.waitForSleepers(1)
+    await rig.engine.applyLayout(named: "Second")
+    await rig.clock.advance(by: .milliseconds(500))
+    await applyingFirst.value
+    #expect(await rig.engine.activeLayoutName == "Second")
+    guard case .loaded(let saved) = store.load() else {
+        Issue.record("Expected the active layout to be saved")
+        return
+    }
+    #expect(saved.activeLayout == "Second")
+}
+
+@Test(.timeLimit(.minutes(1))) func aLayoutAppliedWhileTheRulesRunStaysActive() async {
+    let other = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let coding = layout("Coding", [slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [window(1, frame: start), other], focused: nil)
+    await rig.engine.start(config: config(layouts: [dock, coding]))
+    await rig.fake.configure { $0.displays = bothDisplays }
+    // The dock rules' first write is held, so they are still running when Coding is applied.
+    let gate = await rig.fake.pause(beforeCall: 0)
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(2)
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: quiet)
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.engine.applyLayout(named: "Coding")
+    gate.open()
+    await rig.waitForReport { if case .displayChangeHandled = $0 { true } else { false } }
+    #expect(await rig.engine.activeLayoutName == "Coding")
+}
+
+@Test(.timeLimit(.minutes(1))) func appsThatQuitDuringARestartAreNotMergedBack() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    let gate = FakeGate()
+    // 400 is in the restart's answer, read before it quit.
+    await rig.fake.configure {
+        $0.startObservingGate = gate
+        $0.unobserved = [.init(pid: 400, bundleID: "com.d", missing: [.moved])]
+    }
+    let restarting = Task { await rig.engine.restartObserving() }
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.emit(.unobservable(pid: 300, bundleID: "com.c", missing: [.moved]))
+    await rig.emit(.appQuit(pid: 300))
+    await rig.emit(.appQuit(pid: 400))
+    await rig.waitForEvents(3)
+    gate.open()
+    await restarting.value
+    #expect(await rig.engine.unobservable.isEmpty)
+    #expect(await rig.engine.unobservableAppCount == 0)
+    #expect(!rig.reports.contains(.unobservable(bundleID: "com.d")))
+}
+
+@Test(.timeLimit(.minutes(1))) func overlappingRestartsKeepWhatEventsLearned() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    let gate = FakeGate()
+    await rig.fake.configure { $0.startObservingGate = gate }
+    let first = Task { await rig.engine.restartObserving() }
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    let second = Task { await rig.engine.restartObserving() }
+    await rig.waitForRestarts(2)
+    await rig.emit(.unobservable(pid: 300, bundleID: "com.c", missing: [.moved]))
+    await rig.waitForEvents(1)
+    // The second restart waits for the first rather than tear down its observers.
+    #expect(await rig.fake.stopObservingCount == 1)
+    gate.open()
+    await first.value
+    await second.value
+    #expect(await rig.engine.unobservable == [300: [.moved]])
 }

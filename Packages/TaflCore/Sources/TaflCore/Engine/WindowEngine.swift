@@ -1,15 +1,24 @@
 import Foundation
 import Synchronization
 
-/// Counts the display reconfigurations that have begun. An operation reads it when it starts and
-/// is stale once it has moved.
-final class ReconfigurationCount: Sendable {
+/// Counts the operations of one kind that have begun. Work takes the count when it starts, and is
+/// stale once a newer operation of the kind has begun: the newest one wins.
+final class Generation: Sendable {
     private let value = Mutex(0)
 
     var current: Int { value.withLock { $0 } }
 
-    func bump() {
-        value.withLock { $0 += 1 }
+    /// Begins a newer operation and returns its generation.
+    @discardableResult
+    func begin() -> Int {
+        value.withLock { value in
+            value += 1
+            return value
+        }
+    }
+
+    func isCurrent(_ generation: Int) -> Bool {
+        current == generation
     }
 }
 
@@ -54,6 +63,30 @@ struct KnownFrame: Sendable {
     var frame: ScreenRect
 }
 
+/// What events said about apps while observation restarted. It is newer than a restart's answer,
+/// so it is laid over it: an app learned meanwhile adds what it is missing, and an app that quit
+/// meanwhile is gone whatever the answer says.
+struct RestartJournal {
+    private var learned: [Int32: Set<ObservedEvent>] = [:]
+    private var gone: Set<Int32> = []
+
+    mutating func learn(pid: Int32, missing: Set<ObservedEvent>) {
+        learned[pid, default: []].formUnion(missing)
+        gone.remove(pid)
+    }
+
+    mutating func quit(pid: Int32) {
+        learned[pid] = nil
+        gone.insert(pid)
+    }
+
+    func applied(to answer: [Int32: Set<ObservedEvent>]) -> [Int32: Set<ObservedEvent>] {
+        var result = answer.filter { !gone.contains($0.key) }
+        for (pid, missing) in learned { result[pid, default: []].formUnion(missing) }
+        return result
+    }
+}
+
 /// The latest frame judgement for a window. The token names the window while it lives: a
 /// judgement that finds the token gone belongs to a window that was destroyed or whose app quit.
 struct FrameWork {
@@ -75,7 +108,13 @@ public actor WindowEngine {
     let queue: WindowRequestQueue
     let memory: MemoryKeeper
     let pipeline: Pipeline
-    let reconfigurations = ReconfigurationCount()
+    /// Display reconfigurations: one that begins stops every run that started before it.
+    let reconfigurations = Generation()
+    /// Layout applications, by a shortcut, the menu or a display change: the newest one decides
+    /// the active layout.
+    let layoutApplications = Generation()
+    /// Observation restarts: only the newest commits what it learned.
+    let restarts = Generation()
     private let reportSink: AsyncStream<EngineReport>.Continuation
 
     var config = Config.defaults
@@ -102,8 +141,10 @@ public actor WindowEngine {
     /// While start seeds last-known frames: the windows an event recorded a frame for since the
     /// seed began reading. The seed leaves those alone, since the event is newer than its read.
     var recordedDuringSeed: Set<WindowHandle>?
-    /// While observation restarts: what events learned meanwhile, which the restart keeps.
-    var learnedDuringRestart: [Int32: Set<ObservedEvent>]?
+    /// While a restart is pending: what events said since the first pending one was asked for.
+    var restartJournal: RestartJournal?
+    /// The latest restart; the next one waits for it.
+    var restartTask: Task<Void, Never>?
     /// Windows someone else moved since they were created.
     var movedExternally: Set<WindowHandle> = []
     var eventTask: Task<Void, Never>?
@@ -221,23 +262,34 @@ public actor WindowEngine {
     }
 
     /// Registers the platform's observers again, as after a wake or a user switch, and learns
-    /// which apps cannot be observed now. The event consumer is untouched.
+    /// which apps cannot be observed now. The event consumer is untouched. Restarts run one at a
+    /// time, and only the newest commits: it lays what events said since the first pending one
+    /// was asked for over its answer.
     public func restartObserving() async {
-        learnedDuringRestart = [:]
+        let generation = restarts.begin()
+        if restartJournal == nil { restartJournal = RestartJournal() }
+        let previous = restartTask
+        let task = Task {
+            await previous?.value
+            await self.restart(generation)
+        }
+        restartTask = task
+        await task.value
+    }
+
+    private func restart(_ generation: Int) async {
+        // A newer restart is waiting and registers the observers itself.
+        guard restarts.isCurrent(generation) else { return }
         await platform.stopObserving()
         let apps = await platform.startObserving()
-        var current: [Int32: Set<ObservedEvent>] = [:]
-        for app in apps {
-            current[app.pid] = app.missing
-            if !reportedUnobservable.contains(app.pid) {
-                reportedUnobservable.insert(app.pid)
-                report(.unobservable(bundleID: app.bundleID))
-            }
+        guard restarts.isCurrent(generation), let journal = restartJournal else { return }
+        var answer: [Int32: Set<ObservedEvent>] = [:]
+        for app in apps { answer[app.pid, default: []].formUnion(app.missing) }
+        unobservable = journal.applied(to: answer)
+        restartJournal = nil
+        for app in apps where unobservable[app.pid] != nil {
+            if reportedUnobservable.insert(app.pid).inserted { report(.unobservable(bundleID: app.bundleID)) }
         }
-        // What an event said meanwhile is newer than the answer.
-        for (pid, missing) in learnedDuringRestart ?? [:] { current[pid, default: []].formUnion(missing) }
-        unobservable = current
-        learnedDuringRestart = nil
     }
 
     // MARK: Unobservable apps
@@ -249,7 +301,7 @@ public actor WindowEngine {
     /// An app is reported once; later events for it add to what is known to be missing.
     func learn(pid: Int32, bundleID: String?, missing: Set<ObservedEvent>) {
         unobservable[pid, default: []].formUnion(missing)
-        learnedDuringRestart?[pid, default: []].formUnion(missing)
+        restartJournal?.learn(pid: pid, missing: missing)
         if reportedUnobservable.insert(pid).inserted { report(.unobservable(bundleID: bundleID)) }
     }
 
@@ -332,18 +384,20 @@ public actor WindowEngine {
 
     // MARK: Layouts
 
-    /// A layout run that a reconfiguration stops reports nothing and does not become active.
+    /// A layout run that a reconfiguration stops reports nothing and does not become active. A run
+    /// that a newer layout application overtook still reports, but leaves the active layout to it.
     public func applyLayout(named name: String) async {
         guard let definition = config.layouts.first(where: { $0.name == name }) else { return }
+        let application = layoutApplications.begin()
         // Taken before anything is read: a reconfiguration that begins during the reads stops the run.
         let since = reconfigurations.current
         let displays = await platform.displays()
         let windows = await platform.visibleWindows()
-        guard reconfigurations.current == since else { return }
+        guard reconfigurations.isCurrent(since) else { return }
         let requests = LayoutPlanner.requests(definition, windows: windows, displays: displays, source: .layout(name))
         let count = await run(requests, since: since)
-        guard reconfigurations.current == since else { return }
-        await setActiveLayout(name)
+        guard reconfigurations.isCurrent(since) else { return }
+        if layoutApplications.isCurrent(application) { await setActiveLayout(name) }
         report(.layoutApplied(name: name, placed: count.moved + count.unchanged, failed: count.failed))
         // One overlay for the run, saying why its first failure failed.
         if let failure = count.firstFailure, let window = windows.first(where: { $0.handle == failure.window }) {
@@ -381,12 +435,12 @@ public actor WindowEngine {
                 group.addTask {
                     var count = RunCount()
                     for request in batch {
-                        if Task.isCancelled || reconfigurations.current != since { break }
+                        if Task.isCancelled || !reconfigurations.isCurrent(since) { break }
                         // The check inside the plan closes the gap before the pipeline reads its epoch.
                         let outcome = await pipeline.run(request.window, config: config) { _ in
-                            reconfigurations.current == since ? .request(request) : .nothing
+                            reconfigurations.isCurrent(since) ? .request(request) : .nothing
                         }
-                        if reconfigurations.current != since { break }
+                        if !reconfigurations.isCurrent(since) { break }
                         switch outcome {
                         case .placed(let frame):
                             count.moved += 1

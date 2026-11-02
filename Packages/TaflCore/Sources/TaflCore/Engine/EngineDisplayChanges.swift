@@ -6,7 +6,7 @@ extension WindowEngine {
     func reconfigurationBegan() async {
         // The count goes first: a request that reads it before the writer's epoch has moved
         // is stopped by one or the other.
-        reconfigurations.bump()
+        reconfigurations.begin()
         if changeOrigin == nil { changeOrigin = knownDisplays }
         isFrozen = true
         tracker.began(at: clock.now)
@@ -72,9 +72,9 @@ extension WindowEngine {
     }
 
     private func settle(since began: Int) async {
-        guard reconfigurations.current == began else { return }
+        guard reconfigurations.isCurrent(began) else { return }
         let new = await platform.displays()
-        guard reconfigurations.current == began else { return }
+        guard reconfigurations.isCurrent(began) else { return }
         let old = changeOrigin ?? knownDisplays
         if DisplaySetup(old) == DisplaySetup(new), !rulesStarted {
             // A display that dropped out and came back, or a change of geometry: nothing moves.
@@ -91,13 +91,14 @@ extension WindowEngine {
 
     /// Handles a display setup that differs from the one before, or whose rules an earlier
     /// change began and did not finish: the active layout ends; each window is handled by the
-    /// first rule that applies; a layout that claims the new setup becomes active. Recording
-    /// stays frozen until the rules have run, and then the new setup's frames are seeded.
-    /// A reconfiguration that begins meanwhile takes over: the run stops and leaves the
-    /// state to the change that follows.
+    /// first rule that applies; a layout that claims the new setup becomes active, unless a
+    /// layout was applied since the rules began. Recording stays frozen until the rules have
+    /// run, and then the new setup's frames are seeded. A reconfiguration that begins meanwhile
+    /// takes over: the run stops and leaves the state to the change that follows.
     func applyDisplayChange(from old: [Display], to new: [Display], since began: Int? = nil) async {
         let began = began ?? reconfigurations.current
-        guard reconfigurations.current == began else { return }
+        guard reconfigurations.isCurrent(began) else { return }
+        let application = layoutApplications.begin()
         rulesStarted = true
         let oldSetup = DisplaySetup(old)
         let newSetup = DisplaySetup(new)
@@ -105,7 +106,7 @@ extension WindowEngine {
         await setActiveLayout(nil)
         let known = await memory.read()
         let visible = await platform.visibleWindows()
-        guard reconfigurations.current == began else { return }
+        guard reconfigurations.isCurrent(began) else { return }
         let windows = visible.map { window in
             WindowAtChange(
                 snapshot: window,
@@ -119,22 +120,22 @@ extension WindowEngine {
             oldDisplays: old, newDisplays: new, windows: windows, claiming: claiming, gap: config.gap
         )
         let count = await run(requests, since: began)
-        guard !Task.isCancelled, reconfigurations.current == began else { return }
+        guard !Task.isCancelled, reconfigurations.isCurrent(began) else { return }
 
         let after = await platform.visibleWindows()
         let reconfigurations = reconfigurations
         await recordLastKnown(windows: after, displays: new, since: began)
         await memory.update { memory in
-            if reconfigurations.current == began { memory.lastDisplays = new }
+            if reconfigurations.isCurrent(began) { memory.lastDisplays = new }
         }
         // No await between this check and the state it protects. The claiming layout becomes
         // active only now, so a run that was stopped leaves none behind.
-        guard reconfigurations.current == began else { return }
+        guard reconfigurations.isCurrent(began) else { return }
         knownDisplays = new
         changeOrigin = nil
         isFrozen = false
         rulesStarted = false
-        if let claiming { activeLayout.activate(claiming.name) }
+        if let claiming, layoutApplications.isCurrent(application) { activeLayout.activate(claiming.name) }
         let layout = activeLayout.name
         await memory.update { $0.activeLayout = layout }
         await save()

@@ -42,6 +42,7 @@ extension WindowEngine {
         case .appQuit(let pid):
             unobservable[pid] = nil
             reportedUnobservable.remove(pid)
+            restartJournal?.quit(pid: pid)
             for id in runWindows.keys { runWindows[id] = runWindows[id]?.filter { $0.pid != pid } }
             frameTasks = frameTasks.filter { $0.key.pid != pid }
             movedExternally = movedExternally.filter { $0.pid != pid }
@@ -198,7 +199,7 @@ extension WindowEngine {
         }
         let reconfigurations = reconfigurations
         await memory.update { memory in
-            if let count, reconfigurations.current != count { return }
+            if let count, !reconfigurations.isCurrent(count) { return }
             for (handle, frame, display) in entries {
                 memory.recordLastKnown(handle, frame: frame, display: display, setup: setup)
             }
