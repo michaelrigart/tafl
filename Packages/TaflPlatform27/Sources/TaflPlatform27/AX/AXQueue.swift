@@ -16,6 +16,12 @@ public final class AXQueue: Sendable {
         }
     }
 
+    /// Queues `body` on the app's queue without waiting for it: calls for one app run in the order
+    /// they were queued, behind the work already there.
+    public func enqueue(pid: pid_t, _ body: @Sendable @escaping () -> Void) {
+        queue(for: pid).async(execute: body)
+    }
+
     /// Drops the pid's queue once the work already on it has run, so a quit app leaves nothing behind.
     public func forget(pid: pid_t) async {
         guard let queue = queues.withLock({ $0[pid] }) else { return }

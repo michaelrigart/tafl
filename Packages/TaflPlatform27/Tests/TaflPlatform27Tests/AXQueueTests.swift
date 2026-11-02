@@ -43,3 +43,13 @@ func forgettingWaitsForWorkAlreadyOnTheQueue() async {
     #expect(order.withLock { $0 } == ["work finished", "forgotten"])
     #expect(queue.queueCount == 0)
 }
+
+@Test func queuedWorkRunsInOrderOnTheAppsQueue() async {
+    let queue = AXQueue()
+    let order = Mutex<[String]>([])
+    queue.enqueue(pid: 7) { order.withLock { $0.append("first") } }
+    queue.enqueue(pid: 7) { order.withLock { $0.append("second") } }
+    // The app's queue is serial, so work run on it after both comes after both.
+    await queue.run(pid: 7) { order.withLock { $0.append("after") } }
+    #expect(order.withLock { $0 } == ["first", "second", "after"])
+}

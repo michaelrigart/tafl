@@ -405,14 +405,16 @@ enum Probe {
     }
 
     /// Observes every app for `seconds`, logging each notification that `include` accepts with
-    /// the frame read while handling it. Registration failures are logged too. The stamp is
-    /// taken before any Accessibility read, so a queued event keeps the time it arrived.
+    /// the frame read while handling it. Registration failures are logged too. The callback only
+    /// takes the stamp and queues the reads on the app's own queue, so an app that is slow to
+    /// answer delays neither another app's callbacks nor their stamps.
     private static func observe(
         apps: [NSRunningApplication], seconds: Double,
         include: @escaping @Sendable (String) -> Bool,
         annotate: (@Sendable (CGRect) -> String)? = nil
     ) async {
         let hub = AXObserverHub()
+        let queue = queue
         for app in apps {
             let pid = app.processIdentifier
             let bundleID = app.bundleIdentifier
@@ -420,11 +422,13 @@ enum Probe {
                 hub.observe(pid: pid, bundleID: bundleID) { event in
                     let at = ProbeLog.now()
                     guard include(event.notification) else { return }
-                    let frame = AXWindowAccess.frame(event.element)
-                    var line = "event bundle=\(event.bundleID ?? "?") pid=\(event.pid) notification=\(event.notification) frame=\(format(frame))"
-                    if let annotate, let rect = try? frame.get() { line += " " + annotate(rect) }
-                    let title = event.notification == kAXTitleChangedNotification ? AXWindowAccess.title(event.element) : nil
-                    ProbeLog.write(line, title: title, at: at)
+                    queue.enqueue(pid: event.pid) {
+                        let frame = AXWindowAccess.frame(event.element)
+                        var line = "event bundle=\(event.bundleID ?? "?") pid=\(event.pid) notification=\(event.notification) frame=\(format(frame))"
+                        if let annotate, let rect = try? frame.get() { line += " " + annotate(rect) }
+                        let title = event.notification == kAXTitleChangedNotification ? AXWindowAccess.title(event.element) : nil
+                        ProbeLog.write(line, title: title, at: at)
+                    }
                 }
             }
             if !failed.isEmpty {
