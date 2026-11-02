@@ -55,7 +55,7 @@ actor FakePlatform: WindowPlatform {
     var focused: WindowHandle?
     var displays: [Display]
     var pointer: DisplayIdentity?
-    var tiling = TilingSettings(edgeDrag: false, optionAccelerator: false, topEdgeDrag: false, tiledMargins: nil)
+    var tiling = TilingSettings(edgeDrag: nil, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: nil)
     var accessibilityGranted = true
     var capabilityStates: [CapabilityState] = []
     var sizeRule: (@Sendable (WindowSnapshot, ScreenSize) -> ScreenSize)?

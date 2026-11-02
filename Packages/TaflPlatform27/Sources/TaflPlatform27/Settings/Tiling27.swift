@@ -8,12 +8,12 @@ public struct Tiling27: @unchecked Sendable { // reason: UserDefaults is thread-
         self.defaults = defaults
     }
 
-    /// A switch that is unset reads as off; only the margins setting keeps "unset" apart.
+    /// A setting whose key is unset is nil.
     public func read() -> TilingSettings {
         TilingSettings(
-            edgeDrag: flag("EnableTilingByEdgeDrag") ?? false,
-            optionAccelerator: flag("EnableTilingOptionAccelerator") ?? false,
-            topEdgeDrag: flag("EnableTopTilingByEdgeDrag") ?? false,
+            edgeDrag: flag("EnableTilingByEdgeDrag"),
+            optionAccelerator: flag("EnableTilingOptionAccelerator"),
+            topEdgeDrag: flag("EnableTopTilingByEdgeDrag"),
             tiledMargins: flag("EnableTiledWindowMargins"))
     }
 

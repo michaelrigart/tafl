@@ -5,13 +5,13 @@ public enum PlatformFailure: Error, Equatable, Sendable {
 }
 
 public struct TilingSettings: Equatable, Sendable {
-    public var edgeDrag: Bool
-    public var optionAccelerator: Bool
-    public var topEdgeDrag: Bool
-    /// Nil when the setting is unset.
+    /// Every setting is nil when its key is unset (macOS applies its own default).
+    public var edgeDrag: Bool?
+    public var optionAccelerator: Bool?
+    public var topEdgeDrag: Bool?
     public var tiledMargins: Bool?
 
-    public init(edgeDrag: Bool, optionAccelerator: Bool, topEdgeDrag: Bool, tiledMargins: Bool?) {
+    public init(edgeDrag: Bool?, optionAccelerator: Bool?, topEdgeDrag: Bool?, tiledMargins: Bool?) {
         self.edgeDrag = edgeDrag
         self.optionAccelerator = optionAccelerator
         self.topEdgeDrag = topEdgeDrag

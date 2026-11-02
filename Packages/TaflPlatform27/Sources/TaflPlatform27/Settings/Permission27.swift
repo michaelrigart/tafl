@@ -19,6 +19,7 @@ public final class Permission27: @unchecked Sendable { // reason: `observer` is 
 
     private let center: NotificationCenter
     private let observer: NSObjectProtocol
+    private let continuation: AsyncStream<Bool>.Continuation
     public let changes: AsyncStream<Bool>
 
     public var isTrusted: Bool { AXIsProcessTrusted() }
@@ -37,6 +38,7 @@ public final class Permission27: @unchecked Sendable { // reason: `observer` is 
         let last = LastValue(read())
         let (stream, continuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .unbounded)
         changes = stream
+        self.continuation = continuation
         let emitIfChanged: @Sendable () -> Void = {
             let value = read()
             if last.changed(to: value) { continuation.yield(value) }
@@ -49,5 +51,6 @@ public final class Permission27: @unchecked Sendable { // reason: `observer` is 
 
     deinit {
         center.removeObserver(observer)
+        continuation.finish()
     }
 }

@@ -19,10 +19,14 @@ private func collect(_ stream: AsyncStream<Bool>, count: Int) async -> [Bool] {
     let trusted = Mutex(false)
     let center = NotificationCenter()
     let permission = Permission27(center: center, name: name) { trusted.withLock { $0 } }
+    var changes = permission.changes.makeAsyncIterator()
     trusted.withLock { $0 = true }
     center.post(name: name, object: nil)
     center.post(name: name, object: nil)
-    #expect(await collect(permission.changes, count: 1) == [true])
+    #expect(await changes.next() == true)
+    trusted.withLock { $0 = false }
+    center.post(name: name, object: nil)
+    #expect(await changes.next() == false)
 }
 
 @MainActor
@@ -44,4 +48,12 @@ private func collect(_ stream: AsyncStream<Bool>, count: Int) async -> [Bool] {
     trusted.withLock { $0 = false }
     center.post(name: name, object: nil)
     #expect(await collect(permission.changes, count: 1) == [false])
+}
+
+@MainActor
+@Test func theStreamEndsWhenThePermissionObjectGoes() async {
+    var permission: Permission27? = Permission27(center: NotificationCenter(), name: name) { false }
+    var changes = permission!.changes.makeAsyncIterator()
+    permission = nil
+    #expect(await changes.next() == nil)
 }
