@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 public enum PlacementOutcome: Equatable, Sendable {
     case placed(ScreenRect)
@@ -121,7 +122,7 @@ public actor Pipeline {
 
         let crosses = target.identity != resolved.display.identity
         if !crosses, adjusted.rect.isClose(to: snapshot.frame, within: Self.tolerance) {
-            if request.source.completesRestore { await memory.update { $0.completeRestore(window) } }
+            await recordUnchanged(request, resolved)
             return .unchanged
         }
 
@@ -141,11 +142,18 @@ public actor Pipeline {
         let opensChain = request.source.countsForRestore
         let keeper = memory
         let current = resolved.display
+        // Set once the writer is about to write: from then on the window may no longer be where
+        // the old placed record says.
+        let writing = Mutex(false)
         let result = await writer.write(job) {
+            writing.withLock { $0 = true }
             guard opensChain else { return }
             await keeper.update { $0.openChain(window, before: snapshot.frame, on: current) }
         }
-        return await record(result, for: request, snapshot: snapshot, displays: resolved.displays, fallback: target)
+        return await record(
+            result, for: request, snapshot: snapshot, displays: resolved.displays, fallback: target,
+            wrote: writing.withLock { $0 }
+        )
     }
 
     /// Resolve: the window, its display, and the memory about it, reconciled with where the
@@ -189,7 +197,8 @@ public actor Pipeline {
         for request: MoveRequest,
         snapshot: WindowSnapshot,
         displays: [Display],
-        fallback: Display
+        fallback: Display,
+        wrote: Bool
     ) async -> PlacementOutcome {
         let window = request.window
         func display(of frame: ScreenRect) -> DisplayIdentity {
@@ -219,21 +228,49 @@ public actor Pipeline {
             await memory.update { $0.recordExternalChange(window) }
             return .failed(.movedDuringPlacement)
         case .cancelled(let verified):
-            await recordOwn(verified, window, display: verified.map(display(of:)))
+            if let verified { await recordOwn(verified, window, display: display(of: verified)) }
             return .superseded
         case .failed(let failure, let verified):
-            await recordOwn(verified, window, display: verified.map(display(of:)))
+            if let verified {
+                await recordOwn(verified, window, display: display(of: verified))
+            } else if wrote {
+                // Nothing verified after a write: the window is no longer at the old record, but
+                // nothing external happened, so the chain stays open.
+                await memory.update { $0.placed[window] = nil }
+            }
             return .failed(await failureKind(failure, window: window, appName: snapshot.appName))
         }
     }
 
     /// A frame verified before a request stopped is Tafl's own, though nothing repeats from it.
-    private func recordOwn(_ frame: ScreenRect?, _ window: WindowHandle, display: DisplayIdentity?) async {
-        guard let frame, let display else { return }
+    private func recordOwn(_ frame: ScreenRect, _ window: WindowHandle, display: DisplayIdentity) async {
         let record = PlacedRecord(
             action: nil, layout: nil, placement: nil, cycleStep: 0, achieved: frame, display: display
         )
         await memory.update { $0.recordPlaced(window, record) }
+    }
+
+    /// A request whose target is where the window already is: the window counts as placed by it,
+    /// and a restore that is already done completes. A display change leaves the memory alone.
+    private func recordUnchanged(_ request: MoveRequest, _ resolved: ResolvedWindow) async {
+        guard request.source != .displayChange else { return }
+        let window = request.window
+        let frame = resolved.snapshot.frame
+        let record = PlacedRecord(
+            action: request.source.action,
+            layout: request.source.layoutName,
+            placement: request.placement,
+            cycleStep: request.cycleStep,
+            achieved: frame,
+            display: resolved.display.identity
+        )
+        let opensChain = request.source.countsForRestore
+        let completesRestore = request.source.completesRestore
+        await memory.update { memory in
+            if opensChain { memory.openChain(window, before: frame, on: resolved.display) }
+            memory.recordPlaced(window, record)
+            if completesRestore { memory.completeRestore(window) }
+        }
     }
 
     private func failureKind(_ failure: PlatformFailure, window: WindowHandle, appName: String?) async -> FailureKind {
@@ -243,9 +280,8 @@ public actor Pipeline {
         case .fullscreen: return .fullscreen
         case .notResponding:
             if let appName { return .notResponding(app: appName) }
-            // The window could not be read, so the app's name comes from the window list.
-            let known = await platform.visibleWindows().first { $0.handle.pid == window.pid }
-            return .notResponding(app: known?.appName ?? "The app")
+            // The window could not be read, so the app's name comes from the platform by pid.
+            return .notResponding(app: await platform.appName(pid: window.pid) ?? "The app")
         }
     }
 }

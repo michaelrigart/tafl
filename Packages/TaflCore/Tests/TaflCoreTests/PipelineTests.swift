@@ -126,6 +126,15 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(outcome == .placed(rect(10, 35, 485, 755)))
 }
 
+@Test func minimumSizeGrowsTheGappedCellBeforeTheWrite() async {
+    let steps: [any AdjustStep] = [GapStep(), MinimumSizeStep(), OnScreenStep()]
+    let rig = await Rig(start: rect(100, 100, 400, 300), steps: steps) {
+        $0.windows[handle]?.minSize = ScreenSize(width: 600, height: 400)
+    }
+    let outcome = await rig.run(request(.named(.leftHalf), source: .action(.leftHalf)), gap: 10)
+    #expect(outcome == .placed(rect(10, 35, 600, 755)))
+}
+
 @Test func gapDoesNotApplyToCenter() async {
     let steps: [any AdjustStep] = [GapStep()]
     let rig = await Rig(start: rect(0, 25, 400, 300), steps: steps)
@@ -163,6 +172,33 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let outcome = await rig.run(request(.named(.rightHalf), source: .action(.rightHalf)))
     #expect(outcome == .failed(.fullscreen))
     #expect(await rig.log == [])
+}
+
+@Test func noDisplayToPlaceOnCannotMove() async {
+    let rig = await Rig(start: leftHalf, displays: [])
+    let outcome = await rig.run(request(.named(.rightHalf), source: .action(.rightHalf)))
+    #expect(outcome == .failed(.cannotMove))
+    #expect(await rig.log == [])
+}
+
+@Test func anAppThatDoesNotAnswerFailsWithTheNameThePlatformGives() async {
+    let rig = await Rig(start: leftHalf) {
+        $0.hung = [100]
+        $0.appNames = [100: "Hung App"]
+    }
+    let task = rig.start(request(.named(.rightHalf), source: .action(.rightHalf)))
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: .milliseconds(500))
+    #expect(await task.value == .failed(.notResponding(app: "Hung App")))
+}
+
+@Test func anAppWithNoKnownNameIsCalledTheApp() async {
+    let rig = await Rig(start: leftHalf) { $0.hung = [100] }
+    await rig.fake.configure { $0.windows[handle] = nil }
+    let task = rig.start(request(.named(.rightHalf), source: .action(.rightHalf)))
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: .milliseconds(500))
+    #expect(await task.value == .failed(.notResponding(app: "The app")))
 }
 
 @Test func anAppThatDoesNotAnswerFailsWithItsName() async {
@@ -222,13 +258,39 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
 
 // MARK: Apply
 
-@Test func unchangedWritesNothing() async {
+@Test func unchangedWritesNothingButRecordsThePlacementAndOpensAChain() async {
     let rig = await Rig(start: leftHalf)
     let outcome = await rig.run(request(.named(.leftHalf), placement: .leftHalf, source: .action(.leftHalf)))
     #expect(outcome == .unchanged)
     #expect(await rig.log == [])
-    #expect(await rig.stored.restore[handle] == nil)
-    #expect(await rig.stored.placed[handle] == nil)
+    #expect(await rig.stored.placed[handle] == placed(leftHalf))
+    #expect(await rig.stored.restore[handle] == chain(leftHalf))
+}
+
+@Test func unchangedKeepsAChainThatIsAlreadyOpen() async {
+    let memory = WindowMemory(restore: [handle: chain(rect(10, 40, 300, 200))])
+    let rig = await Rig(start: leftHalf, memory: memory)
+    _ = await rig.run(request(.named(.leftHalf), placement: .leftHalf, source: .action(.leftHalf)))
+    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200)))
+}
+
+@Test func theNextPlanSeesAWindowAlreadyPlacedAsPlaced() async {
+    let rig = await Rig(start: leftHalf)
+    _ = await rig.run(request(.named(.leftHalf), placement: .leftHalf, source: .action(.leftHalf)))
+    let seen = Mutex<ResolvedWindow?>(nil)
+    _ = await rig.pipeline.run(handle, config: config()) { resolved in
+        seen.withLock { $0 = resolved }
+        return .nothing
+    }
+    #expect(seen.withLock { $0 }?.placed?.action == .leftHalf)
+    #expect(seen.withLock { $0 }?.isAtAchieved == true)
+}
+
+@Test func anUnchangedDisplayChangeLeavesTheMemoryAlone() async {
+    let rig = await Rig(start: leftHalf)
+    let outcome = await rig.run(request(.named(.leftHalf), placement: .leftHalf, source: .displayChange))
+    #expect(outcome == .unchanged)
+    #expect(await rig.stored == WindowMemory())
 }
 
 @Test func withinAPointOfTheTargetIsUnchanged() async {
@@ -410,6 +472,37 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(await rig.stored.restore[handle] == chain(rect(0, 25, 400, 300)))
 }
 
+@Test func failureAfterAWriteKeepsTheChainForTheNextRequest() async {
+    let f0 = rect(10, 40, 300, 200)
+    let start = rect(0, 25, 400, 300)
+    let memory = WindowMemory(placed: [handle: placed(start)], restore: [handle: chain(f0)])
+    // Size first, then the position write fails: the window is no longer where `placed` says.
+    let rig = await Rig(start: start, memory: memory) { $0.beforeCall = [2: { $0.canMove = false }] }
+    let failed = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
+    #expect(failed == .failed(.cannotMove))
+    #expect(await rig.frame == rect(0, 25, 500, 775))
+    #expect(await rig.stored.placed[handle] == nil)
+    #expect(await rig.stored.restore[handle] == chain(f0))
+
+    await rig.fake.configure { $0.windows[handle]?.canMove = true }
+    let next = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
+    #expect(next == .placed(rightHalf))
+    #expect(await rig.stored.restore[handle]?.frame == f0)
+}
+
+@Test func failureBeforeAnyWriteKeepsThePlacedRecord() async {
+    let start = rect(100, 100, 400, 300)
+    let memory = WindowMemory(placed: [handle: placed(start)])
+    let rig = await Rig(start: start, memory: memory)
+    let gate = await rig.fake.pause(beforeCall: 0)
+    let task = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
+    #expect(await pollUntil { gate.waiterCount == 1 })
+    await rig.fake.configure { $0.windows[handle] = nil }
+    gate.open()
+    #expect(await task.value == .failed(.noWindow))
+    #expect(await rig.stored.placed[handle] == placed(start))
+}
+
 // MARK: Restore
 
 @Test func restoreCompletesOnSuccess() async {
@@ -430,12 +523,24 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let outcome = await rig.run(request(.frame(leftHalf), source: .action(.restore)))
     #expect(outcome == .unchanged)
     #expect(await rig.stored.restore[handle] == nil)
+    #expect(await rig.stored.placed[handle]?.action == .restore)
 }
 
 @Test func restoreDoesNotOpenAChain() async {
     let rig = await Rig(start: leftHalf)
     _ = await rig.run(request(.frame(rect(100, 100, 400, 300)), source: .action(.restore)))
     #expect(await rig.stored.restore[handle] == nil)
+}
+
+@Test func aRestoreThatEndsSizeRefusedKeepsItsTarget() async {
+    let target = rect(100, 100, 400, 300)
+    let memory = WindowMemory(restore: [handle: chain(target)])
+    let rig = await Rig(start: leftHalf, memory: memory) {
+        $0.sizeRule = { window, _ in window.frame.size }
+    }
+    let outcome = await rig.run(request(.frame(target), source: .action(.restore)))
+    #expect(outcome == .failed(.sizeRefused(app: "Terminal")))
+    #expect(await rig.stored.restore[handle] == chain(target))
 }
 
 @Test func failedRestoreKeepsItsTarget() async {

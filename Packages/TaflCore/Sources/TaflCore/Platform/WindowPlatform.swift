@@ -48,6 +48,9 @@ public protocol WindowPlatform: Sendable {
     /// Running apps, every display's current Space.
     func visibleWindows() async -> [WindowSnapshot]
     func snapshot(of handle: WindowHandle) async -> Result<WindowSnapshot, PlatformFailure>
+    /// The name of the running app with this process id, answered without asking the app, so it
+    /// works for one that does not respond.
+    func appName(pid: Int32) async -> String?
     /// Waits while another session for the same app is open.
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure>
     func pointerDisplay() async -> DisplayIdentity?

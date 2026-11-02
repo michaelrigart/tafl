@@ -62,6 +62,8 @@ actor FakePlatform: WindowPlatform {
     var positionRule: (@Sendable (WindowSnapshot, ScreenPoint) -> ScreenPoint)?
     var beforeCall: [Int: @Sendable (inout WindowSnapshot) -> Void] = [:]
     var hung: Set<Int32> = []
+    /// App names by process id; a pid not listed falls back to the name of one of its windows.
+    var appNames: [Int32: String] = [:]
     var unobserved: [UnobservedApp] = []
 
     private(set) var callLog: [String] = []
@@ -146,6 +148,10 @@ actor FakePlatform: WindowPlatform {
         }
         guard let window = windows[handle] else { return .failure(.noWindow) }
         return .success(window)
+    }
+
+    func appName(pid: Int32) async -> String? {
+        appNames[pid] ?? windows.values.first { $0.handle.pid == pid }?.appName
     }
 
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> {
