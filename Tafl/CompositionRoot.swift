@@ -270,8 +270,8 @@ final class CompositionRoot {
         case .layoutApplied(let name, let placed, let failed):
             Log.engine.notice("Layout \(name, privacy: .private) applied, placed \(placed, privacy: .public), failed \(failed, privacy: .public)")
             Task { await refreshActiveLayout() }
-        case .displayChangeHandled(let moved):
-            Log.engine.notice("Display change handled, moved \(moved, privacy: .public)")
+        case .displayChangeHandled(let moved, let failed):
+            Log.engine.notice("Display change handled, moved \(moved, privacy: .public), failed \(failed, privacy: .public)")
             Task { await refreshActiveLayout() }
         case .unobservable(let bundleID):
             Log.engine.notice("Cannot observe \(bundleID ?? "an app", privacy: .public)")

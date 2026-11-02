@@ -7,8 +7,9 @@ public enum EngineReport: Equatable, Sendable {
     case failure(FailureKind, display: DisplayIdentity?)
     /// `placed` counts windows that now sit where the layout puts them.
     case layoutApplied(name: String, placed: Int, failed: Int)
-    /// `moved` counts windows the rules wrote.
-    case displayChangeHandled(moved: Int)
+    /// `moved` counts windows the rules wrote. A failure here shows no overlay: nobody asked for
+    /// the move.
+    case displayChangeHandled(moved: Int, failed: Int)
     case unobservable(bundleID: String?)
     case memory(MemoryLoad)
     /// The window memory could not be written. The reason stays in the log.

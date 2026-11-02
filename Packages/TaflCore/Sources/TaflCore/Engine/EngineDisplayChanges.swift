@@ -137,6 +137,6 @@ extension WindowEngine {
         if let claiming { activeLayout.activate(claiming.name) }
         let layout = activeLayout.name
         await memory.update { $0.activeLayout = layout }
-        report(.displayChangeHandled(moved: count.moved))
+        report(.displayChangeHandled(moved: count.moved, failed: count.failed))
     }
 }

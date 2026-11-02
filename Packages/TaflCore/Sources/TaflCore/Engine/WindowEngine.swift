@@ -20,18 +20,33 @@ struct RunCount: Sendable {
     /// Windows already where the request puts them.
     var unchanged = 0
     var failed = 0
+    /// The failure a run reports, so one run shows one overlay: the first failure of the first
+    /// app to finish with one.
+    var firstFailure: RunFailure?
     /// Where the windows the run wrote ended up.
     var placed: [KnownFrame] = []
     /// Windows someone moved while the run placed them.
     var interrupted: [WindowHandle] = []
 
+    mutating func fail(_ window: WindowHandle, _ kind: FailureKind) {
+        failed += 1
+        if firstFailure == nil { firstFailure = RunFailure(window: window, kind: kind) }
+        if kind == .movedDuringPlacement { interrupted.append(window) }
+    }
+
     mutating func add(_ other: RunCount) {
         moved += other.moved
         unchanged += other.unchanged
         failed += other.failed
+        if firstFailure == nil { firstFailure = other.firstFailure }
         placed += other.placed
         interrupted += other.interrupted
     }
+}
+
+struct RunFailure: Sendable {
+    var window: WindowHandle
+    var kind: FailureKind
 }
 
 struct KnownFrame: Sendable {
@@ -320,6 +335,10 @@ public actor WindowEngine {
         guard reconfigurations.current == since else { return }
         await setActiveLayout(name)
         report(.layoutApplied(name: name, placed: count.moved + count.unchanged, failed: count.failed))
+        // One overlay for the run, saying why its first failure failed.
+        if let failure = count.firstFailure, let window = windows.first(where: { $0.handle == failure.window }) {
+            report(.failure(failure.kind, display: await displayIdentity(of: window, after: failure.kind)))
+        }
     }
 
     func setActiveLayout(_ name: String?) async {
@@ -362,10 +381,7 @@ public actor WindowEngine {
                             count.moved += 1
                             count.placed.append(KnownFrame(handle: request.window, frame: frame))
                         case .unchanged: count.unchanged += 1
-                        case .failed(.movedDuringPlacement):
-                            count.failed += 1
-                            count.interrupted.append(request.window)
-                        case .failed: count.failed += 1
+                        case .failed(let kind): count.fail(request.window, kind)
                         case .superseded: break
                         }
                     }

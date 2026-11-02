@@ -295,9 +295,28 @@ private final class Rig: Sendable {
 
     await rig.clock.advance(by: .milliseconds(500))
     await applying.value
-    await rig.waitForReport { $0 == .layoutApplied(name: "Work", placed: 2, failed: 1) }
-    #expect(rig.reports == [.memory(.fresh), .layoutApplied(name: "Work", placed: 2, failed: 1)])
+    // The run is summed up, and its failure says why on the window's display.
+    let failure = EngineReport.failure(.notResponding(app: "Example"), display: displayA.identity)
+    await rig.waitForReport { $0 == failure }
+    #expect(rig.reports == [.memory(.fresh), .layoutApplied(name: "Work", placed: 2, failed: 1), failure])
     #expect(await rig.engine.activeLayoutName == "Work")
+}
+
+@Test func aLayoutRunShowsOnlyItsFirstFailure() async {
+    var a = window(1, frame: start, pid: 100, bundleID: "com.a")
+    var b = window(2, frame: start, pid: 200, bundleID: "com.b")
+    a.canMove = false
+    b.canMove = false
+    let desk = layout("Work", [slot(.leftHalf, app: "com.a"), slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [a, b], focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Work")
+    await rig.waitForReport { $0 == .failure(.cannotMove, display: displayA.identity) }
+    #expect(rig.reports == [
+        .memory(.fresh),
+        .layoutApplied(name: "Work", placed: 0, failed: 2),
+        .failure(.cannotMove, display: displayA.identity),
+    ])
 }
 
 @Test func applyingALayoutReachesAppsWeCannotObserve() async {
@@ -417,7 +436,7 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
     let rig = await Rig(windows: [window(1, frame: start)])
     await rig.engine.start(config: config(layouts: [dock]))
     await rig.changeDisplays(to: bothDisplays, eventsHandledAfter: 2)
-    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1) }
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
     #expect(await rig.frame().map { isClose($0, rect(1000, 0, 2000.0 / 3, 1550)) } == true)
     #expect(await rig.engine.activeLayoutName == "Dock")
 }
@@ -468,7 +487,7 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
     await rig.waitForEvents(1)
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: quiet)
-    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1) }
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
     #expect(await rig.frame() == leftHalfA)
 }
 
@@ -505,8 +524,24 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
     await rig.engine.start(config: config())
     await rig.fake.configure { $0.windows[handle]?.frame = rect(0, 25, 600, 500) }
     await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
-    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1) }
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
     #expect(await rig.frame() == leftHalfA)
+}
+
+@Test(.timeLimit(.minutes(1))) func aDisplayChangeCountsItsFailuresWithoutAnOverlay() async {
+    let slow = window(5, frame: rect(1500, 500, 400, 300), pid: 50, bundleID: "com.c")
+    let rig = await Rig(displays: bothDisplays, windows: [strayB1, slow], focused: nil) { $0.hung = [50] }
+    await rig.engine.start(config: config())
+    await rig.fake.configure {
+        $0.windows[strayB1.handle]?.frame = rect(50, 50, 300, 300)
+        $0.windows[slow.handle]?.frame = rect(400, 400, 300, 300)
+    }
+    await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
+    // The hung app's call is waiting on the clock.
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: .milliseconds(500))
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 1) }
+    #expect(rig.reports.allSatisfy { if case .failure = $0 { false } else { true } })
 }
 
 @Test func aLayoutEndsAtTheNextDisplayChange() async {
@@ -534,7 +569,7 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
         $0.windows[unobserved.handle]?.frame = asleep
     }
     await rig.changeDisplays(to: [displayA], eventsHandledAfter: 4)
-    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1) }
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
     #expect(await rig.frame(of: observed.handle) == leftHalfA)
     #expect(await rig.frame(of: unobserved.handle) == asleep)
     #expect(rig.reports.filter { $0 == .unobservable(bundleID: "com.b") }.count == 1)
@@ -599,7 +634,7 @@ private func temporaryStore() -> (MemoryStore, URL) {
     #expect(await second.frame() == expected)
     // A's first third with the gap: 10 from the screen edges, 5 on the inner edge.
     #expect(expected.map { isClose($0, rect(10, 35, 1000.0 / 3 - 15, 755)) } == true)
-    await second.waitForReport { $0 == .displayChangeHandled(moved: 1) }
+    await second.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
 }
 
 @Test func launchWithTheSameSetupMovesNothing() async {
@@ -698,7 +733,7 @@ private let strayA2 = rect(250, 275, 200, 150)
     await rig.emit(.reconfigurationEnded)
     await rig.waitForEvents(3)
     gate.open()
-    await rig.waitForReport { $0 == .displayChangeHandled(moved: 2) }
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 2, failed: 0) }
     #expect(await rig.frame(of: strayB1.handle).map { isClose($0, strayA1) } == true)
     #expect(await rig.frame(of: strayB2.handle).map { isClose($0, strayA2) } == true)
     #expect(await rig.engine.isFrozen == false)
@@ -939,7 +974,7 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
     await rig.engine.start(config: config(layouts: [desk]))
     await rig.fake.configure { $0.windows[app.handle]?.frame = rect(0, 25, 600, 500) }
     await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
-    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1) }
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
     #expect(await rig.frame(of: app.handle) == leftHalfA)
 
     await rig.engine.applyLayout(named: "Desk")
@@ -957,7 +992,7 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
     await rig.engine.start(config: config())
     await rig.fake.configure { $0.windows[app.handle]?.frame = rect(0, 25, 600, 500) }
     await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
-    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1) }
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
     #expect(await rig.frame(of: app.handle) == leftHalfA)
 }
 
