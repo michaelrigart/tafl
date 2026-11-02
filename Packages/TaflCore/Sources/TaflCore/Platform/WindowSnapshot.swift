@@ -56,3 +56,10 @@ public struct WindowSnapshot: Equatable, Sendable {
         self.isAppHidden = isAppHidden
     }
 }
+
+extension WindowSnapshot {
+    /// Whether Tafl may place the window: not full screen, minimized, in a hidden app or a sheet.
+    public var isPlaceable: Bool {
+        !isFullscreen && !isMinimized && !isAppHidden && !isSheet
+    }
+}

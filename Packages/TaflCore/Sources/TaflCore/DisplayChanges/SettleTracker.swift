@@ -16,17 +16,17 @@ public struct SettleTracker: Sendable {
     public mutating func began(at time: Duration) {
         isChanging = true
         reconfigurationOpen = true
-        lastInput = time
+        record(time)
     }
 
     public mutating func ended(at time: Duration) {
         reconfigurationOpen = false
-        lastInput = time
+        record(time)
     }
 
     public mutating func windowMoved(at time: Duration) {
         guard isChanging else { return }
-        lastInput = time
+        record(time)
     }
 
     public var deadline: Duration? {
@@ -38,5 +38,9 @@ public struct SettleTracker: Sendable {
         guard let deadline, now >= deadline else { return false }
         isChanging = false
         return true
+    }
+
+    private mutating func record(_ time: Duration) {
+        lastInput = max(lastInput, time)
     }
 }

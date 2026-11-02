@@ -121,4 +121,42 @@ struct DisplayChangeRulesTests {
         let withoutLayout = plan(windows)
         #expect(withoutLayout.map(\.window) == [plain.handle])
     }
+
+    @Test func rememberedBeatsPreviousOnARemovedDisplay() {
+        let w = window(1, frame: rect(0, 25, 300, 300))
+        let remembered = StoredFrame(display: displayA.identity, relative: UnitRect(x: 0.5, y: 0, width: 0.5, height: 0.5))
+        let previous = StoredFrame(display: displayB.identity, relative: UnitRect(x: 0, y: 0, width: 0.5, height: 1))
+        let requests = plan([atChange(w, previous: previous, remembered: remembered)])
+        #expect(requests == [
+            MoveRequest(
+                window: w.handle, spec: .frame(rect(500, 25, 500, 388)), display: displayA.identity,
+                placement: nil, cycleStep: 0, source: .displayChange
+            ),
+        ])
+    }
+
+    @Test func placementIsRecognisedOnTheOldDisplay() {
+        let portrait = namedDisplay("Portrait", rect(3000, 0, 1000, 1800), serial: 9)
+        let w = window(1, frame: rect(0, 25, 300, 300))
+        let previous = StoredFrame(
+            display: portrait.identity, relative: UnitRect(x: 0, y: 0, width: 1, height: 1.0 / 3)
+        )
+        let requests = plan(old: [displayA, portrait], [atChange(w, previous: previous)])
+        #expect(requests.map(\.spec) == [.named(.firstThird)])
+        #expect(requests.map(\.placement) == [.firstThird])
+        #expect(requests.map(\.display) == [displayA.identity])
+    }
+
+    @Test func placementIsRecognisedWithTheGap() {
+        let cell = NamedPlacement.leftHalf.cell(portrait: false)
+        let gapped = Gaps.apply(10, to: cell.rect(in: displayB.visibleFrame), cell: cell)
+        let w = window(1, frame: rect(0, 25, 300, 300))
+        let previous = StoredFrame(display: displayB.identity, relative: gapped.relative(to: displayB.visibleFrame))
+        let requests = DisplayChangeRules.plan(
+            oldDisplays: [displayA, displayB], newDisplays: [displayA],
+            windows: [atChange(w, previous: previous)], claiming: nil, gap: 10
+        )
+        #expect(requests.map(\.spec) == [.named(.leftHalf)])
+        #expect(requests.map(\.placement) == [.leftHalf])
+    }
 }

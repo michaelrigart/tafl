@@ -26,9 +26,7 @@ public enum DisplayChangeRules {
     ) -> [MoveRequest] {
         windows.compactMap { entry in
             let snapshot = entry.snapshot
-            guard entry.isObserved, !snapshot.isFullscreen, !snapshot.isMinimized,
-                  !snapshot.isAppHidden, !snapshot.isSheet
-            else { return nil }
+            guard entry.isObserved, snapshot.isPlaceable else { return nil }
 
             if let claiming, LayoutPlanner.entryIndex(for: snapshot, in: claiming) != nil {
                 return LayoutPlanner.requests(

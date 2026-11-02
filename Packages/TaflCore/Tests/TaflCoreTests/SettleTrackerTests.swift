@@ -19,9 +19,9 @@ struct SettleTrackerTests {
         var tracker = SettleTracker(quietPeriod: .seconds(1))
         tracker.began(at: .zero)
         #expect(tracker.deadline == nil)
-        tracker.ended(at: .milliseconds(2500))
         #expect(tracker.settleIfDue(now: .milliseconds(1500)) == false)
         #expect(tracker.settleIfDue(now: .milliseconds(2400)) == false)
+        tracker.ended(at: .milliseconds(2500))
         #expect(tracker.settleIfDue(now: .milliseconds(3400)) == false)
         #expect(tracker.settleIfDue(now: .milliseconds(3500)) == true)
     }
@@ -47,6 +47,15 @@ struct SettleTrackerTests {
         tracker.ended(at: .milliseconds(100))
         tracker.windowMoved(at: .milliseconds(600))
         #expect(tracker.deadline == .milliseconds(1600))
+    }
+
+    @Test func anEarlierInputNeverPullsTheDeadlineBack() {
+        var tracker = SettleTracker(quietPeriod: .seconds(1))
+        tracker.began(at: .zero)
+        tracker.ended(at: .milliseconds(100))
+        tracker.windowMoved(at: .milliseconds(900))
+        tracker.windowMoved(at: .milliseconds(300))
+        #expect(tracker.deadline == .milliseconds(1900))
     }
 
     @Test func quietPeriodIsCapped() async {

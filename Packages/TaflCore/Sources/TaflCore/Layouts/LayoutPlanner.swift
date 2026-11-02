@@ -12,7 +12,7 @@ public enum LayoutPlanner {
         source: RequestSource
     ) -> [MoveRequest] {
         windows.compactMap { window in
-            guard !window.isMinimized, !window.isAppHidden, !window.isFullscreen, !window.isSheet,
+            guard window.isPlaceable,
                   let index = entryIndex(for: window, in: layout)
             else { return nil }
             let entry = layout.entries[index]
