@@ -68,6 +68,13 @@ final class ConfigController {
         reactivate()
     }
 
+    /// The keyboard layout changed: read and parse the file again, so a config that was invalid
+    /// under the old layout, or is under the new one, is judged against the new table.
+    func reparse() {
+        lastRead = nil
+        reload()
+    }
+
     /// Sends the engine the configuration in force; the root calls it once the engine has started.
     func pushToEngine() {
         guard engineIsRunning() else { return }

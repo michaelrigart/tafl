@@ -41,7 +41,7 @@ final class ConfigWatcher {
         }
         let file = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
         if manager.fileExists(atPath: file), !watched.contains(file) { watched.append(file) }
-        for item in watched { watch(item, isFile: item == file) }
+        for item in watched { watch(item) }
     }
 
     private func disarm() {
@@ -57,19 +57,15 @@ final class ConfigWatcher {
         return current
     }
 
-    private func watch(_ item: String, isFile: Bool) {
+    private func watch(_ item: String) {
         let descriptor = open(item, O_EVTONLY)
         guard descriptor >= 0 else { return }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
             eventMask: [.write, .delete, .rename, .extend, .attrib, .link],
             queue: .main)
-        source.setEventHandler { [weak self, weak source] in
-            let mask = source?.data ?? []
-            MainActor.assumeIsolated {
-                if isFile, !ConfigWatchEvent.shouldReload(mask: mask) { return }
-                self?.fired()
-            }
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.fired() }
         }
         source.setCancelHandler { close(descriptor) }
         source.resume()

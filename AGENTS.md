@@ -38,6 +38,9 @@ them with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` and don't c
   window's button opens that page, and Check Again picks up the grant.
 - Paths: the config is `~/.config/tafl/config.toml` (it may be a symlink; Tafl never writes
   it); the window memory is `~/.local/state/tafl/memory.json`.
+- While Tafl runs, a zero-length `config.toml` is read as a save in progress and ignored (an
+  editor may truncate the file before it writes). To return to the built-in defaults, delete
+  the file; an empty file at launch does mean defaults.
 - A memory change an older reader can't decode (for example a new `Action` or
   `NamedPlacement` case) must bump `WindowMemory.fileVersion`.
 - A bare `log` is a zsh builtin. Use `/usr/bin/log`; the subsystem is

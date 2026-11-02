@@ -80,7 +80,7 @@ final class CompositionRoot {
             onInputSourceChanged: { [unowned self] in
                 table = KeyboardLayout27.table()
                 Log.config.notice("Input source changed")
-                configController.reactivate()
+                configController.reparse()
             })
         events.start()
         sessionEvents = events

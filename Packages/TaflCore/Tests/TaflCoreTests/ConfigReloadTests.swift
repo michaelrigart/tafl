@@ -5,6 +5,29 @@ import Testing
     #expect(ConfigReload.step(previous: nil, new: .missing, hasActivationFailures: false) == .apply)
 }
 
+@Test func aReadAfterForgettingTheLastOneIsAppliedAgain() {
+    // An input-source change forgets the read so the same text is parsed against the new layout.
+    #expect(ConfigReload.step(previous: nil, new: .text("gap = 1"), hasActivationFailures: false) == .apply)
+}
+
+@Test func anEmptyFileAtTheFirstReadMeansTheDefaults() {
+    #expect(ConfigReload.step(previous: nil, new: .text(""), hasActivationFailures: false) == .apply)
+}
+
+@Test func anEmptyReadWhileWatchingIsASaveInProgress() {
+    #expect(ConfigReload.step(previous: .text("gap = 1"), new: .text(""), hasActivationFailures: false) == .nothing)
+    #expect(ConfigReload.step(previous: .missing, new: .text(""), hasActivationFailures: true) == .nothing)
+    #expect(ConfigReload.step(previous: .unreadable("x"), new: .text(""), hasActivationFailures: false) == .nothing)
+}
+
+@Test func aShorterNonEmptyFileAfterATruncateIsApplied() {
+    #expect(ConfigReload.step(previous: .text("gap = 10\nstep = 5"), new: .text("gap = 1"), hasActivationFailures: false) == .apply)
+}
+
+@Test func aMissingFileWhileWatchingIsStillTheDefaults() {
+    #expect(ConfigReload.step(previous: .text("gap = 1"), new: .missing, hasActivationFailures: false) == .apply)
+}
+
 @Test func aChangedReadIsApplied() {
     #expect(ConfigReload.step(previous: .text("gap = 1"), new: .text("gap = 2"), hasActivationFailures: false) == .apply)
     #expect(ConfigReload.step(previous: .missing, new: .unreadable("x"), hasActivationFailures: true) == .apply)
