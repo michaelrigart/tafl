@@ -372,6 +372,39 @@ private final class Rig: Sendable {
     await rig.waitForFrame(rightHalfA)
 }
 
+@Test func aLateCreationAnnouncementKeepsWhereTheUserPutTheWindow() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig()
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let found = window(1, frame: start)
+    await rig.fake.configure { $0.windows[found.handle] = found }
+    // The user places the window before its creation is announced.
+    await rig.engine.perform(.leftHalf)
+    var announced = found
+    announced.frame = leftHalfA
+    await rig.emit(.windowCreated(announced))
+    await rig.waitForEvents(1)
+    #expect(await rig.frame() == leftHalfA)
+    #expect(await rig.engine.touched.contains(handle))
+}
+
+@Test func aWindowAQuerySawFirstIsPlacedWhenItsCreationIsAnnounced() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let first = await Rig(store: store)
+    await first.engine.start(config: config(layouts: [desk]))
+    await first.engine.applyLayout(named: "Desk")
+    await first.engine.stop()
+    // The next launch's seed meets the window untouched; its creation is announced later.
+    let found = window(1, frame: start)
+    let rig = await Rig(windows: [found], store: store)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.emit(.windowCreated(found))
+    await rig.waitForFrame(rightHalfA)
+}
+
 @Test func newWindowIsLeftAloneWithoutAnActiveLayout() async {
     let desk = layout("Desk", [slot(.rightHalf)])
     let rig = await Rig()

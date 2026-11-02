@@ -138,8 +138,8 @@ public actor WindowEngine {
     var restartJournal: RestartJournal?
     /// The latest restart; the next one waits for it.
     var restartTask: Task<Void, Never>?
-    /// Windows touched since they were created: moved by someone else, or the target of a user
-    /// action. A title check leaves them where they are.
+    /// Windows touched since Tafl first saw them: moved by someone else, or the target of a user
+    /// action. Their creation placement and title check leave them where they are.
     var touched: Set<WindowHandle> = []
     var eventTask: Task<Void, Never>?
     /// The wait for the quiet period. An input replaces it; the rules run is not part of it.
