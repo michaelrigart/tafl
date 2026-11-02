@@ -78,12 +78,18 @@ actor WindowRegistry {
         return true
     }
 
-    /// Takes back what a catch-up whose claim ended did: the windows it registered go, and the
-    /// ones it marked announced are not.
-    func withdraw(registered: [WindowHandle], announced: [WindowHandle]) {
-        entries.removeAll { registered.contains($0.handle) }
-        for index in entries.indices where announced.contains(entries[index].handle) {
+    /// Takes back announcement marks that were never published.
+    func unannounce(_ handles: [WindowHandle]) {
+        for index in entries.indices where handles.contains(entries[index].handle) {
             entries[index].announced = false
+        }
+    }
+
+    /// Removes registrations their owner made, each only while it is still the same: the same handle
+    /// for the same element.
+    func withdraw(_ registrations: [(handle: WindowHandle, element: AXElementBox)]) {
+        entries.removeAll { entry in
+            registrations.contains { $0.handle == entry.handle && $0.element == entry.element }
         }
     }
 

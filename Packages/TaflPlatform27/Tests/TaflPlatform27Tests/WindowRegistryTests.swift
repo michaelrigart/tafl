@@ -111,12 +111,21 @@ private func guess(_ id: UInt32) -> ResolvedWindowID { ResolvedWindowID(id: id, 
     #expect(await !registry.announce(WindowHandle(pid: 10, windowID: 8, isStable: true)))
 }
 
-@Test func aWithdrawnCatchUpLeavesNoRegistrationOrAnnouncement() async {
+@Test func anUnpublishedAnnouncementCanBeMadeAgain() async {
     let registry = WindowRegistry()
-    let found = await registry.handle(for: box(10), pid: 10, windowID: exact(7))
-    let known = await registry.handle(for: box(11), pid: 10, windowID: exact(8))
-    _ = await registry.announce(known)
-    await registry.withdraw(registered: [found], announced: [known])
+    let handle = await registry.handle(for: box(10), pid: 10, windowID: exact(7))
+    _ = await registry.announce(handle)
+    await registry.unannounce([handle])
+    #expect(await registry.announce(handle))
+}
+
+@Test func onlyTheSameRegistrationIsWithdrawn() async {
+    let registry = WindowRegistry()
+    let mine = await registry.handle(for: box(10), pid: 10, windowID: exact(7))
+    // Another element took the handle since: it is not the registration the owner made.
+    let replaced = await registry.handle(for: box(11), pid: 10, windowID: exact(8))
+    _ = await registry.handle(for: box(12), pid: 10, windowID: exact(8))
+    await registry.withdraw([(mine, box(10)), (replaced, box(11))])
     #expect(await registry.knownHandle(of: box(10)) == nil)
-    #expect(await registry.announce(known))
+    #expect(await registry.knownHandle(of: box(12)) == replaced)
 }

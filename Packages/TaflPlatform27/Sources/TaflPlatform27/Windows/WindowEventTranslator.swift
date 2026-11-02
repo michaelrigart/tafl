@@ -106,6 +106,6 @@ final class WindowEventTranslator: Sendable {
         guard let window = await reader.readTracked(element, pid, resolveID), let app = reader.app(pid) else { return nil }
         let registration = await registry.register(window.element, pid: pid, windowID: window.windowID)
         let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: window.attributes)
-        return WindowCatalog27.Entry(snapshot: snapshot, isNew: registration.isNew)
+        return WindowCatalog27.Entry(snapshot: snapshot, element: window.element, isNew: registration.isNew)
     }
 }

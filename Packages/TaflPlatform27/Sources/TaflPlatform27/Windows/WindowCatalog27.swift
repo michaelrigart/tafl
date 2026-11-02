@@ -6,6 +6,7 @@ import TaflCore
 final class WindowCatalog27: Sendable {
     struct Entry: Sendable, Equatable {
         var snapshot: WindowSnapshot
+        var element: AXElementBox
         /// False when the registry already had the window.
         var isNew: Bool
     }
@@ -39,6 +40,6 @@ final class WindowCatalog27: Sendable {
     func register(_ window: ElementRead, app: AppInfo27) async -> Entry {
         let registration = await registry.register(window.element, pid: app.pid, windowID: window.windowID)
         let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: window.attributes)
-        return Entry(snapshot: snapshot, isNew: registration.isNew)
+        return Entry(snapshot: snapshot, element: window.element, isNew: registration.isNew)
     }
 }

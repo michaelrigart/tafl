@@ -41,10 +41,20 @@ final class WindowObservation27: Sendable {
         case retrying(Task<Void, Never>)
     }
 
+    private struct Claim {
+        var id: Int
+        /// Whether the registration under the claim observes what placement needs; nil while it runs.
+        var observesPlacement: Bool?
+    }
+
     private struct State {
         var isActive = false
         var nextClaim = 0
-        var claims: [Int32: Int] = [:]
+        var claims: [Int32: Claim] = [:]
+        /// Apps whose launch still owes their windows an announcement. A debt outlives a restart of
+        /// observing: whichever registration of the app comes next pays it. It goes when paid, or
+        /// when the app quits.
+        var owed: Set<Int32> = []
     }
 
     private let hub = AXObserverHub()
@@ -89,17 +99,17 @@ final class WindowObservation27: Sendable {
     /// Registers an app that has not been registered in this run. The app is the result when its
     /// events cannot be observed. An app that was still launching gets one more try when it finishes,
     /// and the outcome of that arrives as an event.
-    func observe(_ app: AppInfo27, announcingWindows: Bool = false) async -> UnobservableApp? {
-        if case .unobservable(let unobservable) = await attempt(app, announcingWindows: announcingWindows) { return unobservable }
+    func observe(_ app: AppInfo27) async -> UnobservableApp? {
+        if case .unobservable(let unobservable) = await attempt(app) { return unobservable }
         return nil
     }
 
-    func attempt(_ app: AppInfo27, announcingWindows: Bool = false) async -> Outcome {
-        await claimedAttempt(app, announcingWindows: announcingWindows).outcome
+    func attempt(_ app: AppInfo27) async -> Outcome {
+        await claimedAttempt(app).outcome
     }
 
     /// The outcome, and the claim it was reached under when there is one.
-    private func claimedAttempt(_ app: AppInfo27, announcingWindows: Bool) async -> (outcome: Outcome, claim: Int?) {
+    private func claimedAttempt(_ app: AppInfo27) async -> (outcome: Outcome, claim: Int?) {
         let pid = app.pid
         guard environment.isRunning(pid), let claim = claim(pid) else { return (.observed, nil) }
         // The app may have quit between the check and the claim, after its quit was handled: the claim
@@ -112,31 +122,37 @@ final class WindowObservation27: Sendable {
         if Self.needsRetry(failures), environment.isLaunching(pid) {
             return (.retrying(Task {
                 await self.environment.untilFinishedLaunching(pid)
+                // The app was still launching: its windows are new, and the retry owes them their announcement.
+                _ = self.owe(pid)
                 guard let again = await self.register(app, claim: claim) else { return }
-                if Self.observesPlacement(again) { await self.announceWindows(of: app, claim: claim) }
+                await self.registered(app, claim: claim, failures: again)
                 if !again.isEmpty, self.environment.isRunning(pid) {
                     self.publishUnobservable(Self.unobservable(app, again), claim: claim)
                 }
             }), claim)
         }
-        if announcingWindows, Self.observesPlacement(failures) { await announceWindows(of: app, claim: claim) }
+        await registered(app, claim: claim, failures: failures)
         guard !failures.isEmpty, isLive(pid: pid, claim: claim) else { return (.observed, claim) }
         return (.unobservable(Self.unobservable(app, failures)), claim)
     }
 
-    /// Meets an app a query found: observes it if this run has not.
+    /// Meets an app a query found: observes it if this run has not. A query never announces windows.
     func discover(_ app: AppInfo27) async {
-        await observeReporting(app, announcingWindows: false)
+        await observeReporting(app)
     }
 
+    /// A launch owes the app's windows their announcement, whoever claims the app: when a query
+    /// claimed it first, its registration pays the debt, or the launch does once it has.
     func appLaunched(_ app: AppInfo27) async {
         events.yield(.appLaunched(pid: app.pid, bundleID: app.bundleID))
-        await observeReporting(app, announcingWindows: true)
+        let held = owe(app.pid)
+        await observeReporting(app)
+        if let held, held.observesPlacement == true { await catchUp(app, claim: held.id) }
     }
 
     /// Observes the app and publishes, under its claim, that it cannot be observed when so.
-    private func observeReporting(_ app: AppInfo27, announcingWindows: Bool) async {
-        let attempt = await claimedAttempt(app, announcingWindows: announcingWindows)
+    private func observeReporting(_ app: AppInfo27) async {
+        let attempt = await claimedAttempt(app)
         if case .unobservable(let unobservable) = attempt.outcome, let claim = attempt.claim {
             publishUnobservable(unobservable, claim: claim)
         }
@@ -147,6 +163,7 @@ final class WindowObservation27: Sendable {
         // Under the lock `publish` takes: nothing found under the claim arrives after the quit.
         let wasClaimed = state.withLock { state in
             events.yield(.appQuit(pid: pid))
+            state.owed.remove(pid)
             return state.claims.removeValue(forKey: pid) != nil
         }
         if wasClaimed {
@@ -190,7 +207,7 @@ final class WindowObservation27: Sendable {
         let claim = state.withLock { state -> Int? in
             guard state.isActive, pid != getpid(), state.claims[pid] == nil else { return nil }
             state.nextClaim += 1
-            state.claims[pid] = state.nextClaim
+            state.claims[pid] = Claim(id: state.nextClaim)
             return state.nextClaim
         }
         if claim != nil { translator.reopen(pid: pid) }
@@ -199,12 +216,12 @@ final class WindowObservation27: Sendable {
 
     private func release(pid: Int32, claim: Int) {
         state.withLock { state in
-            if state.claims[pid] == claim { state.claims[pid] = nil }
+            if state.claims[pid]?.id == claim { state.claims[pid] = nil }
         }
     }
 
     private func isCurrent(pid: Int32, claim: Int) -> Bool {
-        state.withLock { $0.isActive && $0.claims[pid] == claim }
+        state.withLock { $0.isActive && $0.claims[pid]?.id == claim }
     }
 
     /// The claim is still held and the process is still there.
@@ -233,10 +250,33 @@ final class WindowObservation27: Sendable {
         }
     }
 
-    /// The windows the app already has when its events start, which no notification will announce:
-    /// each one not yet announced, whoever registered it. When the claim ends meanwhile (the app quit,
-    /// or observing restarted), the catch-up publishes nothing and takes back what it registered.
-    private func announceWindows(of app: AppInfo27, claim: Int) async {
+    /// Owes the app's windows their announcement. The current claim on the app, if any, and what
+    /// its registration observes, taken under the same lock `registered` records it under: one of
+    /// the two sees the other, so the debt is paid.
+    private func owe(_ pid: Int32) -> Claim? {
+        state.withLock { state in
+            state.owed.insert(pid)
+            return state.isActive ? state.claims[pid] : nil
+        }
+    }
+
+    /// Records what the registration under the claim observes, and pays the app's debt when it can.
+    private func registered(_ app: AppInfo27, claim: Int, failures: [String: AXError]) async {
+        let observesPlacement = Self.observesPlacement(failures)
+        let owes = state.withLock { state -> Bool in
+            guard state.isActive, state.claims[app.pid]?.id == claim else { return false }
+            state.claims[app.pid]?.observesPlacement = observesPlacement
+            return observesPlacement && state.owed.contains(app.pid)
+        }
+        if owes { await catchUp(app, claim: claim) }
+    }
+
+    /// Announces the windows the app has, which no notification will: each one not yet announced,
+    /// whoever registered it, which pays the launch's debt. When the claim has ended meanwhile (the
+    /// app quit, or observing restarted) it publishes nothing and takes back only the marks it made.
+    /// Its registrations stay while the app runs, for whoever adopts them; once the app is gone it
+    /// withdraws those it made itself.
+    private func catchUp(_ app: AppInfo27, claim: Int) async {
         let found = await environment.windows(app)
         var fresh: [WindowSnapshot] = []
         if isCurrent(pid: app.pid, claim: claim) {
@@ -244,9 +284,10 @@ final class WindowObservation27: Sendable {
                 if await registry.announce(entry.snapshot.handle) { fresh.append(entry.snapshot) }
             }
         }
-        guard publish(fresh.map(PlatformEvent.windowCreated), pid: app.pid, claim: claim) else {
-            await registry.withdraw(registered: found.filter(\.isNew).map(\.snapshot.handle), announced: fresh.map(\.handle))
-            return
+        if publish(fresh.map(PlatformEvent.windowCreated), pid: app.pid, claim: claim, paying: true) { return }
+        await registry.unannounce(fresh.map(\.handle))
+        if !environment.isRunning(app.pid) {
+            await registry.withdraw(found.filter(\.isNew).map { ($0.snapshot.handle, $0.element) })
         }
     }
 
@@ -257,11 +298,13 @@ final class WindowObservation27: Sendable {
     }
 
     /// Publishes what was found under a claim, only while the claim holds. It takes the lock `appQuit`
-    /// takes, so nothing an ended claim found arrives after the app's quit.
-    private func publish(_ found: [PlatformEvent], pid: Int32, claim: Int) -> Bool {
+    /// takes, so nothing an ended claim found arrives after the app's quit. A catch-up that publishes
+    /// pays the app's debt.
+    private func publish(_ found: [PlatformEvent], pid: Int32, claim: Int, paying: Bool = false) -> Bool {
         state.withLock { state in
-            guard state.isActive, state.claims[pid] == claim else { return false }
+            guard state.isActive, state.claims[pid]?.id == claim else { return false }
             for event in found { events.yield(event) }
+            if paying { state.owed.remove(pid) }
             return true
         }
     }

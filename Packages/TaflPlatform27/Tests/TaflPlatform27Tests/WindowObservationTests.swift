@@ -99,7 +99,7 @@ private struct ObservationHarness {
                         let registration = await registry.register(
                             windowBox(id), pid: app.pid, windowID: ResolvedWindowID(id: id, by: .privateSymbol))
                         let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: catchUpAttributes)
-                        entries.append(WindowCatalog27.Entry(snapshot: snapshot, isNew: registration.isNew))
+                        entries.append(WindowCatalog27.Entry(snapshot: snapshot, element: windowBox(id), isNew: registration.isNew))
                     }
                     return entries
                 }))
@@ -324,7 +324,7 @@ func aCatchUpForAnAppThatQuitMeanwhilePublishesAndKeepsNothing() async {
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aCatchUpOvertakenByARestartPublishesAndKeepsNothing() async {
+func aCatchUpOvertakenByARestartLeavesItsWindowsToTheNewRun() async {
     let (gate, open) = AsyncStream<Void>.makeStream()
     var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001], catchUpGate: gate)
     let observation = harness.observation
@@ -334,8 +334,89 @@ func aCatchUpOvertakenByARestartPublishesAndKeepsNothing() async {
     observation.begin()
     open.yield()
     await launch.value
+    // The stale catch-up published nothing and withdrew nothing: the app still runs.
+    #expect(await harness.registry.knownHandle(of: windowBox(5001)) == foundWindow)
+    // The new run observes the app, adopts the window and owes it its announcement still.
+    let observing = Task { await observation.attempt(launching) }
+    #expect(await waitForCatchUps(harness, 2))
+    open.yield()
+    _ = await observing.value
+    harness.continuation.yield(.reconfigurationEnded)
+    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
+    guard case .windowCreated(let snapshot)? = await harness.next() else {
+        Issue.record("expected the new run to announce the window once")
+        return
+    }
+    #expect(snapshot.handle == foundWindow)
+    #expect(await harness.next() == .reconfigurationEnded)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aLaunchAQueryMetFirstStillAnnouncesItsWindows() async {
+    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
+    // A query claims and registers the app before its launch is handled.
+    await harness.observation.discover(launching)
+    await harness.observation.appLaunched(launching)
+    harness.continuation.yield(.reconfigurationEnded)
+    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
+    guard case .windowCreated(let snapshot)? = await harness.next() else {
+        Issue.record("expected the launch's catch-up to announce the window")
+        return
+    }
+    #expect(snapshot.handle == foundWindow)
+    #expect(await harness.next() == .reconfigurationEnded)
+    #expect(harness.registrations.count == 1)
+}
+
+/// Reads any element as a standard window whose id is the pid the element was made from.
+private let echoReader = WindowReader27(
+    readTracked: { element, _, _ in
+        let id = UInt32(AXWindowAccess.pid(element.element) ?? 0)
+        return ElementRead(element: element, attributes: catchUpAttributes, windowID: ResolvedWindowID(id: id, by: .privateSymbol))
+    },
+    title: { _, _ in "Doc" },
+    app: { pid in AppInfo27(pid: pid, bundleID: "com.example.Slow", name: "Slow", isHidden: false) })
+
+private func createdEvent(_ id: UInt32) -> AXObserverHub.Event {
+    AXObserverHub.Event(pid: 4242, bundleID: nil, notification: kAXWindowCreatedNotification, element: windowBox(id).element)
+}
+
+private func movedEvent(_ id: UInt32) -> AXObserverHub.Event {
+    AXObserverHub.Event(pid: 4242, bundleID: nil, notification: kAXWindowMovedNotification, element: windowBox(id).element)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aWindowTheCatchUpAnnouncedFirstIsNotAnnouncedAgainByItsCreation() async {
+    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
+    let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
+    let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation)
+    var translated = stream.makeAsyncIterator()
+    await harness.observation.appLaunched(launching)
+    translator.enqueue(createdEvent(5001))
+    translator.enqueue(movedEvent(5001))
+    #expect(await translated.next() == .windowMoved(foundWindow))
+    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
+    guard case .windowCreated? = await harness.next() else {
+        Issue.record("expected the catch-up to announce the window")
+        return
+    }
+    translator.closeAll()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aWindowItsCreationAnnouncedFirstIsNotAnnouncedAgainByTheCatchUp() async {
+    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
+    let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
+    let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation)
+    var translated = stream.makeAsyncIterator()
+    translator.enqueue(createdEvent(5001))
+    guard case .windowCreated? = await translated.next() else {
+        Issue.record("expected the creation to be announced")
+        return
+    }
+    await harness.observation.appLaunched(launching)
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
     #expect(await harness.next() == .reconfigurationEnded)
-    #expect(await harness.registry.knownHandle(of: windowBox(5001)) == nil)
+    translator.closeAll()
 }
