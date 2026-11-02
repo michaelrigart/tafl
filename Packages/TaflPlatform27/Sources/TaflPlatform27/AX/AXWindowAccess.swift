@@ -50,6 +50,10 @@ public enum AXWindowAccess {
         copyValue(element, kAXTitleAttribute) as? String
     }
 
+    public static func role(_ element: AXUIElement) -> String? {
+        copyValue(element, kAXRoleAttribute) as? String
+    }
+
     public static func subrole(_ element: AXUIElement) -> String? {
         copyValue(element, kAXSubroleAttribute) as? String
     }
