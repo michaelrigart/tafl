@@ -55,7 +55,7 @@ public enum WriteResult: Equatable, Sendable {
 }
 
 /// Whose a frame read for a window is, as `FrameWriter.observe` decides it.
-public enum Observation: Equatable, Sendable {
+public enum FrameObservation: Equatable, Sendable {
     /// A write for the window is running; the frame was kept and is judged against it.
     case heldForWrite
     /// Within a point of where the window's last write left it.
@@ -169,7 +169,7 @@ public actor FrameWriter {
     /// Decides in one step what a frame read for this window is: `.heldForWrite` while a write
     /// for it runs (the frame is kept and judged against the request), else `.own` when it is
     /// where the window's last write left it, else `.external`.
-    public func observe(_ window: WindowHandle, frame: ScreenRect) -> Observation {
+    public func observe(_ window: WindowHandle, frame: ScreenRect) -> FrameObservation {
         if let request = requests[window] {
             request.observed.append(PendingFrame(frame: frame, part: request.inFlight))
             return .heldForWrite

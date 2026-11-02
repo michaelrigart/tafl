@@ -1,4 +1,4 @@
-import Combine
+import Observation
 import TaflCore
 
 enum SettingsSection: String, CaseIterable, Identifiable {
@@ -32,31 +32,30 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 }
 
 /// What the Settings window shows. The composition root feeds it from the controllers; the views
-/// only read it, because Settings never edits the configuration. It is an `ObservableObject`
-/// because `@Observable` expands to `Observation.…`, which `TaflCore.Observation` shadows in any
-/// file that imports TaflCore.
+/// only read it, because Settings never edits the configuration.
 @MainActor
-final class SettingsModel: ObservableObject {
-    @Published var selection: SettingsSection = .overview
+@Observable
+final class SettingsModel {
+    var selection: SettingsSection = .overview
 
-    @Published var configPath = ""
-    @Published var fileExists = false
-    @Published var status: ConfigStatus = .defaults
-    @Published var config: Config = .defaults
-    @Published var activationFailures: [HotkeyTarget: ActivationFailure] = [:]
-    @Published var activeLayout: String?
-    @Published var table = KeyboardLayoutTable([:])
-    @Published var trusted = false
-    @Published var recentFailures: [String] = []
+    var configPath = ""
+    var fileExists = false
+    var status: ConfigStatus = .defaults
+    var config: Config = .defaults
+    var activationFailures: [HotkeyTarget: ActivationFailure] = [:]
+    var activeLayout: String?
+    var table = KeyboardLayoutTable([:])
+    var trusted = false
+    var recentFailures: [String] = []
 
-    @Published var displays: [Display] = []
-    @Published var tiling: TilingSettings?
-    @Published var capabilities: [CapabilityState] = []
+    var displays: [Display] = []
+    var tiling: TilingSettings?
+    var capabilities: [CapabilityState] = []
 
-    @Published var starterFileError: String?
-    @Published var capturedSnippet: String?
-    @Published var captureNote: String?
-    @Published var diagnosticsCopied = false
+    var starterFileError: String?
+    var capturedSnippet: String?
+    var captureNote: String?
+    var diagnosticsCopied = false
 
     /// The shortcut as the file writes it, in the current layout's characters.
     func shortcutText(for action: Action) -> String {

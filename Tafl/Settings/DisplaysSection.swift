@@ -2,7 +2,7 @@ import SwiftUI
 import TaflCore
 
 struct DisplaysSection: View {
-    @ObservedObject var model: SettingsModel
+    let model: SettingsModel
 
     private var claiming: LayoutDefinition? {
         LayoutPlanner.claiming(model.config.layouts, displays: model.displays)

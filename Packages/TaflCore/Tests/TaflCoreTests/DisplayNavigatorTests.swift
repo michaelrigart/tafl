@@ -91,6 +91,13 @@ struct DisplayNavigatorTests {
         #expect(target(a, .up, [a, c, b]) == "B")
     }
 
+    @Test func aHigherRowComesFirstWhereverItStarts() {
+        // A plain left-to-right sort would put D first.
+        let u = namedDisplay("U", rect(0, -1000, 100, 100), serial: 1)
+        let d = namedDisplay("D", rect(-200, 0, 100, 100), serial: 2)
+        #expect(DisplayNavigator.fallbackOrder([d, u]).map(\.identity.name) == ["U", "D"])
+    }
+
     @Test func rowsFormFromOverlapChains() {
         let a = namedDisplay("A", rect(0, 0, 100, 100), serial: 1)
         let b = namedDisplay("B", rect(100, 90, 100, 100), serial: 2)

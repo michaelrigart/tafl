@@ -22,8 +22,9 @@ them with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` and don't c
 
 ## Where code goes
 
-- `TaflCore` imports only Foundation and TOMLDecoder (exact 0.4.5). No AppKit, SwiftUI,
-  ApplicationServices, Carbon, CoreGraphics-only API, `os` or `#available`.
+- `TaflCore` imports only Foundation, the standard library's Synchronization, and
+  TOMLDecoder (exact 0.4.5). No AppKit, SwiftUI, ApplicationServices, Carbon,
+  CoreGraphics-only API, `os` or `#available`.
 - Private symbols, undocumented attributes and `#available` live only in `TaflPlatform27`.
   Resolve each private symbol at run time with `dlsym`; a missing one becomes a fallback and
   a capability state, never a crash.

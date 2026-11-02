@@ -49,8 +49,21 @@ final class ConfigController {
             reactivate()
             return
         case .apply:
-            break
+            apply(read)
         }
+    }
+
+    /// The keyboard layout changed: parse the last read again against the new table, so a config
+    /// that was invalid under the old layout, or is under the new one, is judged again. The file is
+    /// not read anew: it may be in the middle of a save.
+    func reparse() {
+        switch ConfigReload.reparse(lastRead: lastRead) {
+        case .read: reload()
+        case .parse(let read): apply(read)
+        }
+    }
+
+    private func apply(_ read: ConfigRead) {
         lastRead = read
         state.apply(read, table: table())
         switch state.status {
@@ -66,13 +79,6 @@ final class ConfigController {
         pushToEngine()
         applyLoginItem()
         reactivate()
-    }
-
-    /// The keyboard layout changed: read and parse the file again, so a config that was invalid
-    /// under the old layout, or is under the new one, is judged against the new table.
-    func reparse() {
-        lastRead = nil
-        reload()
     }
 
     /// Sends the engine the configuration in force; the root calls it once the engine has started.

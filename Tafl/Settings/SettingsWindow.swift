@@ -34,7 +34,7 @@ final class SettingsWindow {
 }
 
 private struct SettingsView: View {
-    @ObservedObject var model: SettingsModel
+    @Bindable var model: SettingsModel
     let actions: SettingsActions
 
     var body: some View {

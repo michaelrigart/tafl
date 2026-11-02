@@ -326,6 +326,17 @@ private final class Rig: Sendable {
     ])
 }
 
+@Test func aLayoutWithoutPermissionIsReportedAndMovesNothing() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(windows: [window(1, frame: start)]) { $0.accessibilityGranted = false }
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    await rig.waitForReport { $0 == .failure(.permissionMissing, display: nil) }
+    #expect(rig.reports == [.memory(.fresh), .failure(.permissionMissing, display: nil)])
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.engine.activeLayoutName == nil)
+}
+
 @Test func applyingALayoutReachesAppsWeCannotObserve() async {
     let other = window(2, frame: start, pid: 200, bundleID: "com.b")
     let desk = layout("Work", [slot(.rightHalf, app: "com.b")])

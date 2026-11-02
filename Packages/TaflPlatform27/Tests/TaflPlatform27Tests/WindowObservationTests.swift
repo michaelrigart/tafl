@@ -203,7 +203,8 @@ func anAppThatIsGoneButNotYetQuitIsNeitherRegisteredNorReportedWhenTheWaitEnds()
 
 @Test(.timeLimit(.minutes(1)))
 func aQueryThatMetAnAppBeforeItQuitRegistersAndReportsNothing() async {
-    var harness = ObservationHarness(outcomes: [timeout])
+    // Not launching: a timeout would otherwise start a retry that races the count below.
+    var harness = ObservationHarness(isLaunching: false, outcomes: [timeout])
     harness.isRunning.isSet = false
     await harness.observation.discover(launching)
     harness.continuation.yield(.reconfigurationEnded)

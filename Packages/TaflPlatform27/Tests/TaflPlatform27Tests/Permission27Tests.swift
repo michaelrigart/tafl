@@ -15,7 +15,7 @@ private func collect(_ stream: AsyncStream<Bool>, count: Int) async -> [Bool] {
 }
 
 @MainActor
-@Test func aChangedValueIsEmittedOncePerChange() async {
+@Test(.timeLimit(.minutes(1))) func aChangedValueIsEmittedOncePerChange() async {
     let trusted = Mutex(false)
     let center = NotificationCenter()
     let permission = Permission27(center: center, name: name) { trusted.withLock { $0 } }
@@ -30,7 +30,7 @@ private func collect(_ stream: AsyncStream<Bool>, count: Int) async -> [Bool] {
 }
 
 @MainActor
-@Test func aValueThatTakesEffectAfterTheNotificationIsStillEmitted() async {
+@Test(.timeLimit(.minutes(1))) func aValueThatTakesEffectAfterTheNotificationIsStillEmitted() async {
     let reads = Mutex(0)
     let center = NotificationCenter()
     // Reads: one at creation, one on the notification, one on the next main run-loop turn.
@@ -40,7 +40,7 @@ private func collect(_ stream: AsyncStream<Bool>, count: Int) async -> [Bool] {
 }
 
 @MainActor
-@Test func aNotificationWithoutAChangeEmitsNothingAndTheNextChangeFollows() async {
+@Test(.timeLimit(.minutes(1))) func aNotificationWithoutAChangeEmitsNothingAndTheNextChangeFollows() async {
     let trusted = Mutex(true)
     let center = NotificationCenter()
     let permission = Permission27(center: center, name: name) { trusted.withLock { $0 } }
@@ -51,7 +51,7 @@ private func collect(_ stream: AsyncStream<Bool>, count: Int) async -> [Bool] {
 }
 
 @MainActor
-@Test func theStreamEndsWhenThePermissionObjectGoes() async {
+@Test(.timeLimit(.minutes(1))) func theStreamEndsWhenThePermissionObjectGoes() async {
     var permission: Permission27? = Permission27(center: NotificationCenter(), name: name) { false }
     var changes = permission!.changes.makeAsyncIterator()
     permission = nil

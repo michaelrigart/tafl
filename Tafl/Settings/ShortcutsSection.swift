@@ -2,7 +2,7 @@ import SwiftUI
 import TaflCore
 
 struct ShortcutsSection: View {
-    @ObservedObject var model: SettingsModel
+    let model: SettingsModel
 
     private static let groups: [(title: String, actions: [Action])] = [
         ("Halves", [.leftHalf, .rightHalf, .topHalf, .bottomHalf]),

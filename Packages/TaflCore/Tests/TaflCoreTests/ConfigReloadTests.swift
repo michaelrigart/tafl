@@ -5,11 +5,6 @@ import Testing
     #expect(ConfigReload.step(previous: nil, new: .missing, hasActivationFailures: false) == .apply)
 }
 
-@Test func aReadAfterForgettingTheLastOneIsAppliedAgain() {
-    // An input-source change forgets the read so the same text is parsed against the new layout.
-    #expect(ConfigReload.step(previous: nil, new: .text("gap = 1"), hasActivationFailures: false) == .apply)
-}
-
 @Test func anEmptyFileAtTheFirstReadMeansTheDefaults() {
     #expect(ConfigReload.step(previous: nil, new: .text(""), hasActivationFailures: false) == .apply)
 }
@@ -20,8 +15,24 @@ import Testing
     #expect(ConfigReload.step(previous: .unreadable("x"), new: .text(""), hasActivationFailures: false) == .nothing)
 }
 
-@Test func aShorterNonEmptyFileAfterATruncateIsApplied() {
-    #expect(ConfigReload.step(previous: .text("gap = 10\nstep = 5"), new: .text("gap = 1"), hasActivationFailures: false) == .apply)
+@Test func aFileTruncatedAndWrittenShorterIsAppliedOnceWritten() {
+    let long = ConfigRead.text("gap = 10\nstep = 5")
+    // The truncate is a save in progress, so the long read stays the last one; the write that
+    // follows is shorter than the file was and is applied, not taken for another truncate.
+    #expect(ConfigReload.step(previous: long, new: .text(""), hasActivationFailures: false) == .nothing)
+    #expect(ConfigReload.step(previous: long, new: .text("g"), hasActivationFailures: false) == .apply)
+}
+
+@Test func anInputSourceChangeDuringASaveParsesTheLastReadAgain() {
+    let last = ConfigRead.text("gap = 1")
+    // The file is empty in the middle of a save: the read is ignored, so the last read stands
+    // and is what the new layout table parses, not the empty file.
+    #expect(ConfigReload.step(previous: last, new: .text(""), hasActivationFailures: false) == .nothing)
+    #expect(ConfigReload.reparse(lastRead: last) == .parse(last))
+}
+
+@Test func anInputSourceChangeBeforeAnyReadReadsTheFile() {
+    #expect(ConfigReload.reparse(lastRead: nil) == .read)
 }
 
 @Test func aMissingFileWhileWatchingIsStillTheDefaults() {

@@ -3,7 +3,7 @@ import SwiftUI
 import TaflCore
 
 struct OverviewSection: View {
-    @ObservedObject var model: SettingsModel
+    let model: SettingsModel
     let actions: SettingsActions
 
     private var issues: [String] {

@@ -387,6 +387,10 @@ public actor WindowEngine {
     /// A layout run that a reconfiguration stops reports nothing and does not become active. A run
     /// that a newer layout application overtook still reports, but leaves the active layout to it.
     public func applyLayout(named name: String) async {
+        guard await platform.isAccessibilityGranted() else {
+            report(.failure(.permissionMissing, display: nil))
+            return
+        }
         guard let definition = config.layouts.first(where: { $0.name == name }) else { return }
         let application = layoutApplications.begin()
         // Taken before anything is read: a reconfiguration that begins during the reads stops the run.

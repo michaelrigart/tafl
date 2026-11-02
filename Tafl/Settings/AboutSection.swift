@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct AboutSection: View {
-    @ObservedObject var model: SettingsModel
+    let model: SettingsModel
     let actions: SettingsActions
 
     private var version: String {

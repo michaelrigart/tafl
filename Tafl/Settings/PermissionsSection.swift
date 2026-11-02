@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct PermissionsSection: View {
-    @ObservedObject var model: SettingsModel
+    let model: SettingsModel
     let actions: SettingsActions
 
     var body: some View {

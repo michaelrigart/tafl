@@ -2,7 +2,7 @@ import SwiftUI
 import TaflCore
 
 struct LayoutsSection: View {
-    @ObservedObject var model: SettingsModel
+    let model: SettingsModel
     let actions: SettingsActions
 
     var body: some View {

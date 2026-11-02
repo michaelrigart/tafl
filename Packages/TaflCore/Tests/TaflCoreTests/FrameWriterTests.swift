@@ -647,13 +647,15 @@ private func writeReturned(_ rig: Rig, timeout: Duration = .seconds(2)) async ->
     return true
 }
 
-@Test func aRefusedPositionIsNotReapplied() async {
+@Test(.timeLimit(.minutes(1))) func aRefusedPositionIsNotReapplied() async {
     // The size also falls short, which alone would reapply; a refused position is not Rectangle's case.
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25)) {
         steppedSize($0)
         $0.positionRule = { window, _ in window.frame.origin }
     }
     let task = rig.start(steppedJob())
+    // Once the session has ended the write has registered, so a reapply wait would show as writing.
+    await rig.fake.waitUntil { $0.callLog.last == "end" }
     let returned = await writeReturned(rig)
     if !returned { await rig.clock.advance(by: .milliseconds(25)) }
     #expect(returned)
