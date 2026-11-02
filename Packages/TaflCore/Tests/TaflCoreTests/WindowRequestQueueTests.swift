@@ -12,6 +12,17 @@ private final class Flag: Sendable {
     var isSet: Bool { value.withLock { $0 } }
 }
 
+private func waitForRequests(_ queue: WindowRequestQueue, _ count: Int) async {
+    let start = ContinuousClock.now
+    while await queue.requestCount < count {
+        if start.duration(to: ContinuousClock.now) > .seconds(2) {
+            Issue.record("Timed out waiting for \(count) requests")
+            return
+        }
+        await Task.yield()
+    }
+}
+
 @Test func newerRequestWaitsForTheCallInFlight() async throws {
     let clock = ManualClock()
     let fake = FakePlatform(clock: clock, displays: [displayA])
@@ -43,11 +54,15 @@ private final class Flag: Sendable {
 @Test func reapplyDroppedByNewerRequest() async {
     let clock = ManualClock()
     let fake = FakePlatform(clock: clock, displays: [displayA, displayB])
-    await fake.configure { $0.windows[handle] = window(1, frame: rect(100, 100, 400, 300)) }
+    await fake.configure {
+        $0.windows[handle] = window(1, frame: rect(100, 100, 400, 300))
+        // The app sizes in steps of 20, so the first pass ends short and a reapply is pending.
+        $0.sizeRule = { _, asked in ScreenSize(width: (asked.width / 20).rounded(.down) * 20, height: asked.height) }
+    }
     let writer = FrameWriter(platform: fake, clock: clock, adjustments: [], reapplyDelay: .milliseconds(25))
     let queue = WindowRequestQueue()
     let job = WriteJob(
-        window: handle, appName: "Example", start: rect(100, 100, 400, 300), target: rect(1000, 0, 1200, 900),
+        window: handle, appName: "Example", start: rect(100, 100, 400, 300), target: rect(1000, 0, 1210, 900),
         targetVisible: displayB.visibleFrame, crossesDisplays: true, minSize: nil, displays: [displayA, displayB]
     )
 
@@ -57,7 +72,9 @@ private final class Flag: Sendable {
 
     #expect(await first.value == nil)
     #expect(await second.value == 42)
-    #expect(await fake.callLog == ["begin", "size 1200x900", "read", "position 1000,0", "read", "end"])
+    #expect(await fake.callLog == [
+        "begin", "size 1210x900", "read", "position 1000,0", "read", "size 1210x900", "read", "end",
+    ])
 }
 
 @Test func aFinishedRequestReturnsItsValue() async {
@@ -82,4 +99,32 @@ private final class Flag: Sendable {
     #expect(await queue.run(other) { "other" } == "other")
     release.set()
     #expect(await first.value == "first")
+}
+
+@Test func aWaitingRequestCancelledBeforeItsBodyRunsReturnsNilAndNeverRuns() async {
+    let queue = WindowRequestQueue()
+    let started = Flag()
+    let release = Flag()
+    let secondRan = Flag()
+
+    // The first request holds the window until released, but only after a newer request has cancelled it.
+    let first = Task {
+        await queue.run(handle) {
+            started.set()
+            while !Task.isCancelled { await Task.yield() }
+            while !release.isSet { await Task.yield() }
+            return "first"
+        }
+    }
+    #expect(await pollUntil { started.isSet })
+    let second = Task { await queue.run(handle) { secondRan.set(); return "second" } }
+    await waitForRequests(queue, 2)
+    let third = Task { await queue.run(handle) { "third" } }
+    await waitForRequests(queue, 3)
+    release.set()
+
+    #expect(await first.value == nil)
+    #expect(await second.value == nil)
+    #expect(await third.value == "third")
+    #expect(!secondRan.isSet)
 }

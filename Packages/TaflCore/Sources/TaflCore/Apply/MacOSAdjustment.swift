@@ -28,13 +28,15 @@ public struct MacOSAdjustment: Sendable {
         self.explains = explains
     }
 
-    /// After a position write moved the window onto another display, each dimension of the
+    /// A position write moved the window onto another display, and each dimension of the
     /// size became `min(before, that display's visible size)`.
     public static let sizeClampedToDisplay = MacOSAdjustment(name: "sizeClampedToDisplay") { adjustment in
         guard adjustment.written == .position,
-              let display = DisplayLocator.display(containing: adjustment.after, in: adjustment.displays)
+              let before = DisplayLocator.display(containing: adjustment.before, in: adjustment.displays),
+              let after = DisplayLocator.display(containing: adjustment.after, in: adjustment.displays),
+              before != after
         else { return false }
-        let visible = display.visibleFrame.size
+        let visible = after.visibleFrame.size
         return abs(adjustment.after.width - min(adjustment.before.width, visible.width)) <= 1
             && abs(adjustment.after.height - min(adjustment.before.height, visible.height)) <= 1
     }

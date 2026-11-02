@@ -46,3 +46,49 @@ import Testing
     let origin = EdgeAligner.origin(for: rect(0, 25, 500, 775), actualSize: ScreenSize(width: 1200, height: 775), visible: v)
     #expect(origin == ScreenPoint(x: 0, y: 25))
 }
+
+@Test func aFrameLeftOfTheVisibleFrameIsPulledBackToItsLeftEdge() {
+    let origin = EdgeAligner.origin(
+        for: rect(-100, 25, 300, 775), actualSize: ScreenSize(width: 200, height: 775), visible: v, edges: .left
+    )
+    #expect(origin == ScreenPoint(x: 0, y: 25))
+}
+
+@Test func aFramePastTheBottomIsPulledUp() {
+    let origin = EdgeAligner.origin(
+        for: rect(0, 600, 1000, 400), actualSize: ScreenSize(width: 1000, height: 300), visible: v, edges: .top
+    )
+    #expect(origin == ScreenPoint(x: 0, y: 500))
+}
+
+@Test func aFrameAboveTheTopIsPushedDown() {
+    let origin = EdgeAligner.origin(
+        for: rect(0, -100, 1000, 400), actualSize: ScreenSize(width: 1000, height: 300), visible: v, edges: .top
+    )
+    #expect(origin == ScreenPoint(x: 0, y: 25))
+}
+
+@Test func theGapKeepsTheFrameOffTheRightAndTopEdgesOnly() {
+    // Rectangle's `WindowFrameBounds.constrained`: the gap applies where the frame is pushed in from the
+    // right or from the top.
+    let right = EdgeAligner.origin(
+        for: rect(900, 25, 300, 775), actualSize: ScreenSize(width: 200, height: 775), visible: v, edges: .left, gap: 8
+    )
+    #expect(right == ScreenPoint(x: 792, y: 25))
+    let top = EdgeAligner.origin(
+        for: rect(0, 0, 1000, 400), actualSize: ScreenSize(width: 1000, height: 300), visible: v, edges: .top, gap: 8
+    )
+    #expect(top == ScreenPoint(x: 0, y: 33))
+    let left = EdgeAligner.origin(
+        for: rect(-100, 25, 300, 775), actualSize: ScreenSize(width: 200, height: 775), visible: v, edges: .left, gap: 8
+    )
+    #expect(left == ScreenPoint(x: 0, y: 25))
+}
+
+@Test func givenEdgesReplaceTheOnesTheTargetTouches() {
+    // The target touches the left edge, but the cell it came from was the right half.
+    let origin = EdgeAligner.origin(
+        for: rect(0, 25, 500, 775), actualSize: ScreenSize(width: 400, height: 775), visible: v, edges: .right
+    )
+    #expect(origin == ScreenPoint(x: 100, y: 25))
+}

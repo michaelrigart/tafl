@@ -87,13 +87,20 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
 
 @Test func sizeThenPositionAcrossDisplays() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25))
-    let task = rig.start(crossJob())
-    await rig.clock.waitForSleepers(1)
+    let result = await rig.start(crossJob()).value
+    #expect(result == .placed(crossTarget))
     #expect(await rig.log == crossLog)
+    // Landing on the target needs no reapply.
+    #expect(rig.clock.sleeperCount == 0)
+}
 
-    await rig.clock.advance(by: .milliseconds(25))
-    #expect(await task.value == .placed(crossTarget))
-    #expect(await rig.log == crossLog + ["begin", "read", "end"])
+@Test func aFirstPassWithinAPointOfTheTargetIsNotReapplied() async {
+    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25)) {
+        $0.sizeRule = { _, asked in ScreenSize(width: asked.width - 1, height: asked.height) }
+    }
+    let result = await rig.start(crossJob()).value
+    #expect(result == .placed(rect(1000, 0, 1199, 900)))
+    #expect(rig.clock.sleeperCount == 0)
 }
 
 @Test func theReapplyWritesWhatTheFirstPassFellShortOf() async {
@@ -149,6 +156,16 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
     }
     _ = await rig.start(job(start: start, target: rect(0, 25, 500, 775), minSize: ScreenSize(width: 600, height: 100))).value
     #expect(await rig.log.filter { $0.hasPrefix("size") } == ["size 500x775", "size 600x775"])
+}
+
+@Test func noRetryWhenTheSizeAlreadyIsTheMinimumTheAppAllows() async {
+    let start = rect(0, 25, 300, 300)
+    let rig = await Rig(start: start) {
+        $0.sizeRule = { _, asked in ScreenSize(width: max(asked.width, 600), height: asked.height) }
+    }
+    let result = await rig.start(job(start: start, target: rect(0, 25, 500, 775), minSize: ScreenSize(width: 600, height: 100))).value
+    #expect(result == .sizeRefused(rect(0, 25, 600, 775)))
+    #expect(await rig.log == ["begin", "size 500x775", "read", "end"])
 }
 
 @Test func refusedSizeIsAlignedAndReported() async {
@@ -293,7 +310,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 
 // MARK: Reapply
 
-@Test func reapplyDroppedWhenMoved() async {
+@Test func reapplyMovedWindowIsAnExternalChange() async {
     // Left alone the reapply would write the size again, so a write after the first session shows it ran.
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob())
@@ -301,7 +318,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     await rig.fake.configure { $0.windows[handle]?.frame.origin = ScreenPoint(x: 1100, y: 50) }
 
     await rig.clock.advance(by: .milliseconds(25))
-    #expect(await task.value == .placed(steppedAchieved))
+    #expect(await task.value == .interrupted)
     #expect(await rig.log == steppedLog + ["begin", "read", "end"])
 }
 
@@ -316,38 +333,244 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     gate.open()
 
     #expect(await task.value == .placed(steppedAchieved))
-    #expect(await rig.log == steppedLog + ["begin", "read", "end"])
+    #expect(await rig.log == steppedLog + ["begin", "end"])
 }
 
 @Test func reapplyDroppedOnReconfiguration() async {
-    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25))
-    let task = rig.start(crossJob())
+    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
+    let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
     await rig.writer.reconfigurationBegan()
 
     await rig.clock.advance(by: .milliseconds(25))
-    #expect(await task.value == .placed(crossTarget))
-    #expect(await rig.log == crossLog)
+    #expect(await task.value == .placed(steppedAchieved))
+    #expect(await rig.log == steppedLog)
 }
 
 @Test func reapplyDroppedByCancellation() async {
-    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25))
-    let task = rig.start(crossJob())
+    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
+    let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
     task.cancel()
 
-    #expect(await task.value == .placed(crossTarget))
-    #expect(await rig.log == crossLog)
+    #expect(await task.value == .placed(steppedAchieved))
+    #expect(await rig.log == steppedLog)
 }
 
 @Test func beforeFirstWriteRunsOnceBeforeTheFirstWrite() async {
-    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25))
+    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let seen = Recorder()
-    let task = rig.start(crossJob()) { [fake = rig.fake] in seen.record(await fake.callLog) }
+    let task = rig.start(steppedJob()) { [fake = rig.fake] in seen.record(await fake.callLog) }
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(25))
     _ = await task.value
     #expect(seen.all == [["begin"]])
+}
+
+// MARK: Observations over the whole request
+
+@Test func isWritingThroughTheReapplyWait() async {
+    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
+    let task = rig.start(steppedJob())
+    await rig.clock.waitForSleepers(1)
+    #expect(await rig.writer.isWriting(handle))
+
+    await rig.clock.advance(by: .milliseconds(25))
+    _ = await task.value
+    #expect(await !rig.writer.isWriting(handle))
+}
+
+@Test func anObservationAtTheAchievedFrameDuringTheWaitKeepsTheReapply() async {
+    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
+    let task = rig.start(steppedJob())
+    await rig.clock.waitForSleepers(1)
+    await rig.writer.observed(handle, frame: steppedAchieved)
+
+    await rig.clock.advance(by: .milliseconds(25))
+    #expect(await task.value == .placed(steppedAchieved))
+    #expect(await rig.log.suffix(7) == ["begin", "read", "size 1210x900", "read", "size 1210x900", "read", "end"])
+}
+
+@Test func anObservationElsewhereDuringTheWaitDropsTheReapply() async {
+    let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
+    let task = rig.start(steppedJob())
+    await rig.clock.waitForSleepers(1)
+    await rig.writer.observed(handle, frame: rect(1100, 50, 1200, 900))
+
+    await rig.clock.advance(by: .milliseconds(25))
+    #expect(await task.value == .interrupted)
+    #expect(await rig.log == steppedLog)
+}
+
+@Test func anObservationDuringEndIsJudged() async {
+    let rig = await Rig(start: crossStart)
+    let gate = await rig.fake.pause(beforeCall: 5)
+    let task = rig.start(crossJob())
+    #expect(await pollUntil { gate.waiterCount == 1 })
+    #expect(await rig.writer.isWriting(handle))
+    await rig.writer.observed(handle, frame: rect(1500, 700, 1200, 900))
+    gate.open()
+
+    #expect(await task.value == .interrupted)
+}
+
+@Test func anObservationOfTheAchievedFrameDuringEndPasses() async {
+    let rig = await Rig(start: crossStart)
+    let gate = await rig.fake.pause(beforeCall: 5)
+    let task = rig.start(crossJob())
+    #expect(await pollUntil { gate.waiterCount == 1 })
+    await rig.writer.observed(handle, frame: crossTarget)
+    gate.open()
+
+    #expect(await task.value == .placed(crossTarget))
+}
+
+@Test func anAttemptWithNothingToWriteStillJudgesWhatWasObserved() async {
+    let target = rect(0, 25, 500, 775)
+    let rig = await Rig(start: target)
+    let gate = await rig.fake.pause(beforeCall: 0)
+    let task = rig.start(job(start: target, target: target))
+    #expect(await pollUntil { gate.waiterCount == 1 })
+    await rig.writer.observed(handle, frame: rect(300, 300, 500, 775))
+    gate.open()
+
+    #expect(await task.value == .interrupted)
+    #expect(await rig.log == ["begin", "end"])
+}
+
+@Test func theWriterRemembersTheFrameItLeftTheWindowAt() async {
+    let rig = await Rig(start: crossStart)
+    #expect(await !rig.writer.isOwnFrame(handle, frame: crossTarget))
+
+    #expect(await rig.start(crossJob()).value == .placed(crossTarget))
+    #expect(await !rig.writer.isWriting(handle))
+    #expect(await rig.writer.isOwnFrame(handle, frame: crossTarget))
+    #expect(await rig.writer.isOwnFrame(handle, frame: rect(1000.5, 0, 1200, 899.5)))
+    #expect(await !rig.writer.isOwnFrame(handle, frame: rect(1002, 0, 1200, 900)))
+}
+
+@Test func theRememberedFrameIsForgottenWhenTheNextWriteStarts() async {
+    let rig = await Rig(start: crossStart)
+    _ = await rig.start(crossJob()).value
+    let gate = await rig.fake.pause(beforeCall: 6)
+    let again = job(start: crossTarget, target: crossStart, crosses: true)
+    let task = rig.start(again)
+    #expect(await pollUntil { gate.waiterCount == 1 })
+    #expect(await !rig.writer.isOwnFrame(handle, frame: crossTarget))
+    gate.open()
+    _ = await task.value
+}
+
+// MARK: The first-write callback
+
+private enum During: CaseIterable {
+    case cancel, reconfigure, externalMove, unchangedStart
+}
+
+@Test(arguments: During.allCases)
+private func aChangeDuringTheFirstWriteCallbackIsJudgedBeforeTheWrite(_ during: During) async {
+    let rig = await Rig(start: crossStart)
+    let entered = Counter()
+    let release = Counter()
+    let task = rig.start(crossJob()) {
+        _ = entered.next()
+        while release.count == 0 { await Task.yield() }
+    }
+    #expect(await pollUntil { entered.count == 1 })
+    switch during {
+    case .cancel: task.cancel()
+    case .reconfigure: await rig.writer.reconfigurationBegan()
+    case .externalMove: await rig.writer.observed(handle, frame: rect(400, 400, 400, 300))
+    case .unchangedStart: await rig.writer.observed(handle, frame: crossStart)
+    }
+    _ = release.next()
+
+    let result = await task.value
+    switch during {
+    case .cancel, .reconfigure:
+        #expect(result == .cancelled(lastVerified: nil))
+        #expect(await rig.log == ["begin", "end"])
+    case .externalMove:
+        #expect(result == .interrupted)
+        #expect(await rig.log == ["begin", "end"])
+    case .unchangedStart:
+        #expect(result == .placed(crossTarget))
+        #expect(await rig.log == crossLog)
+    }
+}
+
+// MARK: Placing with the size asked for
+
+/// A window is limited to the room left on the display holding its origin (AppKit's screen constraint).
+private let screenLimited: @Sendable (isolated FakePlatform) -> Void = {
+    $0.sizeRule = { window, asked in
+        let visible = window.frame.origin.x >= 1000 ? bVisible : v
+        return ScreenSize(
+            width: min(asked.width, visible.maxX - window.frame.origin.x),
+            height: min(asked.height, visible.maxY - window.frame.origin.y)
+        )
+    }
+}
+
+/// A size write is limited to the visible size of the display holding the window's origin.
+private let displayLimited: @Sendable (isolated FakePlatform) -> Void = {
+    $0.sizeRule = { window, asked in
+        let visible = window.frame.origin.x >= 1000 ? bVisible : v
+        return ScreenSize(width: min(asked.width, visible.width), height: min(asked.height, visible.height))
+    }
+}
+
+@Test(arguments: [rect(1000, 0, 1000, 1550), rect(1000, 0, 2000, 1550)])
+func aLimitedSizeIsPositionedAsIfItWereTheSizeAskedFor(target: ScreenRect) async {
+    // Positioned with the size it came back with, the window would sit in the middle of the taller
+    // display and the next size write would be cut off by the room left below it.
+    for configure in [screenLimited, displayLimited] {
+        let rig = await Rig(start: crossStart, configure: configure)
+        let result = await rig.start(job(start: crossStart, target: target, visible: bVisible, crosses: true)).value
+        let size = "size \(Int(target.width))x\(Int(target.height))"
+        #expect(result == .placed(target))
+        #expect(await rig.log == ["begin", size, "read", "position 1000,0", "read", size, "read", "end"])
+    }
+}
+
+// MARK: Edges and gaps
+
+@Test func aGapAndAGivenEdgeKeepAWindowThatKeptItsSizeAgainstTheCell() async {
+    // The left-half cell with an 8-point gap: the target sits 8 points in, so it touches no edge of the
+    // visible frame, yet the window stays against the cell's left edge.
+    let start = rect(8, 33, 300, 300)
+    let target = rect(8, 33, 492, 759)
+    let capped: @Sendable (isolated FakePlatform) -> Void = {
+        $0.sizeRule = { _, asked in ScreenSize(width: min(asked.width, 400), height: asked.height) }
+    }
+    var gapped = job(start: start, target: target)
+    gapped.alignment = [.left, .top, .bottom]
+    gapped.gap = 8
+    let rig = await Rig(start: start, configure: capped)
+    #expect(await rig.start(gapped).value == .sizeRefused(rect(8, 33, 400, 759)))
+
+    // Without the cell's edges the target is taken to touch none, and the window is centred.
+    let centred = await Rig(start: start, configure: capped)
+    #expect(await centred.start(job(start: start, target: target)).value == .sizeRefused(rect(54, 33, 400, 759)))
+}
+
+// MARK: Planned epoch
+
+@Test func aWriteFromAnEarlierReconfigurationEpochNeverBegins() async {
+    let rig = await Rig(start: crossStart)
+    #expect(await rig.writer.epoch == 0)
+    await rig.writer.reconfigurationBegan()
+    #expect(await rig.writer.epoch == 1)
+
+    var stale = crossJob()
+    stale.plannedEpoch = 0
+    #expect(await rig.start(stale).value == .cancelled(lastVerified: nil))
+    #expect(await rig.log == [])
+    #expect(await !rig.writer.isWriting(handle))
+
+    var current = crossJob()
+    current.plannedEpoch = 1
+    #expect(await rig.start(current).value == .placed(crossTarget))
 }
 
 // MARK: Failures and exits

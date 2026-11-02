@@ -10,14 +10,16 @@ public actor WindowRequestQueue {
     }
 
     private var entries: [WindowHandle: Entry] = [:]
-    private var nextID = 0
+    /// How many requests have been made.
+    private(set) var requestCount = 0
 
     public init() {}
 
-    /// Returns nil when a newer request for the window cancelled this one before it finished.
+    /// Returns nil when a newer request for the window cancelled this one, even if the body had
+    /// finished by then.
     public func run<T: Sendable>(_ window: WindowHandle, _ body: @Sendable @escaping () async -> T) async -> T? {
-        let id = nextID
-        nextID += 1
+        let id = requestCount
+        requestCount += 1
         let previous = entries[window]
         previous?.cancel()
 

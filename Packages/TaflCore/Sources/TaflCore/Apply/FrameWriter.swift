@@ -9,6 +9,13 @@ public struct WriteJob: Sendable {
     public var crossesDisplays: Bool
     public var minSize: ScreenSize?
     public var displays: [Display]
+    /// The edges of the placement, before gaps, that a window kept at its own size is aligned
+    /// to. Empty derives them from the target touching `targetVisible`.
+    public var alignment: AlignmentEdges
+    public var gap: Double
+    /// The reconfiguration epoch this job was planned in; a write started in a later one is
+    /// cancelled before it begins.
+    public var plannedEpoch: Int?
 
     public init(
         window: WindowHandle,
@@ -18,7 +25,10 @@ public struct WriteJob: Sendable {
         targetVisible: ScreenRect,
         crossesDisplays: Bool,
         minSize: ScreenSize?,
-        displays: [Display]
+        displays: [Display],
+        alignment: AlignmentEdges = [],
+        gap: Double = 0,
+        plannedEpoch: Int? = nil
     ) {
         self.window = window
         self.appName = appName
@@ -28,6 +38,9 @@ public struct WriteJob: Sendable {
         self.crossesDisplays = crossesDisplays
         self.minSize = minSize
         self.displays = displays
+        self.alignment = alignment
+        self.gap = gap
+        self.plannedEpoch = plannedEpoch
     }
 }
 
@@ -56,114 +69,41 @@ public actor FrameWriter {
         var part: WritePart?
     }
 
-    private struct WindowState {
+    /// Everything one `write` knows about its window, from entry to return.
+    private final class Request {
+        let job: WriteJob
+        let startEpoch: Int
+        /// Frames observed since the last check, kept across sessions.
+        var observed: [Observation] = []
+        /// The last frame read back that passed its check, in any session.
+        var lastOwn: ScreenRect?
+        // The current session's.
         var expected: ScreenRect
         var inFlight: WritePart?
-        var observed: [Observation] = []
         var lastVerified: ScreenRect?
         var awaitingFirstWrite = true
+
+        init(job: WriteJob, startEpoch: Int) {
+            self.job = job
+            self.startEpoch = startEpoch
+            expected = job.start
+        }
+
+        func beginSession(from start: ScreenRect) {
+            expected = start
+            inFlight = nil
+            lastVerified = nil
+            awaitingFirstWrite = true
+        }
+    }
+
+    private struct Context {
+        var request: Request
+        var session: any WriteSession
     }
 
     private struct Stop: Error {
         var result: WriteResult
-    }
-
-    private let platform: any WindowPlatform
-    private let clock: any TaflClock
-    private let adjustments: [MacOSAdjustment]
-    private let reapplyDelay: Duration?
-    private var epoch = 0
-    private var states: [WindowHandle: WindowState] = [:]
-
-    public init(
-        platform: any WindowPlatform,
-        clock: any TaflClock,
-        adjustments: [MacOSAdjustment],
-        reapplyDelay: Duration? = .milliseconds(25)
-    ) {
-        self.platform = platform
-        self.clock = clock
-        self.adjustments = adjustments
-        self.reapplyDelay = reapplyDelay
-    }
-
-    public func write(_ job: WriteJob, beforeFirstWrite: @Sendable () async -> Void) async -> WriteResult {
-        let startEpoch = epoch
-        let first = await attempt(job, start: job.start, startEpoch: startEpoch, reapplying: nil, beforeFirstWrite: beforeFirstWrite)
-        guard job.crossesDisplays, let delay = reapplyDelay else { return first }
-        let achieved: ScreenRect
-        switch first {
-        case .placed(let frame), .sizeRefused(let frame): achieved = frame
-        default: return first
-        }
-        do {
-            try await clock.sleep(for: delay)
-        } catch {
-            return first
-        }
-        guard !Task.isCancelled, epoch == startEpoch else { return first }
-        return await attempt(job, start: achieved, startEpoch: startEpoch, reapplying: first, beforeFirstWrite: {})
-    }
-
-    /// Records a frame read while a request writes this window; ignored otherwise.
-    public func observed(_ window: WindowHandle, frame: ScreenRect) {
-        guard var state = states[window] else { return }
-        state.observed.append(Observation(frame: frame, part: state.inFlight))
-        states[window] = state
-    }
-
-    public func isWriting(_ window: WindowHandle) -> Bool {
-        states[window] != nil
-    }
-
-    public func reconfigurationBegan() {
-        epoch += 1
-    }
-
-    // MARK: A session
-
-    /// One session, from `beginWriting` to `end()`. A reapply (`reapplying` is the earlier
-    /// result) first reads the frame, and gives the earlier result back unless the window is
-    /// still where that result left it.
-    private func attempt(
-        _ job: WriteJob,
-        start: ScreenRect,
-        startEpoch: Int,
-        reapplying earlier: WriteResult?,
-        beforeFirstWrite: @Sendable () async -> Void
-    ) async -> WriteResult {
-        states[job.window] = WindowState(expected: start)
-        defer { states[job.window] = nil }
-
-        let session: any WriteSession
-        switch await platform.beginWriting(job.window) {
-        case .failure(let failure): return earlier ?? .failed(failure, lastVerified: nil)
-        case .success(let opened): session = opened
-        }
-
-        var result: WriteResult
-        if let earlier, !(await isStillAt(start, session)) {
-            result = earlier
-        } else {
-            let context = Context(job: job, session: session, startEpoch: startEpoch)
-            result = await sequence(context, start: start, beforeFirstWrite: beforeFirstWrite)
-            if let earlier, result == .cancelled(lastVerified: nil) { result = earlier }
-        }
-        await session.end()
-        return result
-    }
-
-    private func isStillAt(_ frame: ScreenRect, _ session: any WriteSession) async -> Bool {
-        guard case .success(let read) = await session.readFrame() else { return false }
-        return read.isClose(to: frame, within: Self.tolerance)
-    }
-
-    // MARK: The write sequence
-
-    private struct Context: Sendable {
-        var job: WriteJob
-        var session: any WriteSession
-        var startEpoch: Int
     }
 
     private enum Write {
@@ -178,13 +118,128 @@ public actor FrameWriter {
         }
     }
 
-    private func sequence(
-        _ context: Context,
+    private let platform: any WindowPlatform
+    private let clock: any TaflClock
+    private let adjustments: [MacOSAdjustment]
+    private let reapplyDelay: Duration?
+    private var requests: [WindowHandle: Request] = [:]
+    private var achieved: [WindowHandle: ScreenRect] = [:]
+
+    /// Bumped when a display reconfiguration begins; a write that started earlier is cancelled.
+    public private(set) var epoch = 0
+
+    public init(
+        platform: any WindowPlatform,
+        clock: any TaflClock,
+        adjustments: [MacOSAdjustment],
+        reapplyDelay: Duration? = .milliseconds(25)
+    ) {
+        self.platform = platform
+        self.clock = clock
+        self.adjustments = adjustments
+        self.reapplyDelay = reapplyDelay
+    }
+
+    public func write(_ job: WriteJob, beforeFirstWrite: @Sendable () async -> Void) async -> WriteResult {
+        if let planned = job.plannedEpoch, planned != epoch { return .cancelled(lastVerified: nil) }
+        let request = Request(job: job, startEpoch: epoch)
+        requests[job.window] = request
+        achieved[job.window] = nil
+        let result = await run(request, beforeFirstWrite)
+        requests[job.window] = nil
+        achieved[job.window] = result.frame ?? request.lastOwn
+        return result
+    }
+
+    /// Records a frame read while a request writes this window; ignored otherwise.
+    public func observed(_ window: WindowHandle, frame: ScreenRect) {
+        guard let request = requests[window] else { return }
+        request.observed.append(Observation(frame: frame, part: request.inFlight))
+    }
+
+    /// True from the start of a `write` for this window until it returns, the reapply wait included.
+    public func isWriting(_ window: WindowHandle) -> Bool {
+        requests[window] != nil
+    }
+
+    /// True when the frame is within a point of where the window's last `write` left it, until
+    /// that window's next `write`.
+    public func isOwnFrame(_ window: WindowHandle, frame: ScreenRect) -> Bool {
+        guard let own = achieved[window] else { return false }
+        return !differs(own, frame)
+    }
+
+    public func reconfigurationBegan() {
+        epoch += 1
+    }
+
+    // MARK: The request
+
+    private func run(_ request: Request, _ beforeFirstWrite: @Sendable () async -> Void) async -> WriteResult {
+        let job = request.job
+        let first = await attempt(request, start: job.start, reapplying: nil, beforeFirstWrite)
+        // Rectangle reapplies only when the first pass fell short.
+        guard job.crossesDisplays, let delay = reapplyDelay, let frame = first.frame, first.isAchievement,
+              differs(frame, job.target)
+        else { return first }
+        do {
+            try await clock.sleep(for: delay)
+        } catch {
+            return first
+        }
+        guard !Task.isCancelled, epoch == request.startEpoch else { return first }
+        if judgePending(request) { return .interrupted }
+        return await attempt(request, start: frame, reapplying: first, {})
+    }
+
+    /// One session, from `beginWriting` to `end()`. A reapply (`reapplying` is the earlier
+    /// result) first reads the frame: a window that is no longer where that result left it
+    /// was moved by someone else.
+    private func attempt(
+        _ request: Request,
         start: ScreenRect,
-        beforeFirstWrite: @Sendable () async -> Void
+        reapplying earlier: WriteResult?,
+        _ beforeFirstWrite: @Sendable () async -> Void
     ) async -> WriteResult {
-        let job = context.job
+        request.beginSession(from: start)
+        let session: any WriteSession
+        switch await platform.beginWriting(request.job.window) {
+        case .failure(let failure): return earlier ?? .failed(failure, lastVerified: nil)
+        case .success(let opened): session = opened
+        }
+        let context = Context(request: request, session: session)
+
+        var result: WriteResult
+        if let earlier {
+            result = await reapply(context, after: earlier, beforeFirstWrite)
+        } else {
+            result = await sequence(context, beforeFirstWrite)
+        }
+        await session.end()
+        if result.isAchievement, judgePending(request) { result = .interrupted }
+        return result
+    }
+
+    private func reapply(
+        _ context: Context,
+        after earlier: WriteResult,
+        _ beforeFirstWrite: @Sendable () async -> Void
+    ) async -> WriteResult {
+        let request = context.request
+        if Task.isCancelled || epoch != request.startEpoch { return earlier }
+        guard case .success(let read) = await context.session.readFrame() else { return earlier }
+        if differs(read, request.expected) { return .interrupted }
+        let result = await sequence(context, beforeFirstWrite)
+        return result == .cancelled(lastVerified: nil) ? earlier : result
+    }
+
+    // MARK: The write sequence
+
+    private func sequence(_ context: Context, _ beforeFirstWrite: @Sendable () async -> Void) async -> WriteResult {
+        let request = context.request
+        let job = request.job
         let target = job.target
+        let start = request.expected
         do throws(Stop) {
             let sizeFirst = WriteOrder.sizeFirst(
                 from: start, to: target, bounds: job.targetVisible, acrossDisplays: job.crossesDisplays
@@ -194,7 +249,11 @@ public actor FrameWriter {
             if sizeFirst {
                 if sizeNeeded {
                     try await perform(.size(target.size), context, beforeFirstWrite)
-                    try await align(context, beforeFirstWrite)
+                    // As Rectangle does, place the window as if it had the size it asked for, so a
+                    // limit that depends on where the window sits doesn't hold the next write back.
+                    let accepted = request.expected.size
+                    let placed = ScreenSize(width: max(accepted.width, target.width), height: max(accepted.height, target.height))
+                    try await align(context, size: placed, beforeFirstWrite)
                 } else if positionNeeded {
                     try await perform(.position(target.origin), context, beforeFirstWrite)
                 }
@@ -202,16 +261,16 @@ public actor FrameWriter {
                 if positionNeeded { try await perform(.position(target.origin), context, beforeFirstWrite) }
                 if sizeNeeded { try await perform(.size(target.size), context, beforeFirstWrite) }
             }
-            if differs(expected(job.window).size, target.size) {
-                let minimum = job.minSize ?? ScreenSize(width: 0, height: 0)
-                let retry = ScreenSize(width: max(target.width, minimum.width), height: max(target.height, minimum.height))
+            let minimum = job.minSize ?? ScreenSize(width: 0, height: 0)
+            let retry = ScreenSize(width: max(target.width, minimum.width), height: max(target.height, minimum.height))
+            if differs(request.expected.size, target.size), differs(request.expected.size, retry) {
                 try await perform(.size(retry), context, beforeFirstWrite)
-                try await align(context, beforeFirstWrite)
+                try await align(context, size: request.expected.size, beforeFirstWrite)
             }
         } catch {
             return error.result
         }
-        return classify(job, achieved: expected(job.window))
+        return classify(job, achieved: request.expected)
     }
 
     /// One checked write: the checks, the write, the read-back and its check.
@@ -220,36 +279,46 @@ public actor FrameWriter {
         _ context: Context,
         _ beforeFirstWrite: @Sendable () async -> Void
     ) async throws(Stop) {
-        let window = context.job.window
-        if let stop = checkpoint(window, startEpoch: context.startEpoch) { throw Stop(result: stop) }
-        if states[window]?.awaitingFirstWrite == true {
-            states[window]?.awaitingFirstWrite = false
+        let request = context.request
+        if let stop = checkpoint(request) { throw Stop(result: stop) }
+        if request.awaitingFirstWrite {
+            request.awaitingFirstWrite = false
             await beforeFirstWrite()
+            // The callback is a suspension point: the request may have been cancelled or the window
+            // changed while it ran.
+            if let stop = checkpoint(request) { throw Stop(result: stop) }
         }
-        beginWrite(window, write.part)
+        request.inFlight = write.part
+        request.lastVerified = nil
         let written = switch write {
         case .size(let size): await context.session.setSize(size)
         case .position(let point): await context.session.setPosition(point)
         }
-        if case .failure(let failure) = written { throw Stop(result: failed(window, failure)) }
+        if case .failure(let failure) = written { throw Stop(result: .failed(failure, lastVerified: request.lastVerified)) }
         switch await context.session.readFrame() {
-        case .failure(let failure): throw Stop(result: failed(window, failure))
-        case .success(let frame): if !commit(context.job, write.part, frame) { throw Stop(result: .interrupted) }
+        case .failure(let failure): throw Stop(result: .failed(failure, lastVerified: request.lastVerified))
+        case .success(let frame): if !commit(request, write.part, frame) { throw Stop(result: .interrupted) }
         }
     }
 
-    /// Moves the window to where its accepted size belongs, when it isn't there.
-    private func align(_ context: Context, _ beforeFirstWrite: @Sendable () async -> Void) async throws(Stop) {
-        let job = context.job
-        let frame = expected(job.window)
-        let destination = EdgeAligner.origin(for: job.target, actualSize: frame.size, visible: job.targetVisible)
-        if differs(frame.origin, destination) { try await perform(.position(destination), context, beforeFirstWrite) }
+    /// Moves the window to where a window of `size` belongs, when it isn't there.
+    private func align(_ context: Context, size: ScreenSize, _ beforeFirstWrite: @Sendable () async -> Void) async throws(Stop) {
+        let request = context.request
+        let destination = alignedOrigin(request.job, size: size)
+        if differs(request.expected.origin, destination) {
+            try await perform(.position(destination), context, beforeFirstWrite)
+        }
+    }
+
+    private func alignedOrigin(_ job: WriteJob, size: ScreenSize) -> ScreenPoint {
+        EdgeAligner.origin(
+            for: job.target, actualSize: size, visible: job.targetVisible, edges: job.alignment, gap: job.gap
+        )
     }
 
     private func classify(_ job: WriteJob, achieved: ScreenRect) -> WriteResult {
         let target = job.target
-        let aligned = EdgeAligner.origin(for: target, actualSize: achieved.size, visible: job.targetVisible)
-        if differs(achieved.origin, aligned) { return .positionRefused(achieved) }
+        if differs(achieved.origin, alignedOrigin(job, size: achieved.size)) { return .positionRefused(achieved) }
         if achieved.isClose(to: target, within: Self.tolerance)
             || (isShort(target.width - achieved.width) && isShort(target.height - achieved.height)) {
             return .placed(achieved)
@@ -262,57 +331,46 @@ public actor FrameWriter {
         shortfall >= -Self.tolerance && shortfall < Self.shortfallLimit
     }
 
-    // MARK: Per-window state
-
-    private func expected(_ window: WindowHandle) -> ScreenRect {
-        states[window]?.expected ?? ScreenRect(x: 0, y: 0, width: 0, height: 0)
-    }
+    // MARK: Checks
 
     /// The checks before a write: cancellation and reconfiguration, then frames observed
     /// since the last check.
-    private func checkpoint(_ window: WindowHandle, startEpoch: Int) -> WriteResult? {
-        guard var state = states[window] else { return .interrupted }
-        if Task.isCancelled || epoch != startEpoch { return .cancelled(lastVerified: state.lastVerified) }
-        let observed = state.observed
-        state.observed = []
-        states[window] = state
-        for observation in observed {
-            let positionMoved = differs(observation.frame.origin, state.expected.origin) && observation.part != .position
-            let sizeChanged = differs(observation.frame.size, state.expected.size) && observation.part != .size
-            if positionMoved || sizeChanged { return .interrupted }
+    private func checkpoint(_ request: Request) -> WriteResult? {
+        if Task.isCancelled || epoch != request.startEpoch { return .cancelled(lastVerified: request.lastVerified) }
+        return judgePending(request) ? .interrupted : nil
+    }
+
+    /// Judges the frames observed since the last check against the expected frame: each may
+    /// differ in the part that was in flight when it was observed, and in no other.
+    /// Returns whether one is an external change.
+    private func judgePending(_ request: Request) -> Bool {
+        let pending = request.observed
+        request.observed = []
+        return pending.contains { observation in
+            let positionMoved = differs(observation.frame.origin, request.expected.origin) && observation.part != .position
+            let sizeChanged = differs(observation.frame.size, request.expected.size) && observation.part != .size
+            return positionMoved || sizeChanged
         }
-        return nil
-    }
-
-    private func beginWrite(_ window: WindowHandle, _ part: WritePart) {
-        states[window]?.inFlight = part
-        states[window]?.lastVerified = nil
-    }
-
-    private func failed(_ window: WindowHandle, _ failure: PlatformFailure) -> WriteResult {
-        .failed(failure, lastVerified: states[window]?.lastVerified)
     }
 
     /// Checks a read-back: the part not written must be unchanged or explained by an
     /// adjustment. A pass makes the frame read the expected and last verified one.
-    private func commit(_ job: WriteJob, _ part: WritePart, _ read: ScreenRect) -> Bool {
-        guard var state = states[job.window] else { return false }
-        state.inFlight = nil
-        defer { states[job.window] = state }
-
+    private func commit(_ request: Request, _ part: WritePart, _ read: ScreenRect) -> Bool {
+        request.inFlight = nil
         let otherChanged = switch part {
-        case .size: differs(read.origin, state.expected.origin)
-        case .position: differs(read.size, state.expected.size)
+        case .size: differs(read.origin, request.expected.origin)
+        case .position: differs(read.size, request.expected.size)
         }
         if otherChanged {
             let adjustmentCase = AdjustmentCase(
-                written: part, before: state.expected, after: read,
-                targetVisible: job.targetVisible, displays: job.displays
+                written: part, before: request.expected, after: read,
+                targetVisible: request.job.targetVisible, displays: request.job.displays
             )
             guard adjustments.contains(where: { $0.explains(adjustmentCase) }) else { return false }
         }
-        state.expected = read
-        state.lastVerified = read
+        request.expected = read
+        request.lastVerified = read
+        request.lastOwn = read
         return true
     }
 
@@ -323,4 +381,21 @@ public actor FrameWriter {
     private func differs(_ a: ScreenSize, _ b: ScreenSize) -> Bool {
         abs(a.width - b.width) > Self.tolerance || abs(a.height - b.height) > Self.tolerance
     }
+
+    private func differs(_ a: ScreenRect, _ b: ScreenRect) -> Bool {
+        !a.isClose(to: b, within: Self.tolerance)
+    }
+}
+
+private extension WriteResult {
+    /// The frame a result carries.
+    var frame: ScreenRect? {
+        switch self {
+        case .placed(let frame), .sizeRefused(let frame), .positionRefused(let frame): frame
+        case .interrupted, .failed, .cancelled: nil
+        }
+    }
+
+    /// A request that ran to the end, as opposed to one that stopped.
+    var isAchievement: Bool { frame != nil }
 }
