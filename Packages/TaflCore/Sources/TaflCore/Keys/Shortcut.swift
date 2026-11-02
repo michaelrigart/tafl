@@ -36,6 +36,7 @@ public enum ShortcutKey: Hashable, Sendable {
 
 public enum ShortcutSyntaxError: Error, Equatable, Sendable {
     case empty
+    case emptyPart
     case unknownModifier(String)
     case missingKey
     case missingPrimaryModifier
@@ -44,6 +45,7 @@ public enum ShortcutSyntaxError: Error, Equatable, Sendable {
     public var message: String {
         switch self {
         case .empty: "shortcut is empty"
+        case .emptyPart: "shortcut has an empty part"
         case .unknownModifier(let name): "unknown modifier \"\(name)\""
         case .missingKey: "shortcut needs a key"
         case .missingPrimaryModifier: "shortcut needs ctrl, opt or cmd"
@@ -71,14 +73,26 @@ public struct Shortcut: Hashable, Sendable {
     public static func parse(_ text: String) -> Result<Shortcut, ShortcutSyntaxError> {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return .failure(.empty) }
-        let parts = trimmed.split(separator: "+", omittingEmptySubsequences: false)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+        // A trailing "++" is the key "+", so that `text` round-trips on layouts that print "+" unshifted.
+        let modifierParts: [String]
+        let last: String
+        if trimmed.hasSuffix("++") {
+            let head = trimmed.dropLast(2)
+            modifierParts = head.isEmpty ? [] : head.split(separator: "+", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            last = "+"
+        } else {
+            let parts = trimmed.split(separator: "+", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            modifierParts = Array(parts.dropLast())
+            last = parts[parts.count - 1]
+        }
         var modifiers: Modifiers = []
-        for part in parts.dropLast() {
+        for part in modifierParts {
+            if part.isEmpty { return .failure(.emptyPart) }
             guard let modifier = modifierNames[part.lowercased()] else { return .failure(.unknownModifier(part)) }
             modifiers.insert(modifier)
         }
-        let last = parts[parts.count - 1]
         if last.isEmpty || modifierNames[last.lowercased()] != nil { return .failure(.missingKey) }
         let key: ShortcutKey
         if last.count == 1 {

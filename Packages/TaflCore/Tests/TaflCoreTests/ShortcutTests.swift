@@ -42,4 +42,21 @@ struct ShortcutTests {
     func shiftAloneIsNotEnough() {
         #expect(error("shift+left") == "shortcut needs ctrl, opt or cmd")
     }
+
+    @Test("An empty part between modifiers is reported as such")
+    func emptyMiddlePart() {
+        #expect(error("ctrl++x") == "shortcut has an empty part")
+        #expect(error("ctrl+ +opt+x") == "shortcut has an empty part")
+    }
+
+    @Test("A trailing ++ is the key plus, and its text parses back")
+    func plusAsKey() throws {
+        let plus = try Shortcut.parse("ctrl+opt++").get()
+        #expect(plus.key == .character("+"))
+        #expect(plus.modifiers == [.control, .option])
+        #expect(plus.text == "ctrl+opt++")
+        #expect(try Shortcut.parse(plus.text).get() == plus)
+        #expect(error("++") == "shortcut needs ctrl, opt or cmd")
+        #expect(error("+") == "shortcut has an empty part")
+    }
 }

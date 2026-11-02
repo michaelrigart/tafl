@@ -59,6 +59,32 @@ struct KeyTranslatorTests {
         #expect(KeyTranslator.shortcut(for: left, table: .frenchAZERTY)?.text == "ctrl+opt+left")
     }
 
+    @Test("Every default sits on the Rectangle alternate key position, shown here on US")
+    func defaultsOnUS() {
+        let expected: [Action: String] = [
+            .leftHalf: "ctrl+opt+left", .rightHalf: "ctrl+opt+right", .topHalf: "ctrl+opt+up", .bottomHalf: "ctrl+opt+down",
+            .topLeft: "ctrl+opt+u", .topRight: "ctrl+opt+i", .bottomLeft: "ctrl+opt+j", .bottomRight: "ctrl+opt+k",
+            .firstThird: "ctrl+opt+d", .centerThird: "ctrl+opt+f", .lastThird: "ctrl+opt+g",
+            .firstTwoThirds: "ctrl+opt+e", .centerTwoThirds: "ctrl+opt+r", .lastTwoThirds: "ctrl+opt+t",
+            .maximize: "ctrl+opt+return", .maximizeHeight: "ctrl+opt+shift+up", .center: "ctrl+opt+c",
+            .restore: "ctrl+opt+delete", .larger: "ctrl+opt+=", .smaller: "ctrl+opt+-",
+            .displayLeft: "ctrl+opt+cmd+left", .displayRight: "ctrl+opt+cmd+right",
+            .displayUp: "ctrl+opt+cmd+up", .displayDown: "ctrl+opt+cmd+down",
+            .displayUnderPointer: "ctrl+opt+cmd+m",
+        ]
+        #expect(expected.count == Action.allCases.count)
+        for action in Action.allCases {
+            let chord = DefaultShortcuts.chords[action]
+            #expect(chord.flatMap { KeyTranslator.shortcut(for: $0, table: .usANSI)?.text } == expected[action], "\(action)")
+        }
+    }
+
+    @Test("A layout that prints plus unshifted translates ctrl+opt++ to that key")
+    func plusKeyTranslates() throws {
+        let swedish = KeyboardLayoutTable([27: KeyOutputs(plain: "+", shifted: "?")])
+        #expect(try chord("ctrl+opt++", swedish).get().keyCode == 27)
+    }
+
     @Test("A key position the layout does not print has no display shortcut")
     func unknownKeyCodeHasNoShortcut() {
         #expect(KeyTranslator.shortcut(for: KeyChord(keyCode: 99, modifiers: [.control]), table: .usANSI) == nil)
