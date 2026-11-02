@@ -33,6 +33,18 @@ struct SettleTrackerTests {
         #expect(tracker.isChanging)
     }
 
+    @Test func anOpenReconfigurationKeepsWhenItOpened() {
+        var tracker = SettleTracker(quietPeriod: .seconds(1))
+        tracker.began(at: .seconds(2))
+        tracker.windowMoved(at: .seconds(9))
+        tracker.began(at: .seconds(10))
+        #expect(tracker.openedAt == .seconds(2))
+        tracker.ended(at: .seconds(11))
+        #expect(tracker.openedAt == nil)
+        tracker.began(at: .seconds(12))
+        #expect(tracker.openedAt == .seconds(12))
+    }
+
     @Test func windowMovesAreIgnoredWhileNotChanging() {
         var tracker = SettleTracker(quietPeriod: .seconds(1))
         tracker.windowMoved(at: .seconds(5))

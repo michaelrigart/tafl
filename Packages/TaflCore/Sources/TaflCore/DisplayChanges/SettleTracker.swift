@@ -5,7 +5,9 @@ public struct SettleTracker: Sendable {
 
     public let quietPeriod: Duration
     public private(set) var isChanging = false
-    private var reconfigurationOpen = false
+    /// When the reconfiguration still open began: the first `began` while none was open. Window
+    /// moves and further `began`s leave it where it is.
+    public private(set) var openedAt: Duration?
     private var lastInput: Duration = .zero
 
     public init(quietPeriod: Duration) {
@@ -15,12 +17,12 @@ public struct SettleTracker: Sendable {
 
     public mutating func began(at time: Duration) {
         isChanging = true
-        reconfigurationOpen = true
+        if openedAt == nil { openedAt = time }
         record(time)
     }
 
     public mutating func ended(at time: Duration) {
-        reconfigurationOpen = false
+        openedAt = nil
         record(time)
     }
 
@@ -30,7 +32,7 @@ public struct SettleTracker: Sendable {
     }
 
     public var deadline: Duration? {
-        guard isChanging, !reconfigurationOpen else { return nil }
+        guard isChanging, openedAt == nil else { return nil }
         return lastInput + quietPeriod
     }
 

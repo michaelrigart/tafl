@@ -620,6 +620,26 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
     #expect(await rig.frame() == leftHalfA)
 }
 
+@Test(.timeLimit(.minutes(1))) func aWindowMoveDoesNotStretchTheTenSecondCap() async {
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: leftHalfB)])
+    await rig.engine.start(config: config())
+    await rig.fake.configure { $0.displays = [displayA]; $0.windows[handle]?.frame = rect(0, 25, 600, 500) }
+    await rig.emit(.reconfigurationBegan)
+    await rig.waitForEvents(1)
+    await rig.clock.waitForSleepers(1)
+    // The ended callback is lost; a window moves at 9 s.
+    await rig.clock.advance(by: .seconds(9))
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(2)
+    await rig.clock.waitForSleepers(1)
+    // The reconfiguration closes at 10 s, counted from when it opened.
+    await rig.clock.advance(by: .seconds(1))
+    await rig.clock.waitForSleepers(1)
+    #expect(await rig.engine.tracker.deadline == .seconds(10) + quiet)
+    await rig.clock.advance(by: quiet)
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
+}
+
 @Test func returningSetupRestoresRememberedFrames() async {
     let onB = window(1, frame: rect(1100, 100, 400, 300))
     let onA = window(2, frame: start)

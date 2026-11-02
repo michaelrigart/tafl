@@ -29,9 +29,10 @@ extension WindowEngine {
     // MARK: Settling
 
     /// Waits on the clock for the tracker's deadline, starting over whenever an input moves it.
-    /// A reconfiguration still open after the timeout counts as ended. Only the wait is replaced
-    /// by an input: once the change has settled, the rules run in a task of their own, and
-    /// nothing but a new reconfiguration stops them.
+    /// A reconfiguration still open at its cap, the timeout counted from when it opened, counts as
+    /// ended then: inputs move only the quiet period, never the cap. Only the wait is replaced by
+    /// an input: once the change has settled, the rules run in a task of their own, and nothing
+    /// but a new reconfiguration stops them.
     private func armSettle() {
         settleTask?.cancel()
         guard tracker.isChanging else {
@@ -48,7 +49,7 @@ extension WindowEngine {
             wait = deadline - clock.now
             isOpen = false
         } else {
-            wait = timing.reconfigurationTimeout
+            wait = (tracker.openedAt ?? clock.now) + timing.reconfigurationTimeout - clock.now
             isOpen = true
         }
         do {
