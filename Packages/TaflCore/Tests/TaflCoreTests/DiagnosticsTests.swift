@@ -12,9 +12,10 @@ struct DiagnosticsTests {
         let status = ConfigStatus.rejected(
             ConfigError(line: 12, message: "unknown key \"Safari\" in /Users/michael/.config/tafl/config.toml"))
         let report = Diagnostics.report(
-            macOS: "27.2.0", displayCount: 2, status: status, capabilities: capabilities,
-            recentFailures: ["size-refused", "Safari didn't respond", "/Users/michael/Secret Plans.txt", "no-window"])
+            macOS: "27.2.0", displayCount: 2, status: status, capabilities: capabilities, unobservableApps: 3,
+            recentFailures: ["size-refused", "Safari didn't respond", "/Users/michael/Secret Plans.txt", "safari", "no-window"])
         #expect(!report.contains("Safari"))
+        #expect(!report.contains("safari"))
         #expect(!report.contains("/Users"))
         #expect(!report.contains("Secret"))
         #expect(report.contains("size-refused"))
@@ -24,11 +25,12 @@ struct DiagnosticsTests {
         #expect(report.contains("rejected at line 12"))
         #expect(report.contains("Window identity: available"))
         #expect(report.contains("Other: unavailable"))
+        #expect(report.contains("Apps that can't be observed: 3"))
     }
 
     @Test func statusKinds() {
         func config(_ status: ConfigStatus) -> String {
-            Diagnostics.report(macOS: "27.0", displayCount: 1, status: status, capabilities: [], recentFailures: [])
+            Diagnostics.report(macOS: "27.0", displayCount: 1, status: status, capabilities: [], unobservableApps: 0, recentFailures: [])
         }
         #expect(config(.loaded).contains("Config: loaded"))
         #expect(config(.defaults).contains("Config: no file, using defaults"))
@@ -38,7 +40,7 @@ struct DiagnosticsTests {
     @Test func onlyTheLastTwentyFailuresAreReported() {
         let failures = (1...25).map { _ in "no-window" } + ["cannot-move"]
         let report = Diagnostics.report(
-            macOS: "27.0", displayCount: 1, status: .loaded, capabilities: [], recentFailures: failures)
+            macOS: "27.0", displayCount: 1, status: .loaded, capabilities: [], unobservableApps: 0, recentFailures: failures)
         #expect(report.components(separatedBy: "no-window").count - 1 == 19)
         #expect(report.contains("cannot-move"))
     }
@@ -49,7 +51,7 @@ struct DiagnosticsTests {
             .movedDuringPlacement, .noDisplayThatWay, .permissionMissing,
         ]
         let report = Diagnostics.report(
-            macOS: "27.0", displayCount: 1, status: .loaded, capabilities: [], recentFailures: kinds.map(\.category))
+            macOS: "27.0", displayCount: 1, status: .loaded, capabilities: [], unobservableApps: 0, recentFailures: kinds.map(\.category))
         for kind in kinds { #expect(report.contains(kind.category), "\(kind.category)") }
     }
 }

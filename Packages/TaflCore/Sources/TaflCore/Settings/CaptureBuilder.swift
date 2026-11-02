@@ -12,11 +12,11 @@ public enum CaptureBuilder {
         var unplaced: [String] = []
         for item in captured {
             guard let app = item.window.bundleID else {
-                unplaced.append("an app without a bundle identifier")
+                unplaced.append("an app without a bundle identifier: no recognised placement")
                 continue
             }
             guard let place = item.place else {
-                unplaced.append(app)
+                unplaced.append("\(app): no recognised placement")
                 continue
             }
             let needsTitle = !isUniform(app, in: captured)
@@ -25,25 +25,31 @@ public enum CaptureBuilder {
                 title: needsTitle ? TitleGlob.escape(item.window.title) : nil,
                 place: place,
                 display: displays.count > 1 ? references[item.displayIndex] : nil)
+            if let shadow = entries.first(where: { shadows($0, window: item.window) }) {
+                // The same entry again is nothing new; a different placement can never be reached,
+                // because the earlier entry matches this window first.
+                if shadow.place != entry.place || shadow.display != entry.display { unplaced.append("\(app): same title as another window, can't be told apart") }
+                continue
+            }
             if !entries.contains(entry) { entries.append(entry) }
         }
 
         var lines = [
             "[[layouts]]",
             "name = \"Captured\"",
-            "displays = [\(references.map(quoted).joined(separator: ", "))]",
+            "displays = [\(references.map(TOMLString.quoted).joined(separator: ", "))]",
         ]
         for entry in entries {
             lines.append("")
             lines.append("  [[layouts.windows]]")
-            lines.append("  app = \(quoted(entry.app))")
-            if let title = entry.title { lines.append("  title = \(quoted(title))") }
-            lines.append("  place = \(quoted(entry.place.rawValue))")
-            if let display = entry.display { lines.append("  display = \(quoted(display))") }
+            lines.append("  app = \(TOMLString.quoted(entry.app))")
+            if let title = entry.title { lines.append("  title = \(TOMLString.quoted(title))") }
+            lines.append("  place = \(TOMLString.quoted(entry.place.rawValue))")
+            if let display = entry.display { lines.append("  display = \(TOMLString.quoted(display))") }
         }
         if !unplaced.isEmpty {
             lines.append("")
-            lines.append(contentsOf: unplaced.map { "# \(commentSafe($0)): no recognised placement" })
+            lines.append(contentsOf: unplaced.map { "# \(commentSafe($0))" })
         }
         return lines.joined(separator: "\n") + "\n"
     }
@@ -53,6 +59,12 @@ public enum CaptureBuilder {
         var title: String?
         var place: NamedPlacement
         var display: String?
+    }
+
+    /// Whether `entry`, which comes first, also matches `window`.
+    private static func shadows(_ entry: Entry, window: WindowSnapshot) -> Bool {
+        guard let title = entry.title, entry.app == window.bundleID else { return false }
+        return TitleGlob.matches(title, window.title)
     }
 
     private struct Captured {
@@ -82,27 +94,6 @@ public enum CaptureBuilder {
         let own = captured.filter { $0.window.bundleID == app }
         guard let first = own.first, first.place != nil else { return false }
         return own.allSatisfy { $0.place == first.place && $0.displayIndex == first.displayIndex }
-    }
-
-    /// A TOML basic string.
-    private static func quoted(_ text: String) -> String {
-        var result = "\""
-        for scalar in text.unicodeScalars {
-            switch scalar {
-            case "\"": result += "\\\""
-            case "\\": result += "\\\\"
-            case "\n": result += "\\n"
-            case "\r": result += "\\r"
-            case "\t": result += "\\t"
-            default:
-                if scalar.value < 0x20 || scalar.value == 0x7F {
-                    result += String(format: "\\u%04X", scalar.value)
-                } else {
-                    result.unicodeScalars.append(scalar)
-                }
-            }
-        }
-        return result + "\""
     }
 
     /// A comment ends at the line's end, so a line break in a bundle identifier must not escape it.

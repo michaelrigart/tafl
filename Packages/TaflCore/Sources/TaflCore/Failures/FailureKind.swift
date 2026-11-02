@@ -23,6 +23,12 @@ public enum FailureKind: Equatable, Sendable {
         }
     }
 
+    /// Every category `category` can return. Keep it in step with the cases above.
+    public static let categories: Set<String> = Set([
+        FailureKind.noWindow, .notResponding(app: ""), .sizeRefused(app: ""), .cannotMove, .fullscreen,
+        .movedDuringPlacement, .noDisplayThatWay, .permissionMissing,
+    ].map(\.category))
+
     public var category: String {
         switch self {
         case .noWindow: "no-window"

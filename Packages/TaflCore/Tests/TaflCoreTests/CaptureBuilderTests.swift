@@ -94,6 +94,25 @@ struct CaptureBuilderTests {
         #expect(LayoutPlanner.entryIndex(for: other, in: parsed) == 1)
     }
 
+    @Test func aTitleThatCannotTellTwoWindowsApartIsCommentedNotWritten() throws {
+        let first = titled(1, "Same", leftHalfA, bundleID: terminal)
+        let second = titled(2, "SAME", rightHalfA, bundleID: terminal)
+        let snippet = CaptureBuilder.snippet(windows: [first, second], displays: [displayA], gap: 0)
+        let parsed = try #require(layout(snippet), "snippet did not parse:\n\(snippet)")
+        #expect(parsed.entries.map(\.place) == [.leftHalf])
+        #expect(snippet.contains("# \(terminal): same title as another window, can't be told apart"))
+    }
+
+    @Test func sameTitleInTheSamePlacementIsOneEntry() throws {
+        let first = titled(1, "Same", leftHalfA, bundleID: terminal)
+        let second = titled(2, "same", leftHalfA, bundleID: terminal)
+        let loose = titled(3, "Other", rect(10, 40, 321, 200), bundleID: terminal)
+        let snippet = CaptureBuilder.snippet(windows: [first, second, loose], displays: [displayA], gap: 0)
+        let parsed = try #require(layout(snippet))
+        #expect(parsed.entries.count == 1)
+        #expect(!snippet.contains("same title"))
+    }
+
     @Test func repeatedDisplayNamesUseIdentifiers() throws {
         let first = namedDisplay("Studio", rect(0, 0, 1000, 800), serial: 11)
         let second = namedDisplay("Studio", rect(1000, 0, 1000, 800), serial: 22)

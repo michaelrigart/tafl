@@ -35,6 +35,7 @@ final class CompositionRoot {
         platform: platform,
         table: { [unowned self] in table },
         gap: { [unowned self] in configController.config.gap },
+        unobservableApps: { [unowned self] in await engine.unobservableAppCount },
         onStarterFileCreated: { [unowned self] in configController.reload() })
     private lazy var settingsWindow = SettingsWindow(model: settingsModel, actions: settingsActions)
     private lazy var configController = ConfigController(

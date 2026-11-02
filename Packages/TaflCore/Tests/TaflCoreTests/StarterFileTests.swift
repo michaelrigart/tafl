@@ -51,12 +51,55 @@ struct StarterFileTests {
         #expect(StarterFile.text(table: .frenchAZERTY).contains("# display-under-pointer = \"ctrl+opt+cmd+,\""))
     }
 
-    @Test func aKeyMissingFromTheLayoutIsLeftOutNotWrittenWrongly() {
+    @Test func aKeyMissingFromTheLayoutGetsACommentNotAWrongLine() {
         var outputs = KeyboardLayoutTable.usANSI.outputs
         outputs[24] = nil
-        let text = StarterFile.text(table: KeyboardLayoutTable(outputs))
+        let table = KeyboardLayoutTable(outputs)
+        let text = StarterFile.text(table: table)
         #expect(!text.contains("# larger ="))
-        #expect(ConfigParser.parse(enabled(text), table: KeyboardLayoutTable(outputs)).isSuccess)
+        #expect(text.contains("# larger: no character on this layout; it stays on its default key"))
+        #expect(ConfigParser.parse(enabled(text), table: table).isSuccess)
+    }
+
+    /// The file says to remove the `# ` from a line to change it, so one line alone must work.
+    @Test(arguments: [KeyboardLayoutTable.usANSI, .frenchAZERTY])
+    func uncommentingOneShortcutLineIsEnough(table: KeyboardLayoutTable) {
+        let lines = StarterFile.text(table: table).split(separator: "\n", omittingEmptySubsequences: false)
+        let start = lines.firstIndex(of: "[shortcuts]")!
+        let end = lines.firstIndex { $0.hasPrefix("# An example layout") }!
+        let shortcuts = lines[start..<end].filter { $0.wholeMatch(of: /# [a-z-]+ = ".*"/) != nil }
+        #expect(shortcuts.count == Action.allCases.count)
+        for line in shortcuts {
+            let action = String(line.dropFirst(2).prefix { $0 != " " })
+            let text = lines.map { $0 == line ? String($0.dropFirst(2)) : String($0) }.joined(separator: "\n")
+            guard case .success(let config) = ConfigParser.parse(text, table: table) else {
+                Issue.record("uncommenting \(action) alone did not parse")
+                continue
+            }
+            let expected = Action(rawValue: action).flatMap { DefaultShortcuts.chords[$0] }
+            guard let act = Action(rawValue: action), case .custom(let shortcut) = config.binding(for: act) else {
+                Issue.record("\(action) is not bound by its own line")
+                continue
+            }
+            #expect(KeyTranslator.chord(for: shortcut, table: table) == expected.map { .success($0) })
+        }
+    }
+
+    @Test(arguments: ["\\", "\""])
+    func shortcutValuesAreEscaped(character: String) {
+        var outputs = KeyboardLayoutTable.usANSI.outputs
+        outputs[24] = KeyOutputs(plain: character, shifted: character)
+        let table = KeyboardLayoutTable(outputs)
+        let text = StarterFile.text(table: table)
+        guard case .success(let config) = ConfigParser.parse(enabled(text), table: table) else {
+            Issue.record("did not parse for \(character):\n\(enabled(text))")
+            return
+        }
+        guard case .custom(let shortcut) = config.binding(for: .larger) else {
+            Issue.record("larger is not written out")
+            return
+        }
+        #expect(KeyTranslator.chord(for: shortcut, table: table) == .success(DefaultShortcuts.chords[.larger]!))
     }
 }
 

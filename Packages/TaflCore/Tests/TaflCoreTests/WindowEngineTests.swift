@@ -540,6 +540,20 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
     #expect(rig.reports.filter { $0 == .unobservable(bundleID: "com.b") }.count == 1)
 }
 
+@Test func unobservableAppsAreCountedUntilTheyQuit() async {
+    let rig = await Rig()
+    await rig.engine.start(config: config())
+    #expect(await rig.engine.unobservableAppCount == 0)
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.moved]))
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.created]))
+    await rig.emit(.unobservable(pid: 300, bundleID: nil, missing: [.created]))
+    await rig.waitForEvents(3)
+    #expect(await rig.engine.unobservableAppCount == 2)
+    await rig.emit(.appQuit(pid: 200))
+    await rig.waitForEvents(4)
+    #expect(await rig.engine.unobservableAppCount == 1)
+}
+
 @Test func unobservableAppGetsNoNewWindowPlacement() async {
     let desk = layout("Desk", [slot(.rightHalf, app: "com.b")])
     let rig = await Rig()

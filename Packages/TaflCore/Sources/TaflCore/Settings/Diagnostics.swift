@@ -1,7 +1,8 @@
 import Foundation
 
 /// The text Copy Diagnostics puts on the clipboard. It holds counts, states and failure
-/// categories only: never an app name, a window title, a bundle identifier or a path.
+/// categories and counts only: never an app name, a window title, a bundle identifier or a path.
+/// A failure string that is not one of `FailureKind.categories` is dropped.
 public enum Diagnostics {
     public static let recentFailureLimit = 20
 
@@ -10,6 +11,7 @@ public enum Diagnostics {
         displayCount: Int,
         status: ConfigStatus,
         capabilities: [CapabilityState],
+        unobservableApps: Int,
         recentFailures: [String]
     ) -> String {
         var lines = [
@@ -23,7 +25,8 @@ public enum Diagnostics {
         for capability in capabilities {
             lines.append("  \(capability.name): \(capability.isAvailable ? "available" : "unavailable")")
         }
-        let categories = recentFailures.filter(isCategory).suffix(recentFailureLimit)
+        lines.append("Apps that can't be observed: \(unobservableApps)")
+        let categories = recentFailures.filter(FailureKind.categories.contains).suffix(recentFailureLimit)
         lines.append("Recent failures: \(categories.isEmpty ? "none" : categories.joined(separator: ", "))")
         return lines.joined(separator: "\n") + "\n"
     }
@@ -35,10 +38,5 @@ public enum Diagnostics {
         case .loaded: "loaded"
         case .rejected(let error): error.line.map { "rejected at line \($0)" } ?? "rejected"
         }
-    }
-
-    /// `FailureKind.category` is lowercase words joined by hyphens; anything else could carry a name or a path.
-    private static func isCategory(_ text: String) -> Bool {
-        text.wholeMatch(of: /[a-z]+(-[a-z]+)*/) != nil
     }
 }

@@ -26,11 +26,15 @@ public enum StarterFile {
             "# launch-at-login = \(defaults.launchAtLogin)",
             "",
             "# Shortcuts, written as the characters on your keyboard's keys. Use \"none\" to unbind an action.",
-            "# [shortcuts]",
+            "# Remove the leading \"# \" from any line below to change that one shortcut.",
+            "[shortcuts]",
         ]
         for action in Action.allCases {
-            guard let shortcut = defaultShortcut(for: action, table: table) else { continue }
-            lines.append("# \(action.rawValue) = \"\(shortcut.text)\"")
+            guard let shortcut = defaultShortcut(for: action, table: table) else {
+                lines.append("# \(action.rawValue): no character on this layout; it stays on its default key")
+                continue
+            }
+            lines.append("# \(action.rawValue) = \(TOMLString.quoted(shortcut.text))")
         }
         lines.append("")
         lines.append("# An example layout. Layouts apply when exactly their displays are connected,")
@@ -39,7 +43,7 @@ public enum StarterFile {
         lines.append("# name = \"Desk\"")
         lines.append("# displays = [\"Studio Display\"]   # applies automatically when exactly these are connected")
         if let shortcut = exampleShortcut(table: table) {
-            lines.append("# shortcut = \"\(shortcut.text)\"     # optional")
+            lines.append("# shortcut = \(TOMLString.quoted(shortcut.text))     # optional")
         }
         lines.append("#")
         lines.append("#   [[layouts.windows]]")

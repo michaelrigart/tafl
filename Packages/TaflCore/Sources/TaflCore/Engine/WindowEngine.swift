@@ -127,6 +127,9 @@ public actor WindowEngine {
 
     public var activeLayoutName: String? { activeLayout.name }
 
+    /// How many running apps Tafl cannot observe fully; an app that quits is no longer counted.
+    public var unobservableAppCount: Int { unobservable.values.filter { !$0.isEmpty }.count }
+
     // MARK: Lifecycle
 
     /// Loads the memory, starts observing and, when the display setup differs from the one

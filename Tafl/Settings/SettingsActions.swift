@@ -12,6 +12,7 @@ final class SettingsActions {
     private let platform: any WindowPlatform
     private let table: () -> KeyboardLayoutTable
     private let gap: () -> Double
+    private let unobservableApps: () async -> Int
     private let onStarterFileCreated: () -> Void
 
     init(
@@ -19,12 +20,14 @@ final class SettingsActions {
         platform: any WindowPlatform,
         table: @escaping () -> KeyboardLayoutTable,
         gap: @escaping () -> Double,
+        unobservableApps: @escaping () async -> Int,
         onStarterFileCreated: @escaping () -> Void
     ) {
         self.model = model
         self.platform = platform
         self.table = table
         self.gap = gap
+        self.unobservableApps = unobservableApps
         self.onStarterFileCreated = onStarterFileCreated
     }
 
@@ -47,11 +50,12 @@ final class SettingsActions {
                 at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(StarterFile.text(table: table()).utf8).write(to: configURL, options: .withoutOverwriting)
             Log.config.notice("Starter file created")
+            // Reading it now updates Overview at once; the watcher would do it a moment later.
+            onStarterFileCreated()
         } catch {
             Log.config.notice("Starter file not created: \(error.localizedDescription, privacy: .private)")
             model.starterFileError = "The starter file could not be created. A config file may already exist."
         }
-        onStarterFileCreated()
     }
 
     func openDesktopAndDockSettings() {
@@ -89,6 +93,7 @@ final class SettingsActions {
             displayCount: await platform.displays().count,
             status: model.status,
             capabilities: await platform.capabilities(),
+            unobservableApps: await unobservableApps(),
             recentFailures: model.recentFailures)
         copy(report)
         model.diagnosticsCopied = true
