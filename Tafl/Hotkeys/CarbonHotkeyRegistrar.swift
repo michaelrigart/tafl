@@ -15,7 +15,9 @@ final class CarbonHotkeyRegistrar {
 
     func register(_ chord: KeyChord) -> HotkeyRegistration? {
         let id = nextID
-        guard hotkeys.register(keyCode: UInt32(chord.keyCode), modifiers: Self.carbonModifiers(chord.modifiers), id: id) == noErr
+        guard hotkeys.register(
+            keyCode: UInt32(chord.keyCode), modifiers: Self.carbonModifiers(chord.modifiers), id: id, exclusive: true
+        ) == noErr
         else { return nil }
         nextID += 1
         return HotkeyRegistration(id: id)

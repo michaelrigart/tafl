@@ -20,13 +20,14 @@ final class CarbonHotkeys {
         if let handlerRef { RemoveEventHandler(handlerRef) }
     }
 
-    func register(keyCode: UInt32, modifiers: UInt32, id: UInt32) -> OSStatus {
+    /// An exclusive registration keeps the chord from apps that registered it non-exclusively.
+    func register(keyCode: UInt32, modifiers: UInt32, id: UInt32, exclusive: Bool) -> OSStatus {
         guard installStatus == noErr else { return installStatus }
         unregister(id: id)
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(
             keyCode, modifiers, EventHotKeyID(signature: signature, id: id),
-            GetApplicationEventTarget(), 0, &ref)
+            GetApplicationEventTarget(), exclusive ? OptionBits(kEventHotKeyExclusive) : 0, &ref)
         if status == noErr, let ref { hotKeys[id] = ref }
         return status
     }

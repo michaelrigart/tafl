@@ -59,6 +59,18 @@ struct ShortcutActivatorTests {
         #expect(activator.target(for: HotkeyRegistration(id: 26)) == .action(Action.allCases[0]))
     }
 
+    @Test("with exclusive registrations a reload keeps every shortcut, since its own old set goes first")
+    func exclusiveReloadKeepsEveryShortcut() {
+        let registrar = FakeRegistrar()
+        registrar.isExclusive = true
+        let activator = ShortcutActivator(registrar: registrar)
+        #expect(activator.activate(config(), table: .usANSI).isEmpty)
+        #expect(activator.activate(config(), table: .usANSI).isEmpty)
+        for (index, action) in Action.allCases.enumerated() {
+            #expect(activator.target(for: HotkeyRegistration(id: UInt32(26 + index))) == .action(action))
+        }
+    }
+
     @Test("a character shortcut that no longer translates after an input source change is reported")
     func untranslatableAfterInputSourceChange() throws {
         let custom = config(shortcuts: [.leftHalf: .custom(try shortcut("ctrl+opt+)")), .smaller: .unbound])

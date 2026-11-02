@@ -343,9 +343,17 @@ enum Probe {
         hotkeys.onPress = { id in
             ProbeLog.write("hotkey pressed id=\(id) chord=\(defaultChords[Int(id) - 1].name)")
         }
+        // Each chord both ways; the exclusive registration stays for the presses.
         for (index, chord) in defaultChords.enumerated() {
-            let status = hotkeys.register(keyCode: UInt32(chord.keyCode), modifiers: UInt32(chord.modifiers), id: UInt32(index + 1))
-            ProbeLog.write("register chord=\(chord.name) keyCode=\(chord.keyCode) modifiers=\(chord.modifiers) status=\(status) \(describe(status: status))")
+            let id = UInt32(index + 1)
+            let keyCode = UInt32(chord.keyCode)
+            let modifiers = UInt32(chord.modifiers)
+            let shared = hotkeys.register(keyCode: keyCode, modifiers: modifiers, id: id, exclusive: false)
+            hotkeys.unregister(id: id)
+            let exclusive = hotkeys.register(keyCode: keyCode, modifiers: modifiers, id: id, exclusive: true)
+            ProbeLog.write(
+                "register chord=\(chord.name) keyCode=\(chord.keyCode) modifiers=\(chord.modifiers)"
+                    + " nonexclusive=\(shared) \(describe(status: shared)) exclusive=\(exclusive) \(describe(status: exclusive))")
         }
         let token = KeyboardLayoutReader27.observeChanges {
             Task { @MainActor in
