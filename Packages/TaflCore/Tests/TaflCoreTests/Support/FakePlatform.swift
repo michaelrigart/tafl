@@ -1,29 +1,46 @@
 import Foundation
 import Synchronization
+import Testing
 @testable import TaflCore
 
-/// Holds one call of a `FakePlatform` until `open()`.
+/// Holds one call of a `FakePlatform` until `open()`. A cancelled caller keeps waiting: a real
+/// Accessibility call in flight cannot be cancelled.
 final class FakeGate: Sendable {
-    private let stream: AsyncStream<Void>
-    private let continuation: AsyncStream<Void>.Continuation
-
-    init() {
-        (stream, continuation) = AsyncStream.makeStream(of: Void.self)
+    private struct State {
+        var isOpen = false
+        var waiters: [CheckedContinuation<Void, Never>] = []
     }
 
+    private let state = Mutex(State())
+
     func open() {
-        continuation.finish()
+        let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.isOpen = true
+            defer { state.waiters = [] }
+            return state.waiters
+        }
+        for waiter in waiters { waiter.resume() }
     }
 
     fileprivate func wait() async {
-        for await _ in stream {}
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let alreadyOpen = state.withLock { state in
+                if !state.isOpen { state.waiters.append(continuation) }
+                return state.isOpen
+            }
+            if alreadyOpen { continuation.resume() }
+        }
     }
 }
 
 /// A scripted platform. Every write-session call is logged as `"begin"`, `"size <w>x<h>"`,
 /// `"position <x>,<y>"`, `"read"` or `"end"`. Call indices count those calls from 0, in the
-/// order they start executing: after a session slot is acquired and before the gate, hook
-/// and log entry for that call.
+/// order they start (a `beginWriting` that waits for its app's session slot starts once it has
+/// the slot). A call keeps its index while it is held: a gated call is logged only when its gate
+/// opens, so another app's calls that start later may log ahead of it.
+///
+/// Tests wait on an observable condition (`waitUntil`, a log entry, a clock's sleeper count or
+/// `task.value`), never on a yield budget.
 actor FakePlatform: WindowPlatform {
     struct UnobservedApp: Equatable, Sendable {
         var pid: Int32
@@ -79,6 +96,23 @@ actor FakePlatform: WindowPlatform {
         }
     }
 
+    /// Waits until `condition` holds, polling with `Task.yield()`. Records an issue after
+    /// `timeout` of wall-clock time.
+    func waitUntil(
+        timeout: Duration = .seconds(2),
+        sourceLocation: SourceLocation = #_sourceLocation,
+        _ condition: @Sendable (isolated FakePlatform) -> Bool
+    ) async {
+        let start = ContinuousClock.now
+        while !condition(self) {
+            if start.duration(to: ContinuousClock.now) > timeout {
+                Issue.record("Timed out waiting for a FakePlatform condition", sourceLocation: sourceLocation)
+                return
+            }
+            await Task.yield()
+        }
+    }
+
     /// Holds the call with this index until the returned gate opens.
     func pause(beforeCall index: Int) -> FakeGate {
         let gate = FakeGate()
@@ -101,7 +135,7 @@ actor FakePlatform: WindowPlatform {
 
     func snapshot(of handle: WindowHandle) async -> Result<WindowSnapshot, PlatformFailure> {
         if hung.contains(handle.pid) {
-            try? await clock.sleep(for: .milliseconds(500))
+            await hungWait()
             return .failure(.notResponding)
         }
         guard let window = windows[handle] else { return .failure(.noWindow) }
@@ -165,7 +199,7 @@ actor FakePlatform: WindowPlatform {
     }
 
     fileprivate func finish(_ handle: WindowHandle) async {
-        _ = await enter(handle, "end", waitsWhenHung: false)
+        _ = await enter(handle, "end")
         releaseSlot(handle.pid)
     }
 
@@ -173,7 +207,7 @@ actor FakePlatform: WindowPlatform {
 
     /// Claims the next call index, waits for its gate, logs the call, runs its hook and, for a
     /// hung app, waits 0.5 s on the clock. Returns true when the app is hung.
-    private func enter(_ handle: WindowHandle, _ entry: String, waitsWhenHung: Bool = true) async -> Bool {
+    private func enter(_ handle: WindowHandle, _ entry: String) async -> Bool {
         let index = callCount
         callCount += 1
         if let gate = gates.removeValue(forKey: index) { await gate.wait() }
@@ -182,9 +216,16 @@ actor FakePlatform: WindowPlatform {
             hook(&window)
             windows[handle] = window
         }
-        guard waitsWhenHung, hung.contains(handle.pid) else { return false }
-        try? await clock.sleep(for: .milliseconds(500))
+        guard hung.contains(handle.pid) else { return false }
+        await hungWait()
         return true
+    }
+
+    /// A call in flight cannot be cancelled, so the wait runs in an unstructured task that
+    /// does not inherit the caller's cancellation.
+    private func hungWait() async {
+        let clock = clock
+        await Task { try? await clock.sleep(for: .milliseconds(500)) }.value
     }
 
     private func acquireSlot(_ pid: Int32) async {
@@ -220,15 +261,18 @@ private final class FakeSession: WriteSession {
     }
 
     func readFrame() async -> Result<ScreenRect, PlatformFailure> {
-        await platform.read(handle)
+        if usedAfterEnd() { return .failure(.cannotMove) }
+        return await platform.read(handle)
     }
 
     func setSize(_ size: ScreenSize) async -> Result<Void, PlatformFailure> {
-        await platform.writeSize(handle, size)
+        if usedAfterEnd() { return .failure(.cannotMove) }
+        return await platform.writeSize(handle, size)
     }
 
     func setPosition(_ point: ScreenPoint) async -> Result<Void, PlatformFailure> {
-        await platform.writePosition(handle, point)
+        if usedAfterEnd() { return .failure(.cannotMove) }
+        return await platform.writePosition(handle, point)
     }
 
     func end() async {
@@ -237,5 +281,11 @@ private final class FakeSession: WriteSession {
             return !ended
         }
         if isFirst { await platform.finish(handle) }
+    }
+
+    private func usedAfterEnd() -> Bool {
+        let isEnded = ended.withLock { $0 }
+        if isEnded { Issue.record("A write session was used after end()") }
+        return isEnded
     }
 }

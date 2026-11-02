@@ -1,8 +1,14 @@
 import Foundation
 import Synchronization
+import Testing
 @testable import TaflCore
 
 /// A clock that moves only when a test calls `advance(by:)`.
+///
+/// `advance(by:)` steps time: it moves `now` to each due sleeper's deadline in turn, so a
+/// woken task reads its own deadline and a sleep it starts next counts from there. It does not
+/// promise that a woken task has finished its work when it returns. Tests wait on an observable
+/// condition (a log entry, `waitForSleepers`, or `task.value`), never on a yield budget.
 final class ManualClock: TaflClock {
     private struct Sleeper {
         let id: Int
@@ -13,8 +19,13 @@ final class ManualClock: TaflClock {
     private struct State {
         var now: Duration = .zero
         var nextID = 0
+        var registrations = 0
         var sleepers: [Sleeper] = []
     }
+
+    /// How long a woken task gets, in wall-clock time, to start its next sleep before
+    /// `advance(by:)` moves on. A task that is done never does.
+    private static let wakeGrace: Duration = .milliseconds(50)
 
     private let state = Mutex(State())
 
@@ -35,6 +46,7 @@ final class ManualClock: TaflClock {
                     let deadline = state.now + duration
                     if deadline <= state.now { return .success(()) }
                     state.sleepers.append(Sleeper(id: id, deadline: deadline, continuation: continuation))
+                    state.registrations += 1
                     return nil
                 }
                 if let outcome { continuation.resume(with: outcome) }
@@ -48,31 +60,46 @@ final class ManualClock: TaflClock {
         }
     }
 
-    /// Moves `now` and resumes, in deadline order, every sleeper whose deadline has passed.
-    /// Each resumed task gets to run before the next is resumed, and before this returns.
+    /// Moves time forward to `now + duration`, waking sleepers in deadline order. For each one
+    /// `now` is set to its deadline first; when time remains, the woken task gets a short
+    /// wall-clock grace to start its next sleep, which is then due in turn if it falls in range.
     func advance(by duration: Duration) async {
-        let due = state.withLock { state -> [Sleeper] in
-            state.now += duration
-            let due = state.sleepers.filter { $0.deadline <= state.now }
-            state.sleepers.removeAll { $0.deadline <= state.now }
-            return due.sorted { ($0.deadline, $0.id) < ($1.deadline, $1.id) }
-        }
-        for sleeper in due {
+        let target = state.withLock { $0.now + duration }
+        while let (sleeper, registrationsBefore) = takeNextSleeper(due: target) {
             sleeper.continuation.resume()
-            await settle()
+            guard sleeper.deadline < target else { continue }
+            _ = await pollUntil(timeout: Self.wakeGrace) {
+                state.withLock { $0.registrations > registrationsBefore }
+            }
         }
-        await settle()
+        state.withLock { $0.now = max($0.now, target) }
     }
 
-    /// Yields until `count` tasks are suspended in `sleep(for:)`, so a test advances only
-    /// after the sleeper it started has registered.
-    func waitForSleepers(_ count: Int) async {
-        for _ in 0..<100_000 where sleeperCount < count {
-            await Task.yield()
+    /// Waits for `count` tasks to be suspended in `sleep(for:)`, so a test advances only after
+    /// the sleeper it started has registered. Records an issue after `timeout` of wall-clock time.
+    func waitForSleepers(
+        _ count: Int,
+        timeout: Duration = .seconds(2),
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async {
+        let arrived = await pollUntil(timeout: timeout) { sleeperCount >= count }
+        if !arrived {
+            Issue.record(
+                "Timed out waiting for \(count) sleepers; \(sleeperCount) registered",
+                sourceLocation: sourceLocation
+            )
         }
     }
 
-    private func settle() async {
-        for _ in 0..<50 { await Task.yield() }
+    private func takeNextSleeper(due target: Duration) -> (Sleeper, Int)? {
+        state.withLock { state in
+            let next = state.sleepers.indices
+                .filter { state.sleepers[$0].deadline <= target }
+                .min { (state.sleepers[$0].deadline, state.sleepers[$0].id) < (state.sleepers[$1].deadline, state.sleepers[$1].id) }
+            guard let next else { return nil }
+            let sleeper = state.sleepers.remove(at: next)
+            state.now = max(state.now, sleeper.deadline)
+            return (sleeper, state.registrations)
+        }
     }
 }

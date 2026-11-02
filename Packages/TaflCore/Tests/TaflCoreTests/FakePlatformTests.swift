@@ -192,3 +192,85 @@ private func session(_ fake: FakePlatform, _ handle: WindowHandle) async throws 
     #expect(clock.now >= .milliseconds(5))
     #expect(clock.now < .seconds(5))
 }
+
+@Test func cancelledCallerStillWaitsForTheGate() async throws {
+    let w = window(1, frame: rect(0, 0, 100, 100))
+    let (fake, _) = await makeFake(w)
+    let gate = await fake.pause(beforeCall: 1)
+    let s = try await session(fake, w.handle)
+    let write = Task { await s.setSize(ScreenSize(width: 500, height: 400)) }
+    for _ in 0..<20 { await Task.yield() }
+    write.cancel()
+    for _ in 0..<100 { await Task.yield() }
+    #expect(await fake.callLog == ["begin"])
+
+    gate.open()
+    try await write.value.get()
+    #expect(await fake.callLog == ["begin", "size 500x400"])
+}
+
+@Test func cancelledHungCallStillTakesHalfASecond() async {
+    let w = window(1, frame: rect(0, 0, 100, 100), pid: 100)
+    let (fake, clock) = await makeFake(w)
+    await fake.configure { $0.hung = [100] }
+    let finished = Mutex(false)
+    let attempt = Task {
+        let result = await fake.beginWriting(w.handle)
+        finished.withLock { $0 = true }
+        return result
+    }
+    await clock.waitForSleepers(1)
+    attempt.cancel()
+    for _ in 0..<100 { await Task.yield() }
+    #expect(finished.withLock { $0 } == false)
+    #expect(clock.sleeperCount == 1)
+
+    await clock.advance(by: .milliseconds(499))
+    #expect(finished.withLock { $0 } == false)
+    await clock.advance(by: .milliseconds(1))
+    guard case .failure(let failure) = await attempt.value else {
+        Issue.record("beginWriting on a hung app succeeded")
+        return
+    }
+    #expect(failure == .notResponding)
+}
+
+@Test func hungAppEndWaitsAndStillFreesTheSlot() async throws {
+    let w = window(1, frame: rect(0, 0, 100, 100), pid: 100)
+    let (fake, clock) = await makeFake(w)
+    let s = try await session(fake, w.handle)
+    await fake.configure { $0.hung = [100] }
+    let finished = Mutex(false)
+    let ending = Task {
+        await s.end()
+        finished.withLock { $0 = true }
+    }
+    await clock.waitForSleepers(1)
+    await clock.advance(by: .milliseconds(499))
+    #expect(finished.withLock { $0 } == false)
+    await clock.advance(by: .milliseconds(1))
+    await ending.value
+    #expect(await fake.callLog == ["begin", "end"])
+
+    await fake.configure { $0.hung = [] }
+    _ = try await session(fake, w.handle)
+}
+
+@Test func usingASessionAfterEndIsAnIssue() async throws {
+    let w = window(1, frame: rect(0, 0, 100, 100))
+    let (fake, _) = await makeFake(w)
+    let s = try await session(fake, w.handle)
+    await s.end()
+    await withKnownIssue {
+        #expect(await s.readFrame() == .failure(.cannotMove))
+    }
+    #expect(await fake.callLog == ["begin", "end"])
+}
+
+@Test func waitUntilRecordsAnIssueOnTimeout() async {
+    let (fake, _) = await makeFake()
+    await fake.waitUntil { $0.callLog.isEmpty }
+    await withKnownIssue {
+        await fake.waitUntil(timeout: .milliseconds(50)) { !$0.callLog.isEmpty }
+    }
+}
