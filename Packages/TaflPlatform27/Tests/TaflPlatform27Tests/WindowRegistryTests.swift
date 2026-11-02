@@ -102,3 +102,21 @@ private func guess(_ id: UInt32) -> ResolvedWindowID { ResolvedWindowID(id: id, 
     #expect(await registry.element(for: kept) == nil)
     #expect(await registry.count == 0)
 }
+
+@Test func aWindowsCreationIsAnnouncedOnceWhoeverRegisteredIt() async {
+    let registry = WindowRegistry()
+    let handle = await registry.handle(for: box(10), pid: 10, windowID: exact(7))
+    #expect(await registry.announce(handle))
+    #expect(await !registry.announce(handle))
+    #expect(await !registry.announce(WindowHandle(pid: 10, windowID: 8, isStable: true)))
+}
+
+@Test func aWithdrawnCatchUpLeavesNoRegistrationOrAnnouncement() async {
+    let registry = WindowRegistry()
+    let found = await registry.handle(for: box(10), pid: 10, windowID: exact(7))
+    let known = await registry.handle(for: box(11), pid: 10, windowID: exact(8))
+    _ = await registry.announce(known)
+    await registry.withdraw(registered: [found], announced: [known])
+    #expect(await registry.knownHandle(of: box(10)) == nil)
+    #expect(await registry.announce(known))
+}

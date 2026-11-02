@@ -75,7 +75,10 @@ final class WindowEventTranslator: Sendable {
             await registry.remove(known)
             events.yield(.windowDestroyed(known))
         case kAXWindowCreatedNotification:
-            guard known == nil, let entry = await learn(element, pid: pid), entry.isNew else { return }
+            // Announced once, whoever registered the window first: a query registers but never announces.
+            guard let entry = await learn(element, pid: pid, resolveID: known == nil),
+                  await registry.announce(entry.snapshot.handle)
+            else { return }
             events.yield(.windowCreated(entry.snapshot))
         case kAXWindowMovedNotification:
             if let handle = await handleOf(known, element, pid) { events.yield(.windowMoved(handle)) }
@@ -97,10 +100,10 @@ final class WindowEventTranslator: Sendable {
         return await learn(element, pid: pid)?.snapshot.handle
     }
 
-    /// Registers a window the registry has not seen. Anything that is not a standard window or sheet,
-    /// and a window whose process is gone, is never registered.
-    private func learn(_ element: AXElementBox, pid: pid_t) async -> WindowCatalog27.Entry? {
-        guard let window = await reader.readTracked(element, pid, true), let app = reader.app(pid) else { return nil }
+    /// Reads a window and registers it if the registry has not seen it. Anything that is not a
+    /// standard window or sheet, and a window whose process is gone, is never registered.
+    private func learn(_ element: AXElementBox, pid: pid_t, resolveID: Bool = true) async -> WindowCatalog27.Entry? {
+        guard let window = await reader.readTracked(element, pid, resolveID), let app = reader.app(pid) else { return nil }
         let registration = await registry.register(window.element, pid: pid, windowID: window.windowID)
         let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: window.attributes)
         return WindowCatalog27.Entry(snapshot: snapshot, isNew: registration.isNew)

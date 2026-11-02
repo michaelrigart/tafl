@@ -7,6 +7,8 @@ struct ResolvedWindowID: Sendable, Equatable {
 
 /// Maps each `WindowHandle` to its element. A window keeps its handle for as long as its element
 /// is registered; when no window id resolves, the handle is synthetic (`isStable == false`).
+/// Whether the window's creation has been announced is kept apart from its registration: a query
+/// registers windows but never announces them.
 actor WindowRegistry {
     struct Registration: Sendable, Equatable {
         var handle: WindowHandle
@@ -17,6 +19,7 @@ actor WindowRegistry {
     private struct Entry {
         var handle: WindowHandle
         var element: AXElementBox
+        var announced = false
     }
 
     private var entries: [Entry] = []
@@ -63,6 +66,25 @@ actor WindowRegistry {
 
     func element(for handle: WindowHandle) -> AXElementBox? {
         entries.first { $0.handle == handle }?.element
+    }
+
+    /// Marks the window's creation announced. False when it already was, or the window is not
+    /// registered: the caller announces only on true.
+    func announce(_ handle: WindowHandle) -> Bool {
+        guard let index = entries.firstIndex(where: { $0.handle == handle }), !entries[index].announced else {
+            return false
+        }
+        entries[index].announced = true
+        return true
+    }
+
+    /// Takes back what a catch-up whose claim ended did: the windows it registered go, and the
+    /// ones it marked announced are not.
+    func withdraw(registered: [WindowHandle], announced: [WindowHandle]) {
+        entries.removeAll { registered.contains($0.handle) }
+        for index in entries.indices where announced.contains(entries[index].handle) {
+            entries[index].announced = false
+        }
     }
 
     func remove(_ handle: WindowHandle) {

@@ -18,8 +18,8 @@ final class WindowObservation27: Sendable {
         var isLaunching: @Sendable (Int32) -> Bool
         var untilFinishedLaunching: @Sendable (Int32) async -> Void
         var register: @Sendable (AXObserverHub, Int32, String?, @escaping AXObserverHub.Handler) -> [String: AXError]
-        /// The app's windows that the registry did not have, as snapshots.
-        var newWindows: @Sendable (AppInfo27) async -> [WindowSnapshot]
+        /// The app's windows, registered.
+        var windows: @Sendable (AppInfo27) async -> [WindowCatalog27.Entry]
 
         static func live(catalog: WindowCatalog27) -> Environment {
             Environment(
@@ -30,7 +30,7 @@ final class WindowObservation27: Sendable {
                 isLaunching: { LaunchWait.isLaunching(pid: $0) },
                 untilFinishedLaunching: { await LaunchWait.untilFinished(pid: $0) },
                 register: { hub, pid, bundleID, handler in hub.observe(pid: pid, bundleID: bundleID, handler: handler) },
-                newWindows: { app in await catalog.windows(of: app).filter(\.isNew).map(\.snapshot) })
+                windows: { app in await catalog.windows(of: app) })
         }
     }
 
@@ -95,48 +95,60 @@ final class WindowObservation27: Sendable {
     }
 
     func attempt(_ app: AppInfo27, announcingWindows: Bool = false) async -> Outcome {
+        await claimedAttempt(app, announcingWindows: announcingWindows).outcome
+    }
+
+    /// The outcome, and the claim it was reached under when there is one.
+    private func claimedAttempt(_ app: AppInfo27, announcingWindows: Bool) async -> (outcome: Outcome, claim: Int?) {
         let pid = app.pid
-        guard environment.isRunning(pid), let claim = claim(pid) else { return .observed }
+        guard environment.isRunning(pid), let claim = claim(pid) else { return (.observed, nil) }
         // The app may have quit between the check and the claim, after its quit was handled: the claim
         // would then never be released.
         guard environment.isRunning(pid) else {
             release(pid: pid, claim: claim)
-            return .observed
+            return (.observed, nil)
         }
-        guard let failures = await register(app, claim: claim) else { return .observed }
-        if failures.isEmpty {
-            if announcingWindows { await announceWindows(of: app) }
-            return .observed
-        }
+        guard let failures = await register(app, claim: claim) else { return (.observed, nil) }
         if Self.needsRetry(failures), environment.isLaunching(pid) {
-            return .retrying(Task {
+            return (.retrying(Task {
                 await self.environment.untilFinishedLaunching(pid)
                 guard let again = await self.register(app, claim: claim) else { return }
-                if again.isEmpty {
-                    await self.announceWindows(of: app)
-                } else if self.isLive(pid: pid, claim: claim) {
-                    self.yieldUnobservable(Self.unobservable(app, again))
+                if Self.observesPlacement(again) { await self.announceWindows(of: app, claim: claim) }
+                if !again.isEmpty, self.environment.isRunning(pid) {
+                    self.publishUnobservable(Self.unobservable(app, again), claim: claim)
                 }
-            })
+            }), claim)
         }
-        guard isLive(pid: pid, claim: claim) else { return .observed }
-        return .unobservable(Self.unobservable(app, failures))
+        if announcingWindows, Self.observesPlacement(failures) { await announceWindows(of: app, claim: claim) }
+        guard !failures.isEmpty, isLive(pid: pid, claim: claim) else { return (.observed, claim) }
+        return (.unobservable(Self.unobservable(app, failures)), claim)
     }
 
     /// Meets an app a query found: observes it if this run has not.
     func discover(_ app: AppInfo27) async {
-        if let unobservable = await observe(app) { yieldUnobservable(unobservable) }
+        await observeReporting(app, announcingWindows: false)
     }
 
     func appLaunched(_ app: AppInfo27) async {
         events.yield(.appLaunched(pid: app.pid, bundleID: app.bundleID))
-        if let unobservable = await observe(app, announcingWindows: true) { yieldUnobservable(unobservable) }
+        await observeReporting(app, announcingWindows: true)
+    }
+
+    /// Observes the app and publishes, under its claim, that it cannot be observed when so.
+    private func observeReporting(_ app: AppInfo27, announcingWindows: Bool) async {
+        let attempt = await claimedAttempt(app, announcingWindows: announcingWindows)
+        if case .unobservable(let unobservable) = attempt.outcome, let claim = attempt.claim {
+            publishUnobservable(unobservable, claim: claim)
+        }
     }
 
     /// Ends the app's claim, so nothing still in flight for it reports or registers, and frees what it held.
     func appQuit(pid: Int32) async {
-        events.yield(.appQuit(pid: pid))
-        let wasClaimed = state.withLock { $0.claims.removeValue(forKey: pid) != nil }
+        // Under the lock `publish` takes: nothing found under the claim arrives after the quit.
+        let wasClaimed = state.withLock { state in
+            events.yield(.appQuit(pid: pid))
+            return state.claims.removeValue(forKey: pid) != nil
+        }
         if wasClaimed {
             let hub = hub
             await axQueue.run(pid: pid) { hub.stopObserving(pid: pid) }
@@ -148,6 +160,12 @@ final class WindowObservation27: Sendable {
 
     static func needsRetry(_ failures: [String: AXError]) -> Bool {
         failures.values.contains(.cannotComplete)
+    }
+
+    /// Whether what placement needs is observed (creations, moves, resizes, destructions): a missing
+    /// title-change observation costs only the first-title check.
+    static func observesPlacement(_ failures: [String: AXError]) -> Bool {
+        observedEvents(for: Set(failures.keys)).isSubset(of: [.titleChanged])
     }
 
     static func observedEvents(for notifications: Set<String>) -> Set<ObservedEvent> {
@@ -215,15 +233,36 @@ final class WindowObservation27: Sendable {
         }
     }
 
-    /// The windows the app already has when its events start: the ones no notification will announce.
-    private func announceWindows(of app: AppInfo27) async {
-        for snapshot in await environment.newWindows(app) {
-            events.yield(.windowCreated(snapshot))
+    /// The windows the app already has when its events start, which no notification will announce:
+    /// each one not yet announced, whoever registered it. When the claim ends meanwhile (the app quit,
+    /// or observing restarted), the catch-up publishes nothing and takes back what it registered.
+    private func announceWindows(of app: AppInfo27, claim: Int) async {
+        let found = await environment.windows(app)
+        var fresh: [WindowSnapshot] = []
+        if isCurrent(pid: app.pid, claim: claim) {
+            for entry in found {
+                if await registry.announce(entry.snapshot.handle) { fresh.append(entry.snapshot) }
+            }
+        }
+        guard publish(fresh.map(PlatformEvent.windowCreated), pid: app.pid, claim: claim) else {
+            await registry.withdraw(registered: found.filter(\.isNew).map(\.snapshot.handle), announced: fresh.map(\.handle))
+            return
         }
     }
 
-    private func yieldUnobservable(_ app: UnobservableApp) {
+    private func publishUnobservable(_ app: UnobservableApp, claim: Int) {
+        let event = PlatformEvent.unobservable(pid: app.pid, bundleID: app.bundleID, missing: app.missing)
+        guard publish([event], pid: app.pid, claim: claim) else { return }
         PlatformLog.windows.notice("Cannot observe \(app.bundleID ?? "an app", privacy: .public)")
-        events.yield(.unobservable(pid: app.pid, bundleID: app.bundleID, missing: app.missing))
+    }
+
+    /// Publishes what was found under a claim, only while the claim holds. It takes the lock `appQuit`
+    /// takes, so nothing an ended claim found arrives after the app's quit.
+    private func publish(_ found: [PlatformEvent], pid: Int32, claim: Int) -> Bool {
+        state.withLock { state in
+            guard state.isActive, state.claims[pid] == claim else { return false }
+            for event in found { events.yield(event) }
+            return true
+        }
     }
 }

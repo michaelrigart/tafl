@@ -103,11 +103,29 @@ func aCreatedWindowIsAnnouncedOnceAndItsTitleIsReadFresh() async {
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aWindowTheCatchUpAlreadyRegisteredIsNotAnnouncedByItsNotification() async {
+func aWindowTheCatchUpAlreadyAnnouncedIsNotAnnouncedByItsNotification() async {
     var harness = Harness(reader())
-    _ = await harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
+    let registered = await harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
+    _ = await harness.registry.announce(registered.handle)
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
+    #expect(await harness.next() == .windowMoved(handle(10, 1010)))
+    harness.translator.closeAll()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aWindowAQueryRegisteredIsAnnouncedOnceByItsCreation() async {
+    var harness = Harness(reader())
+    // A query met the window before its creation notification was handled.
+    _ = await harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
+    harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
+    harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
+    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
+    guard case .windowCreated(let snapshot)? = await harness.next() else {
+        Issue.record("expected the creation to be announced")
+        return
+    }
+    #expect(snapshot.handle == handle(10, 1010))
     #expect(await harness.next() == .windowMoved(handle(10, 1010)))
     harness.translator.closeAll()
 }
