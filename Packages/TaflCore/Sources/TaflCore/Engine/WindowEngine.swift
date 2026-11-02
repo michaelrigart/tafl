@@ -32,15 +32,10 @@ struct RunCount: Sendable {
     /// The failure a run reports, so one run shows one overlay: the first failure of the first
     /// app to finish with one.
     var firstFailure: RunFailure?
-    /// Where the windows the run wrote ended up.
-    var placed: [KnownFrame] = []
-    /// Windows someone moved while the run placed them.
-    var interrupted: [WindowHandle] = []
 
     mutating func fail(_ window: WindowHandle, _ kind: FailureKind) {
         failed += 1
         if firstFailure == nil { firstFailure = RunFailure(window: window, kind: kind) }
-        if kind == .movedDuringPlacement { interrupted.append(window) }
     }
 
     mutating func add(_ other: RunCount) {
@@ -48,8 +43,6 @@ struct RunCount: Sendable {
         unchanged += other.unchanged
         failed += other.failed
         if firstFailure == nil { firstFailure = other.firstFailure }
-        placed += other.placed
-        interrupted += other.interrupted
     }
 }
 
@@ -350,7 +343,7 @@ public actor WindowEngine {
         }
         let pointer = await platform.pointerDisplay()
         let config = config
-        let outcome = await pipeline.run(focused.handle, config: config) { resolved in
+        let outcome = await pipeline.run(focused.handle, config: config, plan: { resolved in
             let context = ActionContext(
                 window: resolved.snapshot,
                 display: resolved.display,
@@ -374,14 +367,13 @@ public actor WindowEngine {
             case .nothing: return .nothing
             case .fail(let kind): return .fail(kind)
             }
-        }
-        switch outcome {
-        case .placed(let frame):
-            await recordLastKnownLive([KnownFrame(handle: focused.handle, frame: frame)], since: since)
-        case .failed(let kind):
+        }, landed: { outcome in
+            if case .placed(let frame) = outcome {
+                await self.recordLastKnownLive([KnownFrame(handle: focused.handle, frame: frame)], since: since)
+            }
+        })
+        if case .failed(let kind) = outcome {
             report(.failure(kind, display: await displayIdentity(of: focused, after: kind)))
-        case .unchanged, .superseded:
-            break
         }
     }
 
@@ -430,8 +422,7 @@ public actor WindowEngine {
 
     /// Runs the requests: apps side by side, each app's windows in order, so an app that does
     /// not answer holds up only its own windows. A reconfiguration that has begun since `since`
-    /// stops the run. Windows the run wrote are recorded as last known, unless a change is in
-    /// progress.
+    /// stops the run. Each request's result is recorded as it lands (see `landed`).
     func run(_ requests: [MoveRequest], since: Int) async -> RunCount {
         var order: [Int32] = []
         var byApp: [Int32: [MoveRequest]] = [:]
@@ -454,14 +445,14 @@ public actor WindowEngine {
                     for request in batch {
                         if Task.isCancelled || !reconfigurations.isCurrent(since) { break }
                         // The check inside the plan closes the gap before the pipeline reads its epoch.
-                        let outcome = await pipeline.run(request.window, config: config) { _ in
+                        let outcome = await pipeline.run(request.window, config: config, plan: { _ in
                             reconfigurations.isCurrent(since) ? .request(request) : .nothing
-                        }
+                        }, landed: { outcome in
+                            await self.landed(outcome, of: request.window, run: runID, since: since)
+                        })
                         if !reconfigurations.isCurrent(since) { break }
                         switch outcome {
-                        case .placed(let frame):
-                            count.moved += 1
-                            count.placed.append(KnownFrame(handle: request.window, frame: frame))
+                        case .placed: count.moved += 1
                         case .unchanged: count.unchanged += 1
                         case .failed(let kind): count.fail(request.window, kind)
                         case .superseded: break
@@ -474,12 +465,21 @@ public actor WindowEngine {
             for await count in group { total.add(count) }
             return total
         }
-        // Someone moved the window while it was placed: a title check must not place it again.
-        movedExternally.formUnion(total.interrupted)
-        let alive = runWindows[runID] ?? []
         runWindows[runID] = nil
-        await recordLastKnownLive(total.placed.filter { alive.contains($0.handle) }, since: since)
         return total
+    }
+
+    /// What one request of a run did, recorded inside the window's request: where it put the
+    /// window, as last known unless a change is in progress, or that someone moved the window
+    /// meanwhile, so a title check does not place it again. A window destroyed, or whose app quit,
+    /// during the run gets nothing.
+    private func landed(_ outcome: PlacementOutcome, of window: WindowHandle, run runID: Int, since: Int) async {
+        guard runWindows[runID]?.contains(window) == true else { return }
+        switch outcome {
+        case .placed(let frame): await recordLastKnownLive([KnownFrame(handle: window, frame: frame)], since: since)
+        case .failed(.movedDuringPlacement): movedExternally.insert(window)
+        case .unchanged, .failed, .superseded: break
+        }
     }
 
     // MARK: Helpers

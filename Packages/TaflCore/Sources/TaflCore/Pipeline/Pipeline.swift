@@ -73,13 +73,18 @@ public actor Pipeline {
         self.steps = steps
     }
 
+    /// `landed` runs inside the window's request once its outcome is known, so what it records
+    /// comes before anything the window's next request, or a frame read after it, records.
     public func run(
         _ window: WindowHandle,
         config: Config,
-        plan: @escaping @Sendable (ResolvedWindow) -> PlanResult
+        plan: @escaping @Sendable (ResolvedWindow) -> PlanResult,
+        landed: @escaping @Sendable (PlacementOutcome) async -> Void = { _ in }
     ) async -> PlacementOutcome {
         let outcome = await queue.run(window) { [self] in
-            await execute(window, config: config, plan: plan)
+            let outcome = await execute(window, config: config, plan: plan)
+            await landed(outcome)
+            return outcome
         }
         return outcome ?? .superseded
     }

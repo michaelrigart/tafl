@@ -1194,6 +1194,39 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
     }
 }
 
+@Test(.timeLimit(.minutes(1))) func aWindowDraggedWhileTheRestOfALayoutRunsKeepsItsDraggedFrame() async {
+    let a = window(1, frame: start, pid: 100, bundleID: "com.a")
+    let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
+    let desk = layout("Work", [slot(.leftHalf, app: "com.a"), slot(.topHalf, app: "com.c")])
+    let rig = await Rig(windows: [a, slow], focused: nil) { $0.hung = [50] }
+    await rig.engine.start(config: config(layouts: [desk]))
+    let applying = Task { await rig.engine.applyLayout(named: "Work") }
+    // A's placement lands while the hung app holds up the rest of the run.
+    await rig.clock.waitForSleepers(1)
+    let setup = DisplaySetup([displayA])
+    let landed = await pollUntilLastKnown(rig, a.handle, setup) { $0 == leftHalfA.relative(to: v) }
+    #expect(landed)
+    let dragged = rect(200, 200, 300, 300)
+    await rig.fake.configure { $0.windows[a.handle]?.frame = dragged }
+    await rig.emit(.windowMoved(a.handle))
+    await rig.waitForEvents(1)
+    await rig.clock.advance(by: .milliseconds(500))
+    await applying.value
+    #expect(await rig.engine.memory.read().lastKnown(a.handle, setup: setup)?.relative == dragged.relative(to: v))
+}
+
+/// Polls a window's last-known frame until `matches` holds, for up to 2 s of wall-clock time.
+private func pollUntilLastKnown(
+    _ rig: Rig, _ window: WindowHandle, _ setup: DisplaySetup, _ matches: @Sendable (UnitRect?) -> Bool
+) async -> Bool {
+    let begun = ContinuousClock.now
+    while await !matches(rig.engine.memory.read().lastKnown(window, setup: setup)?.relative) {
+        if begun.duration(to: .now) > .seconds(2) { return false }
+        await Task.yield()
+    }
+    return true
+}
+
 @Test(.timeLimit(.minutes(1))) func aWindowDestroyedDuringALayoutRunGetsNoLastKnownFrame() async {
     let a = window(1, frame: start, pid: 100, bundleID: "com.a")
     let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
