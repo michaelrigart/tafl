@@ -20,6 +20,8 @@ public protocol HotkeyRegistrar: AnyObject {
 public enum ActivationFailure: Equatable, Sendable {
     case untranslatable(String)
     case taken
+    /// Another target earlier in the registration order translates to the same chord.
+    case clashes(with: HotkeyTarget)
 }
 
 @MainActor
@@ -35,13 +37,17 @@ public final class ShortcutActivator {
     public func activate(_ config: Config, table: KeyboardLayoutTable) -> [HotkeyTarget: ActivationFailure] {
         deactivateAll()
         var failures: [HotkeyTarget: ActivationFailure] = [:]
+        var claimed: [KeyChord: HotkeyTarget] = [:]
         for action in Action.allCases {
             let chord: KeyChord
             switch config.binding(for: action) {
             case .unbound:
                 continue
             case .standard:
-                guard let standard = DefaultShortcuts.chords[action] else { continue }
+                guard let standard = DefaultShortcuts.chords[action] else {
+                    assertionFailure("\(action.rawValue) has no default shortcut")
+                    continue
+                }
                 chord = standard
             case .custom(let shortcut):
                 switch KeyTranslator.chord(for: shortcut, table: table) {
@@ -51,13 +57,13 @@ public final class ShortcutActivator {
                     continue
                 }
             }
-            register(chord, for: .action(action), failures: &failures)
+            register(chord, for: .action(action), claimed: &claimed, failures: &failures)
         }
         for layout in config.layouts {
             guard let shortcut = layout.shortcut else { continue }
             let target = HotkeyTarget.layout(layout.name)
             switch KeyTranslator.chord(for: shortcut, table: table) {
-            case .success(let chord): register(chord, for: target, failures: &failures)
+            case .success(let chord): register(chord, for: target, claimed: &claimed, failures: &failures)
             case .failure(let error): failures[target] = .untranslatable(error.message)
             }
         }
@@ -74,7 +80,13 @@ public final class ShortcutActivator {
     }
 
     private func register(_ chord: KeyChord, for target: HotkeyTarget,
+                          claimed: inout [KeyChord: HotkeyTarget],
                           failures: inout [HotkeyTarget: ActivationFailure]) {
+        if let earlier = claimed[chord] {
+            failures[target] = .clashes(with: earlier)
+            return
+        }
+        claimed[chord] = target
         if let registration = registrar.register(chord) {
             targets[registration] = target
         } else {

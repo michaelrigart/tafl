@@ -35,8 +35,8 @@ struct ShortcutActivatorTests {
         #expect(failures == [.action(.leftHalf): .taken])
         #expect(registrar.calls.count == 25)
         #expect(registrar.registeredChords.count == 25)
-        #expect(activator.target(for: HotkeyRegistration(id: 24)) != nil)
-        #expect(activator.target(for: HotkeyRegistration(id: 25)) == nil)
+        let registered = (1...24).compactMap { activator.target(for: HotkeyRegistration(id: UInt32($0))) }
+        #expect(registered == Action.allCases.dropFirst().map(HotkeyTarget.action))
     }
 
     @Test("a reload unregisters the whole old set before registering the new one")
@@ -61,12 +61,39 @@ struct ShortcutActivatorTests {
 
     @Test("a character shortcut that no longer translates after an input source change is reported")
     func untranslatableAfterInputSourceChange() throws {
-        let custom = config(shortcuts: [.leftHalf: .custom(try shortcut("ctrl+opt+)"))])
+        let custom = config(shortcuts: [.leftHalf: .custom(try shortcut("ctrl+opt+)")), .smaller: .unbound])
         let azerty = ShortcutActivator(registrar: FakeRegistrar())
         #expect(azerty.activate(custom, table: .frenchAZERTY).isEmpty)
         let us = ShortcutActivator(registrar: FakeRegistrar())
         #expect(us.activate(custom, table: .usANSI)
             == [.action(.leftHalf): .untranslatable("\")\" needs a modifier that isn't in the shortcut; use \"0\" instead")])
+    }
+
+    @Test("switching the input source unregisters the old registration when the new translation fails")
+    func inputSourceChangeOnOneActivator() throws {
+        let custom = config(shortcuts: [.leftHalf: .custom(try shortcut("ctrl+opt+)")), .smaller: .unbound])
+        let registrar = FakeRegistrar()
+        let activator = ShortcutActivator(registrar: registrar)
+        _ = activator.activate(custom, table: .frenchAZERTY)
+        let leftHalfID = try #require((1...24).first { activator.target(for: HotkeyRegistration(id: UInt32($0))) == .action(.leftHalf) })
+        _ = activator.activate(custom, table: .usANSI)
+        #expect(registrar.calls.contains(.unregister(HotkeyRegistration(id: UInt32(leftHalfID)))))
+        #expect(activator.target(for: HotkeyRegistration(id: UInt32(leftHalfID))) == nil)
+        #expect(!(25...50).contains { activator.target(for: HotkeyRegistration(id: UInt32($0))) == .action(.leftHalf) })
+    }
+
+    @Test("two targets that translate to one chord after an input source change: the later one is not registered")
+    func chordClashAfterInputSourceChange() throws {
+        let custom = config(shortcuts: [.smaller: .unbound, .leftHalf: .custom(try shortcut("ctrl+opt+-"))])
+        let us = FakeRegistrar()
+        #expect(ShortcutActivator(registrar: us).activate(custom, table: .usANSI).isEmpty)
+        let registrar = FakeRegistrar()
+        let activator = ShortcutActivator(registrar: registrar)
+        // On AZERTY "-" is key 24, larger's default; left-half precedes larger in Action.allCases.
+        let failures = activator.activate(custom, table: .frenchAZERTY)
+        #expect(failures == [.action(.larger): .clashes(with: .action(.leftHalf))])
+        #expect(Set(registrar.registeredChords).count == registrar.registeredChords.count)
+        #expect(registrar.registeredChords.count == 23)
     }
 
     @Test("layout shortcuts register and map back to the layout name")
@@ -80,6 +107,20 @@ struct ShortcutActivatorTests {
         #expect(failures.isEmpty)
         #expect(registrar.registeredChords.count == 26)
         #expect(activator.target(for: HotkeyRegistration(id: 26)) == .layout("Desk"))
+    }
+
+    @Test("a layout shortcut that does not translate or is taken is reported")
+    func layoutFailures() throws {
+        let bad = LayoutDefinition(name: "Bad", displays: [], shortcut: try shortcut("ctrl+opt+cmd+)"), entries: [])
+        let held = LayoutDefinition(name: "Held", displays: [], shortcut: try shortcut("ctrl+opt+cmd+1"), entries: [])
+        let registrar = FakeRegistrar()
+        registrar.taken = [KeyChord(keyCode: 18, modifiers: [.control, .option, .command])]
+        let activator = ShortcutActivator(registrar: registrar)
+        let failures = activator.activate(config(layouts: [bad, held]), table: .usANSI)
+        #expect(failures == [
+            .layout("Bad"): .untranslatable("\")\" needs a modifier that isn't in the shortcut; use \"0\" instead"),
+            .layout("Held"): .taken,
+        ])
     }
 
     @Test("unbound actions are not registered")
@@ -98,6 +139,7 @@ struct ShortcutActivatorTests {
         let activator = ShortcutActivator(registrar: registrar)
         _ = activator.activate(config(), table: .usANSI)
         activator.deactivateAll()
+        #expect(Set(registrar.calls.suffix(25)) == Set((1...25).map { FakeRegistrar.Call.unregister(HotkeyRegistration(id: UInt32($0))) }))
         #expect(registrar.calls.count == 50)
         #expect(activator.target(for: HotkeyRegistration(id: 1)) == nil)
     }

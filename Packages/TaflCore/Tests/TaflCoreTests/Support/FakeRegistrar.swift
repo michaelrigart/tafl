@@ -1,7 +1,7 @@
 @testable import TaflCore
 
 final class FakeRegistrar: HotkeyRegistrar {
-    enum Call: Equatable {
+    enum Call: Hashable {
         case register(KeyChord)
         case unregister(HotkeyRegistration)
     }
