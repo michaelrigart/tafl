@@ -1,5 +1,6 @@
 import AppKit
 import TaflCore
+import TaflPlatform27
 
 /// A short message on the display a failed action belongs to. It never takes focus.
 final class FailureOverlay {
@@ -42,6 +43,7 @@ final class FailureOverlay {
     }
 
     func show(_ kind: FailureKind, on display: DisplayIdentity?) {
+        guard !NSScreen.screens.isEmpty else { return }
         label.stringValue = kind.message
         let size = NSSize(width: label.fittingSize.width + 56, height: label.fittingSize.height + 36)
         let frame = screen(for: display).frame
@@ -58,16 +60,18 @@ final class FailureOverlay {
     }
 
     private func screen(for display: DisplayIdentity?) -> NSScreen {
-        if let display, let match = NSScreen.screens.first(where: { identity(of: $0)?.identifier == display.identifier }) { return match }
+        if let display,
+           let raw = DisplayReader27.displays().first(where: {
+               $0.vendor == display.vendor && $0.model == display.model && $0.serial == display.serial
+           }),
+           let match = NSScreen.screens.first(where: { screenNumber($0) == raw.displayID }) {
+            return match
+        }
         let pointer = NSEvent.mouseLocation
         return NSScreen.screens.first { NSMouseInRect(pointer, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
     }
 
-    private func identity(of screen: NSScreen) -> DisplayIdentity? {
-        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
-        let id = number.uint32Value
-        return DisplayIdentity(
-            name: screen.localizedName, vendor: CGDisplayVendorNumber(id), model: CGDisplayModelNumber(id),
-            serial: CGDisplaySerialNumber(id))
+    private func screenNumber(_ screen: NSScreen) -> UInt32? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
     }
 }

@@ -8,6 +8,8 @@ final class ConfigController {
     typealias Gate = (Config) -> [HotkeyTarget: ActivationFailure]
 
     var onChange: (() -> Void)?
+    /// Called after each update the engine has taken, so the menu can ask which layout is active.
+    var onEngineUpdated: (() async -> Void)?
 
     private(set) var state = ConfigState()
     private(set) var activationFailures: [HotkeyTarget: ActivationFailure] = [:]
@@ -18,6 +20,8 @@ final class ConfigController {
     private let gate: Gate
     private let engineIsRunning: () -> Bool
     private var engineUpdate: Task<Void, Never>?
+    private var lastRead: ConfigRead?
+    private var loginItemApplied: Bool?
 
     var config: Config { state.effective }
 
@@ -36,15 +40,31 @@ final class ConfigController {
     }
 
     func reload() {
-        state.apply(ConfigFileReader.read(path: path), table: table())
+        let read = ConfigFileReader.read(path: path)
+        switch ConfigReload.step(previous: lastRead, new: read, hasActivationFailures: !activationFailures.isEmpty) {
+        case .nothing:
+            return
+        case .retryShortcuts:
+            Log.config.notice("Config unchanged, trying the failed shortcuts again")
+            reactivate()
+            return
+        case .apply:
+            break
+        }
+        lastRead = read
+        state.apply(read, table: table())
         switch state.status {
         case .defaults: Log.config.notice("Config reloaded: no file, using defaults")
         case .loaded: Log.config.notice("Config reloaded")
         case .rejected(let error):
-            Log.config.notice("Config rejected at line \(error.line ?? 0, privacy: .public): \(error.message, privacy: .private)")
+            if let line = error.line {
+                Log.config.notice("Config rejected at line \(line, privacy: .public): \(error.message, privacy: .private)")
+            } else {
+                Log.config.notice("Config rejected: \(error.message, privacy: .private)")
+            }
         }
         pushToEngine()
-        LoginItem.apply(state.effective.launchAtLogin)
+        applyLoginItem()
         reactivate()
     }
 
@@ -57,7 +77,18 @@ final class ConfigController {
         engineUpdate = Task {
             await previous?.value
             await engine.update(config: config)
+            await onEngineUpdated?()
         }
+    }
+
+    private func applyLoginItem() {
+        let enabled = state.effective.launchAtLogin
+        switch ConfigReload.loginItem(enabled: enabled, lastApplied: loginItemApplied, bundlePath: Bundle.main.bundleURL.path) {
+        case .unchanged: return
+        case .apply: LoginItem.apply(enabled)
+        case .skipNotInstalled: Log.app.notice("Launch at login left alone: this copy is not in /Applications")
+        }
+        loginItemApplied = enabled
     }
 
     /// Goes through the shortcut gate again with the configuration already read.

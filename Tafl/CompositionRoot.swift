@@ -14,7 +14,10 @@ final class CompositionRoot {
     private var table: KeyboardLayoutTable
     private var watcher: ConfigWatcher?
     private var sessionEvents: SessionEvents?
-    private var tasks: [Task<Void, Never>] = []
+    private var reportTask: Task<Void, Never>?
+    private var permissionTask: Task<Void, Never>?
+    private var restartTask: Task<Void, Never>?
+    private var shuttingDown = false
     private var startTask: Task<Void, Never>?
     private var activeLayout: String?
     /// Whether Accessibility was granted when last looked at.
@@ -53,18 +56,19 @@ final class CompositionRoot {
     /// then shows the status item.
     func start() {
         registrar.onPress = { [unowned self] registration in hotkeyPressed(registration) }
-        tasks.append(Task { [engine] in
+        reportTask = Task { [engine] in
             for await report in engine.reports { handle(report) }
-        })
-        tasks.append(Task { [permission] in
+        }
+        permissionTask = Task { [permission] in
             for await _ in permission.changes { syncPermission() }
-        })
+        }
         configController.reload()
         let watcher = ConfigWatcher(path: Self.configPath) { [unowned self] in configController.reload() }
         watcher.start()
         self.watcher = watcher
         syncPermission()
         configController.onChange = { [unowned self] in refreshMenu() }
+        configController.onEngineUpdated = { [unowned self] in await refreshActiveLayout() }
         statusItem.onApplyLayout = { [unowned self] name in
             Task { await engine.applyLayout(named: name) }
         }
@@ -83,14 +87,20 @@ final class CompositionRoot {
         Log.app.notice("Tafl started")
     }
 
-    /// Stops the engine, which saves the memory, then removes the hotkeys. Windows stay where they are.
+    /// Removes the hotkeys, then stops the engine, which saves the memory. Windows stay where they
+    /// are. The report consumer runs until the engine has stopped, so a failed save is logged.
     func shutdown() async {
-        tasks.forEach { $0.cancel() }
+        shuttingDown = true
+        permissionTask?.cancel()
         watcher?.stop()
         sessionEvents?.stop()
-        await startTask?.value
-        if engineStarted { await engine.stop() }
         activator.deactivateAll()
+        await startTask?.value
+        await restartTask?.value
+        activator.deactivateAll()
+        if engineStarted { await engine.stop() }
+        await Task.yield()
+        reportTask?.cancel()
         Log.app.notice("Tafl quit")
     }
 
@@ -123,7 +133,7 @@ final class CompositionRoot {
         } else if regained {
             Log.app.notice("Accessibility granted again")
             configController.reactivate()
-            Task { await engine.restartObserving() }
+            restartObserving()
         }
     }
 
@@ -151,7 +161,7 @@ final class CompositionRoot {
     /// The only caller of `activate`: shortcuts exist only while Accessibility is granted and the
     /// engine is running.
     private func gate(_ config: Config) -> [HotkeyTarget: ActivationFailure] {
-        guard engineStarted, trusted, permission.isTrusted else {
+        guard engineStarted, trusted, !shuttingDown, permission.isTrusted else {
             activator.deactivateAll()
             return [:]
         }
@@ -170,11 +180,20 @@ final class CompositionRoot {
         }
     }
 
+    /// Restarts run one after another, never side by side.
+    private func restartObserving() {
+        let previous = restartTask
+        restartTask = Task {
+            await previous?.value
+            await engine.restartObserving()
+        }
+    }
+
     private func resume(after moment: String) {
         Log.app.notice("Resuming after \(moment, privacy: .public)")
         configController.reactivate()
         guard engineStarted, trusted else { return }
-        Task { await engine.restartObserving() }
+        restartObserving()
     }
 
     // MARK: Reports and menu

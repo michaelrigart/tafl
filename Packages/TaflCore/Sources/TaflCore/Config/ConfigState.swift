@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ConfigRead: Sendable {
+public enum ConfigRead: Equatable, Sendable {
     case missing
     case text(String)
     case unreadable(String)

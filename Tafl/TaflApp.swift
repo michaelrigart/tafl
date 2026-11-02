@@ -21,11 +21,15 @@ final class TaflApp: NSObject, NSApplicationDelegate {
             return
         }
         #endif
-        if let running = otherInstance() {
-            Log.app.notice("Another Tafl is running; handing over to it")
+        if let running = earlierInstance() {
+            Log.app.notice("An earlier Tafl is running; handing over to it")
             hand(over: running)
             return
         }
+        startRoot()
+    }
+
+    private func startRoot() {
         let root = CompositionRoot()
         self.root = root
         root.start()
@@ -49,19 +53,32 @@ final class TaflApp: NSObject, NSApplicationDelegate {
         return .terminateLater
     }
 
-    private func otherInstance() -> NSRunningApplication? {
-        NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID)
-            .first { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+    /// The copy that started first keeps running; a copy of this one that started together with it
+    /// settles on the lower process id.
+    private func earlierInstance() -> NSRunningApplication? {
+        let own = (launchDate: NSRunningApplication.current.launchDate, pid: ProcessInfo.processInfo.processIdentifier)
+        return NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID).first {
+            !$0.isTerminated && $0.processIdentifier != own.pid
+                && InstanceOrder.defers(own: own, to: (launchDate: $0.launchDate, pid: $0.processIdentifier))
+        }
     }
 
-    /// Opening the running copy again makes it receive a reopen, which opens its Settings.
+    /// Opening the running copy again makes it receive a reopen, which opens its Settings. If that
+    /// fails, this copy carries on rather than leave none running.
     private func hand(over running: NSRunningApplication) {
         guard let url = running.bundleURL else {
-            NSApp.terminate(nil)
+            startRoot()
             return
         }
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in
-            DispatchQueue.main.async { NSApp.terminate(nil) }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            Task { @MainActor in
+                if error == nil {
+                    NSApp.terminate(nil)
+                } else {
+                    Log.app.notice("Could not hand over to the running Tafl; starting this copy")
+                    self.startRoot()
+                }
+            }
         }
     }
 }

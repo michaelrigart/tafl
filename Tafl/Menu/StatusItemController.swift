@@ -10,10 +10,10 @@ struct StatusMenuContent: Equatable {
 }
 
 final class StatusItemController: NSObject {
-    var onApplyLayout: ((String) -> Void)?
+    var onApplyLayout: ((String) -> Void)? { didSet { rebuild() } }
     /// Settings and Capture Current Arrangement are disabled until their handler is set.
-    var onOpenSettings: (() -> Void)?
-    var onCapture: (() -> Void)?
+    var onOpenSettings: (() -> Void)? { didSet { rebuild() } }
+    var onCapture: (() -> Void)? { didSet { rebuild() } }
 
     var content = StatusMenuContent() {
         didSet { if content != oldValue { rebuild() } }
