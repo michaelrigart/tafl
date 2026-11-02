@@ -20,6 +20,6 @@ struct DisplayMatcherTests {
         #expect(DisplayMatcher.claims(references, [builtIn, hdr]))
         #expect(!DisplayMatcher.claims(references, [builtIn, hdr, lg1]))
         #expect(!DisplayMatcher.claims(references, [builtIn]))
-        #expect(!DisplayMatcher.claims(["LG HDR", "LG HDR"], [hdr, hdr]))
+        #expect(!DisplayMatcher.claims(["LG HDR", "LG HDR"], [builtIn, hdr]))
     }
 }

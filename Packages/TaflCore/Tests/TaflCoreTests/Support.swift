@@ -15,3 +15,11 @@ func display(_ visible: ScreenRect) -> Display {
         visibleFrame: visible
     )
 }
+
+func namedDisplay(_ name: String, _ frame: ScreenRect, serial: UInt32 = 1) -> Display {
+    Display(
+        identity: DisplayIdentity(name: name, vendor: 7789, model: 30648, serial: serial),
+        frame: frame,
+        visibleFrame: frame
+    )
+}

@@ -2,7 +2,9 @@ import Foundation
 
 public enum DisplayTransfer {
     public static func relative(_ frame: ScreenRect, from: Display, to: Display) -> ScreenRect {
-        let moved = frame.relative(to: from.visibleFrame).absolute(in: to.visibleFrame)
+        let source = from.visibleFrame
+        guard source.width > 0, source.height > 0 else { return pulledOnScreen(frame, into: to.visibleFrame) }
+        let moved = frame.relative(to: source).absolute(in: to.visibleFrame)
         return pulledOnScreen(moved, into: to.visibleFrame)
     }
 

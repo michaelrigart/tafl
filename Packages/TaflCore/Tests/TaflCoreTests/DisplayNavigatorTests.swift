@@ -1,14 +1,6 @@
 import Testing
 @testable import TaflCore
 
-func namedDisplay(_ name: String, _ frame: ScreenRect, serial: UInt32 = 1) -> Display {
-    Display(
-        identity: DisplayIdentity(name: name, vendor: 7789, model: 30648, serial: serial),
-        frame: frame,
-        visibleFrame: frame
-    )
-}
-
 struct DisplayNavigatorTests {
     private let all: [Direction] = [.left, .right, .up, .down]
 
@@ -74,17 +66,27 @@ struct DisplayNavigatorTests {
         #expect(target(r, .down, [l, m, r]) == "L")
     }
 
-    @Test func locatorPicksLargestOverlap() {
-        let a = namedDisplay("A", rect(0, 0, 1000, 800), serial: 1)
-        let b = namedDisplay("B", rect(1000, 0, 1000, 800), serial: 2)
-        #expect(DisplayLocator.display(containing: rect(800, 100, 500, 300), in: [a, b])?.identity.name == "B")
-        #expect(DisplayLocator.display(containing: rect(800, 100, 300, 300), in: [a, b])?.identity.name == "A")
+    @Test func fallbackFollowsRowsNotRawMinY() {
+        let l = namedDisplay("L", rect(-1920, -300, 1920, 1080), serial: 1)
+        let m = namedDisplay("M", rect(0, 0, 1512, 982), serial: 2)
+        let r = namedDisplay("R", rect(1512, -100, 1920, 1080), serial: 3)
+        #expect(DisplayNavigator.fallbackOrder([r, m, l]).map(\.identity.name) == ["L", "M", "R"])
+        #expect(target(l, .up, [l, m, r]) == "R")
+        #expect(target(m, .down, [l, m, r]) == "R")
     }
 
-    @Test func locatorFallsBackToNearestCentre() {
-        let a = namedDisplay("A", rect(0, 0, 1000, 800), serial: 1)
-        let b = namedDisplay("B", rect(1000, 0, 1000, 800), serial: 2)
-        #expect(DisplayLocator.display(containing: rect(5000, 0, 100, 100), in: [a, b])?.identity.name == "B")
-        #expect(DisplayLocator.display(containing: rect(5000, 0, 100, 100), in: []) == nil)
+    @Test func nearestAmongSeveralCandidates() {
+        let m = namedDisplay("M", rect(0, 0, 1512, 982), serial: 1)
+        let r = namedDisplay("R", rect(1512, 0, 1920, 982), serial: 2)
+        let r2 = namedDisplay("R2", rect(3432, 0, 1920, 982), serial: 3)
+        #expect(target(m, .right, [m, r2, r]) == "R")
+    }
+
+    @Test func equidistantTiesIgnoreInputOrder() {
+        let a = namedDisplay("A", rect(0, 0, 100, 100), serial: 1)
+        let b = namedDisplay("B", rect(-100, -200, 100, 100), serial: 2)
+        let c = namedDisplay("C", rect(100, -200, 100, 100), serial: 3)
+        #expect(target(a, .up, [a, b, c]) == "B")
+        #expect(target(a, .up, [a, c, b]) == "B")
     }
 }

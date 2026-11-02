@@ -16,4 +16,10 @@ struct DisplayTransferTests {
     @Test func framesInsideStayPut() {
         #expect(DisplayTransfer.pulledOnScreen(rect(100, 100, 300, 200), into: v) == rect(100, 100, 300, 200))
     }
+
+    @Test func degenerateSourceKeepsSize() {
+        let from = display(rect(0, 0, 0, 0))
+        let to = display(v)
+        #expect(DisplayTransfer.relative(rect(900, 700, 300, 200), from: from, to: to) == rect(700, 600, 300, 200))
+    }
 }

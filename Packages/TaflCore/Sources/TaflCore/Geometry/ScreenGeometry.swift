@@ -59,6 +59,12 @@ public struct ScreenRect: Hashable, Codable, Sendable {
         return overlapWidth * overlapHeight
     }
 
+    public func distance(toCentreOf other: ScreenRect) -> Double {
+        let dx = midX - other.midX
+        let dy = midY - other.midY
+        return (dx * dx + dy * dy).squareRoot()
+    }
+
     public func contains(_ point: ScreenPoint) -> Bool {
         point.x >= minX && point.x < maxX && point.y >= minY && point.y < maxY
     }
