@@ -225,6 +225,54 @@ struct ActionResolverTests {
         #expect(ActionResolver.plan(.displayUnderPointer, context(pointer: stranger)) == .fail(.noDisplayThatWay))
     }
 
+    @Test func displayMoveRecognisesPlacementWhenTheRecordHasNone() {
+        let ctx = context(
+            frame: rect(10, 35, 652, 755),
+            placed: record(.leftHalf, step: 1, placement: nil, on: a),
+            atAchieved: true, mode: .sizes, gap: 10
+        )
+        #expect(ActionResolver.plan(.displayRight, ctx)
+            == .move(.named(.firstTwoThirds), to: b, placement: .firstTwoThirds, cycleStep: 0))
+    }
+
+    @Test func recordedPlacementBeatsTheRecogniserAtTheAchievedFrame() {
+        let ctx = context(frame: rect(0, 25, 497, 770), placed: record(.leftHalf, placement: .leftHalf, on: a), atAchieved: true)
+        #expect(ActionResolver.plan(.displayRight, ctx)
+            == .move(.named(.leftHalf), to: b, placement: .leftHalf, cycleStep: 0))
+    }
+
+    @Test func leftHalfPressesWalkAcrossDisplaysLikeRectangle() {
+        var placed: PlacedRecord?
+        var current = a
+        var steps: [(NamedPlacement, String)] = []
+        for _ in 0..<5 {
+            let ctx = context(on: current, placed: placed, atAchieved: placed != nil)
+            guard case .move(.named(let half), let target, let kept, let cycleStep) = ActionResolver.plan(.leftHalf, ctx) else {
+                Issue.record("expected a named move")
+                return
+            }
+            steps.append((half, target.identity.name))
+            placed = PlacedRecord(
+                action: .leftHalf, layout: nil, placement: kept, cycleStep: cycleStep,
+                achieved: target.visibleFrame, display: target.identity
+            )
+            current = target
+        }
+        #expect(steps.map(\.0) == [.leftHalf, .rightHalf, .leftHalf, .rightHalf, .leftHalf])
+        #expect(steps.map(\.1) == ["Built-in", "Desk", "Desk", "Built-in", "Built-in"])
+    }
+
+    @Test func leftHalfOnTheOtherHalfsResultIsAFirstPress() {
+        let ctx = context(on: b, placed: record(.leftHalf, placement: .rightHalf, on: b), atAchieved: true)
+        #expect(ActionResolver.plan(.leftHalf, ctx)
+            == .move(.named(.leftHalf), to: b, placement: .leftHalf, cycleStep: 0))
+    }
+
+    @Test func pointerWithASingleDisplayFails() {
+        let ctx = context(displays: [a], pointer: a.identity)
+        #expect(ActionResolver.plan(.displayUnderPointer, ctx) == .fail(.noDisplayThatWay))
+    }
+
     @Test func requestSourcesCountForRestore() {
         #expect(RequestSource.action(.leftHalf).countsForRestore)
         #expect(RequestSource.layout("desk").countsForRestore)

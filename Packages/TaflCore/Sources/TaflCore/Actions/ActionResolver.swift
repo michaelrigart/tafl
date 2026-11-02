@@ -63,7 +63,11 @@ public enum ActionResolver {
         case .displayUp: return moveToDisplay(.up, context)
         case .displayDown: return moveToDisplay(.down, context)
         case .displayUnderPointer: return moveToPointerDisplay(context)
-        default: return .nothing
+        case .leftHalf, .rightHalf, .topHalf, .bottomHalf,
+             .topLeft, .topRight, .bottomLeft, .bottomRight,
+             .firstThird, .centerThird, .lastThird,
+             .firstTwoThirds, .centerTwoThirds, .lastTwoThirds, .maximize:
+            return .nothing
         }
     }
 
@@ -84,7 +88,9 @@ public enum ActionResolver {
         case .centerTwoThirds: .centerTwoThirds
         case .lastTwoThirds: .lastTwoThirds
         case .maximize: .maximize
-        default: nil
+        case .maximizeHeight, .center, .restore, .larger, .smaller,
+             .displayLeft, .displayRight, .displayUp, .displayDown, .displayUnderPointer:
+            nil
         }
     }
 
@@ -97,6 +103,7 @@ public enum ActionResolver {
         case .none:
             return .nothing
         case .displays:
+            guard placed.placement == placement else { return first }
             return repeatOnOtherDisplay(placement, context) ?? first
         case .sizes:
             return repeatSize(placement, placed, context) ?? first
@@ -174,7 +181,8 @@ public enum ActionResolver {
     }
 
     private static func moveToPointerDisplay(_ context: ActionContext) -> ActionPlan {
-        guard let pointer = context.pointerDisplay,
+        guard context.displays.count > 1,
+              let pointer = context.pointerDisplay,
               let target = context.displays.first(where: { $0.identity == pointer })
         else { return .fail(.noDisplayThatWay) }
         guard target.identity != context.display.identity else { return .nothing }
@@ -182,9 +190,8 @@ public enum ActionResolver {
     }
 
     private static func keepingPlacement(on target: Display, _ context: ActionContext) -> ActionPlan {
-        let kept = context.isAtAchieved
-            ? context.placed?.placement
-            : PlacementRecognizer.recognize(context.window.frame, on: context.display, gap: context.config.gap)
+        let kept = (context.isAtAchieved ? context.placed?.placement : nil)
+            ?? PlacementRecognizer.recognize(context.window.frame, on: context.display, gap: context.config.gap)
         if let kept {
             return .move(.named(kept), to: target, placement: kept, cycleStep: 0)
         }
