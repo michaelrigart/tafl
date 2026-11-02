@@ -138,8 +138,9 @@ public actor WindowEngine {
     var restartJournal: RestartJournal?
     /// The latest restart; the next one waits for it.
     var restartTask: Task<Void, Never>?
-    /// Windows someone else moved since they were created.
-    var movedExternally: Set<WindowHandle> = []
+    /// Windows touched since they were created: moved by someone else, or the target of a user
+    /// action. A title check leaves them where they are.
+    var touched: Set<WindowHandle> = []
     var eventTask: Task<Void, Never>?
     /// The wait for the quiet period. An input replaces it; the rules run is not part of it.
     var settleTask: Task<Void, Never>?
@@ -341,6 +342,7 @@ public actor WindowEngine {
         case .success(let snapshot):
             focused = snapshot
         }
+        touched.insert(focused.handle)
         let pointer = await platform.pointerDisplay()
         let config = config
         let outcome = await pipeline.run(focused.handle, config: config, plan: { resolved in
@@ -404,6 +406,7 @@ public actor WindowEngine {
         let windows = await platform.visibleWindows()
         guard reconfigurations.isCurrent(since) else { return }
         let requests = LayoutPlanner.requests(definition, windows: windows, displays: displays, source: .layout(name))
+        touched.formUnion(requests.map(\.window))
         let count = await run(requests, since: since)
         guard !isStopping, reconfigurations.isCurrent(since) else { return }
         if layoutApplications.isCurrent(application) { await setActiveLayout(name) }
@@ -477,7 +480,7 @@ public actor WindowEngine {
         guard runWindows[runID]?.contains(window) == true else { return }
         switch outcome {
         case .placed(let frame): await recordLastKnownLive([KnownFrame(handle: window, frame: frame)], since: since)
-        case .failed(.movedDuringPlacement): movedExternally.insert(window)
+        case .failed(.movedDuringPlacement): touched.insert(window)
         case .unchanged, .failed, .superseded: break
         }
     }

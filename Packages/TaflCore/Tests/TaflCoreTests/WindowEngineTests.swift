@@ -422,6 +422,61 @@ private final class Rig: Sendable {
     #expect(await rig.frame() == rect(200, 200, 400, 300))
 }
 
+@Test func aShortcutEndsANewWindowsTitleCheck() async {
+    let desk = layout("Desk", [slot(.rightHalf, title: "*Docs*")])
+    let rig = await Rig()
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = titled(window(1, frame: start), "Untitled")
+    await rig.fake.configure { $0.windows[created.handle] = created }
+    await rig.emit(.windowCreated(created))
+    await rig.waitForEvents(1)
+    await rig.engine.perform(.leftHalf)
+    // The title that would match comes within the second, after the user placed the window.
+    await rig.fake.configure { $0.windows[handle]?.title = "Docs" }
+    await rig.emit(.titleChanged(handle, "Docs"))
+    await rig.waitForEvents(2)
+    #expect(await rig.frame() == leftHalfA)
+}
+
+@Test(.timeLimit(.minutes(1))) func aShortcutWhileATitlePlacementReadsTheWindowWins() async {
+    let desk = layout("Desk", [slot(.rightHalf, title: "*Docs*")])
+    let rig = await Rig()
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = titled(window(1, frame: start), "Untitled")
+    await rig.fake.configure { $0.windows[created.handle] = created }
+    await rig.emit(.windowCreated(created))
+    await rig.waitForEvents(1)
+    // The title check has passed and its placement is reading the window when the shortcut comes.
+    let reads = FakeGate()
+    await rig.fake.configure { $0.windows[handle]?.title = "Docs"; $0.snapshotGate = reads }
+    await rig.emit(.titleChanged(handle, "Docs"))
+    await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    await rig.engine.perform(.leftHalf)
+    reads.open()
+    await rig.waitForEvents(2)
+    #expect(await rig.frame() == leftHalfA)
+}
+
+@Test func applyingALayoutEndsANewWindowsTitleCheck() async {
+    let desk = layout("Desk", [slot(.rightHalf, title: "*Docs*"), slot(.leftHalf)])
+    let rig = await Rig()
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = titled(window(1, frame: start), "Untitled")
+    await rig.fake.configure { $0.windows[created.handle] = created }
+    await rig.emit(.windowCreated(created))
+    await rig.waitForFrame(leftHalfA)
+    await rig.waitForEvents(1)
+    // Applied again while the window is still untitled, the layout leaves it on the left.
+    await rig.engine.applyLayout(named: "Desk")
+    await rig.fake.configure { $0.windows[handle]?.title = "Docs" }
+    await rig.emit(.titleChanged(handle, "Docs"))
+    await rig.waitForEvents(2)
+    #expect(await rig.frame() == leftHalfA)
+}
+
 @Test func titleCheckUsesReloadedEntries() async {
     let first = layout("Desk", [slot(.firstThird)])
     let reloaded = layout("Desk", [slot(.lastThird)])
@@ -1001,7 +1056,7 @@ private let strayA2 = rect(250, 275, 200, 150)
     await rig.waitForEvents(2)
     let after = await rig.engine.memory.read()
     #expect(after.lastKnown.values.allSatisfy { $0[handle] == nil })
-    #expect(await rig.engine.movedExternally.isEmpty)
+    #expect(await rig.engine.touched.isEmpty)
 }
 
 @Test(.timeLimit(.minutes(1))) func aLateFrameForAQuitAppRecordsNothing() async {
@@ -1017,7 +1072,7 @@ private let strayA2 = rect(250, 275, 200, 150)
     await rig.waitForEvents(2)
     let after = await rig.engine.memory.read()
     #expect(after.lastKnown.isEmpty)
-    #expect(await rig.engine.movedExternally.isEmpty)
+    #expect(await rig.engine.touched.isEmpty)
 }
 
 @Test func aQuitAppIsForgottenByTheWriter() async {
@@ -1029,7 +1084,7 @@ private let strayA2 = rect(250, 275, 200, 150)
     // The same frame again: the writer no longer knows it as its own.
     await rig.emit(.windowMoved(handle))
     await rig.waitForEvents(2)
-    #expect(await rig.engine.movedExternally.contains(handle))
+    #expect(await rig.engine.touched.contains(handle))
 }
 
 @Test func aWindowMovedWhileItWasPlacedIsNotPlacedAgainByATitleChange() async {
@@ -1046,7 +1101,7 @@ private let strayA2 = rect(250, 275, 200, 150)
     await rig.emit(.windowCreated(created))
     await rig.fake.waitUntil { $0.callLog.last == "end" }
     await rig.waitForEvents(1)
-    #expect(await rig.engine.movedExternally.contains(handle))
+    #expect(await rig.engine.touched.contains(handle))
 
     let dragged = await rig.frame()
     await rig.emit(.titleChanged(handle, "Docs again"))

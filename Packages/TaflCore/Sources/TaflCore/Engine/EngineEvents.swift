@@ -34,7 +34,7 @@ extension WindowEngine {
         case .windowDestroyed(let window):
             frameTasks[window] = nil
             for id in runWindows.keys { runWindows[id]?.remove(window) }
-            movedExternally.remove(window)
+            touched.remove(window)
             titleCheck.forget(window)
             await writer.forget(window)
             await memory.update { $0.forget(window) }
@@ -45,7 +45,7 @@ extension WindowEngine {
             restartJournal?.quit(pid: pid)
             for id in runWindows.keys { runWindows[id] = runWindows[id]?.filter { $0.pid != pid } }
             frameTasks = frameTasks.filter { $0.key.pid != pid }
-            movedExternally = movedExternally.filter { $0.pid != pid }
+            touched = touched.filter { $0.pid != pid }
             await writer.forget(pid: pid)
             await memory.update { $0.forget(pid: pid) }
             eventsHandled += 1
@@ -92,7 +92,7 @@ extension WindowEngine {
         let verdict = await writer.observe(window, frame: snapshot.frame)
         guard isLive(window, token: token) else { return }
         if verdict == .external {
-            movedExternally.insert(window)
+            touched.insert(window)
             await memory.update { $0.recordExternalChange(window) }
             guard isLive(window, token: token) else { return }
         }
@@ -103,7 +103,7 @@ extension WindowEngine {
 
     /// Records the window's frame, and places it when a layout is active and has an entry for it.
     private func windowCreated(_ snapshot: WindowSnapshot) async {
-        movedExternally.remove(snapshot.handle)
+        touched.remove(snapshot.handle)
         let context = currentContext
         await recordLastKnownLive([snapshot], context)
         guard let since = context.since,
@@ -138,8 +138,7 @@ extension WindowEngine {
     }
 
     private func recheckTitle(_ window: WindowHandle, at time: Duration, since: Int?) async {
-        let touched = movedExternally.contains(window)
-        guard let applied = titleCheck.titleChanged(window, at: time, touched: touched),
+        guard let applied = titleCheck.titleChanged(window, at: time, touched: touched.contains(window)),
               let since,
               !isStopping,
               !isFrozen,
@@ -156,7 +155,9 @@ extension WindowEngine {
         since: Int
     ) async {
         let displays = knownDisplays
-        guard case .success(let snapshot) = await platform.snapshot(of: window), snapshot.isPlaceable,
+        // Touched while it was read: the touch wins.
+        guard case .success(let snapshot) = await platform.snapshot(of: window), !touched.contains(window),
+              snapshot.isPlaceable,
               let request = LayoutPlanner.requests(
                   definition, windows: [snapshot], displays: displays, source: .newWindow(layout: definition.name)
               ).first
