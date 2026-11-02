@@ -170,7 +170,13 @@ public struct WindowMemory: Codable, Equatable, Sendable {
         return windowPids.filter { pid in launched[pid].map { $0 > savedAt } ?? true }
     }
 
-    private mutating func forget(where matches: (WindowHandle) -> Bool) {
+    /// Whether any entry belongs to a window that `matches`.
+    func holdsWindow(where matches: (WindowHandle) -> Bool) -> Bool {
+        placed.keys.contains(where: matches) || restore.keys.contains(where: matches)
+            || lastKnown.values.contains { $0.keys.contains(where: matches) }
+    }
+
+    mutating func forget(where matches: (WindowHandle) -> Bool) {
         placed = placed.filter { !matches($0.key) }
         restore = restore.filter { !matches($0.key) }
         lastKnown = lastKnown

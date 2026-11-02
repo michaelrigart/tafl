@@ -37,7 +37,7 @@ extension WindowEngine {
             touched.remove(window)
             titleCheck.forget(window)
             await writer.forget(window)
-            await memory.update { $0.forget(window) }
+            await memory.forget(window)
             eventsHandled += 1
         case .appQuit(let pid):
             unobservable[pid] = nil
@@ -47,9 +47,10 @@ extension WindowEngine {
             frameTasks = frameTasks.filter { $0.key.pid != pid }
             touched = touched.filter { $0.pid != pid }
             await writer.forget(pid: pid)
-            await memory.update { $0.forget(pid: pid) }
+            await memory.forget(pid: pid)
             eventsHandled += 1
-        case .appLaunched:
+        case .appLaunched(let pid, _):
+            await memory.processStarted(pid: pid)
             eventsHandled += 1
         case .unobservable(let pid, let bundleID, let missing):
             learn(pid: pid, bundleID: bundleID, missing: missing)
@@ -104,6 +105,7 @@ extension WindowEngine {
     /// Records the window's frame, and places it when a layout is active and has an entry for it.
     private func windowCreated(_ snapshot: WindowSnapshot) async {
         touched.remove(snapshot.handle)
+        await memory.processStarted(pid: snapshot.handle.pid)
         let context = currentContext
         await recordLastKnownLive([snapshot], context)
         guard let since = context.since,

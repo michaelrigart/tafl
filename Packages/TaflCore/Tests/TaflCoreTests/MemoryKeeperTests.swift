@@ -133,6 +133,21 @@ final class MemoryKeeperTests {
         #expect(before <= savedAt && savedAt <= after)
     }
 
+    @Test func aGoneWindowIsNeverWrittenAgainUntilANewProcessHasItsId() async {
+        let keeper = MemoryKeeper()
+        let quitApp = WindowHandle(pid: 200, windowID: 1, isStable: true)
+        await keeper.forget(keeperWindow)
+        await keeper.forget(pid: 200)
+        await keeper.update { memory in
+            memory.openChain(keeperWindow, before: rect(1, 2, 3, 4), on: displayA)
+            memory.openChain(quitApp, before: rect(1, 2, 3, 4), on: displayA)
+        }
+        #expect(await keeper.read().restore.isEmpty)
+        await keeper.processStarted(pid: 200)
+        await keeper.update { $0.openChain(quitApp, before: rect(1, 2, 3, 4), on: displayA) }
+        #expect(await keeper.read().restore[quitApp] != nil)
+    }
+
     @Test func withoutAStoreSaveSucceeds() async {
         let keeper = MemoryKeeper()
         await change(keeper)

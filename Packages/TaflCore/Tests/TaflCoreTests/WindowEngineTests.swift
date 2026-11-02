@@ -1691,3 +1691,49 @@ private func pollUntilLastKnown(
     #expect(await rig.frame(of: strayB2.handle) == rect(400, 400, 300, 300))
     #expect(rig.reports.allSatisfy { if case .failure = $0 { false } else { true } })
 }
+
+// MARK: Memory of gone windows
+
+/// How many write-session calls the placement makes, from a rig that runs it undisturbed.
+private func callsOf(_ placement: @Sendable (Rig) async -> Void, config: Config) async -> Int {
+    let reference = await Rig(windows: [window(1, frame: start)], focused: handle)
+    await reference.engine.start(config: config)
+    await placement(reference)
+    return await reference.log.count
+}
+
+@Test(.timeLimit(.minutes(1))) func aWindowDestroyedWhileAnActionEndsItsSessionGetsNoMemory() async {
+    let calls = await callsOf({ await $0.engine.perform(.leftHalf) }, config: config())
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    // The session's end is held, as while Enhanced UI is restored, and the window is destroyed.
+    let ending = await rig.fake.pause(beforeCall: calls - 1)
+    let acting = Task { await rig.engine.perform(.leftHalf) }
+    await rig.fake.waitUntil { _ in ending.waiterCount == 1 }
+    await rig.emit(.windowDestroyed(handle))
+    await rig.waitForEvents(1)
+    ending.open()
+    await acting.value
+    let memory = await rig.engine.memory.read()
+    #expect(memory.placed[handle] == nil)
+    #expect(memory.restore[handle] == nil)
+    #expect(memory.lastKnown.values.allSatisfy { $0[handle] == nil })
+}
+
+@Test(.timeLimit(.minutes(1))) func aWindowDestroyedWhileALayoutRunEndsItsSessionGetsNoMemory() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let calls = await callsOf({ await $0.engine.applyLayout(named: "Desk") }, config: config(layouts: [desk]))
+    let rig = await Rig(windows: [window(1, frame: start)], focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    let ending = await rig.fake.pause(beforeCall: calls - 1)
+    let applying = Task { await rig.engine.applyLayout(named: "Desk") }
+    await rig.fake.waitUntil { _ in ending.waiterCount == 1 }
+    await rig.emit(.windowDestroyed(handle))
+    await rig.waitForEvents(1)
+    ending.open()
+    await applying.value
+    let memory = await rig.engine.memory.read()
+    #expect(memory.placed[handle] == nil)
+    #expect(memory.restore[handle] == nil)
+    #expect(memory.lastKnown.values.allSatisfy { $0[handle] == nil })
+}
