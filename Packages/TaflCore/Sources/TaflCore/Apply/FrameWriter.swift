@@ -154,13 +154,16 @@ public actor FrameWriter {
     }
 
     /// `beforeFirstWrite` runs once the request is registered, just before its first write; when it
-    /// answers false the request stops with nothing written.
+    /// answers false the request stops with nothing written. However the request ends (placed,
+    /// failed or cancelled), the frames held for it meanwhile are judged before it lets go of the
+    /// window: an external change among them makes the result `.interrupted`.
     public func write(_ job: WriteJob, beforeFirstWrite: @Sendable () async -> Bool) async -> WriteResult {
         if let planned = job.plannedEpoch, planned != epoch { return .cancelled(lastVerified: nil) }
         let request = Request(job: job, startEpoch: epoch)
         requests[job.window] = request
         achieved[job.window] = nil
-        let result = await run(request, beforeFirstWrite)
+        var result = await run(request, beforeFirstWrite)
+        if judgePending(request) { result = .interrupted }
         if requests[job.window] === request {
             requests[job.window] = nil
             achieved[job.window] = result.frame ?? request.lastOwn
@@ -214,9 +217,10 @@ public actor FrameWriter {
         do {
             try await clock.sleep(for: delay)
         } catch {
-            return judgePending(request) ? .interrupted : first
+            return first
         }
-        guard !Task.isCancelled, epoch == request.startEpoch else { return judgePending(request) ? .interrupted : first }
+        guard !Task.isCancelled, epoch == request.startEpoch else { return first }
+        // Not reapplied over an external change.
         if judgePending(request) { return .interrupted }
         return await attempt(request, start: frame, reapplying: first, { true })
     }
@@ -234,20 +238,18 @@ public actor FrameWriter {
         let session: any WriteSession
         switch await platform.beginWriting(request.job.window) {
         case .failure(let failure):
-            guard let earlier else { return .failed(failure, lastVerified: nil) }
-            return judgePending(request) ? .interrupted : earlier
+            return earlier ?? .failed(failure, lastVerified: nil)
         case .success(let opened): session = opened
         }
         let context = Context(request: request, session: session)
 
-        var result: WriteResult
+        let result: WriteResult
         if let earlier {
             result = await reapply(context, after: earlier, beforeFirstWrite)
         } else {
             result = await sequence(context, beforeFirstWrite)
         }
         await session.end()
-        if result.isAchievement, judgePending(request) { result = .interrupted }
         return result
     }
 
@@ -433,6 +435,4 @@ private extension WriteResult {
         }
     }
 
-    /// A request that ran to the end, as opposed to one that stopped.
-    var isAchievement: Bool { frame != nil }
 }

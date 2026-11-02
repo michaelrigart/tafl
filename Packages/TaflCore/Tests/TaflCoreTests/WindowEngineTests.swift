@@ -1790,3 +1790,26 @@ private func callsOf(_ placement: @Sendable (Rig) async -> Void, config: Config)
     #expect(memory.restore[handle] == nil)
     #expect(memory.lastKnown.values.allSatisfy { $0[handle] == nil })
 }
+
+// MARK: Held frames on every exit
+
+@Test(.timeLimit(.minutes(1))) func aDragHeldWhileAFailedWriteEndsClosesTheChain() async {
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    // Across displays the size goes first: begin 0, size 1, read 2, position 3, end 4.
+    // The position write fails; the session's end is held while the user drags the window.
+    let ending = await rig.fake.pause(beforeCall: 4)
+    await rig.fake.configure { $0.beforeCall = [3: { $0.canMove = false }] }
+    let acting = Task { await rig.engine.perform(.displayRight) }
+    await rig.fake.waitUntil { _ in ending.waiterCount == 1 }
+    #expect(await rig.log == ["begin", "size 800x600", "read", "position 1200,150"])
+    await rig.fake.configure { $0.windows[handle]?.frame = rect(300, 300, 400, 300) }
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(1)
+    ending.open()
+    await acting.value
+    let memory = await rig.engine.memory.read()
+    #expect(memory.restore[handle]?.chainOpen == false)
+    await rig.waitForReport { if case .failure = $0 { true } else { false } }
+    #expect(rig.reports.contains { if case .failure(.movedDuringPlacement, _) = $0 { true } else { false } })
+}
