@@ -47,7 +47,7 @@ private struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Tafl needs Accessibility access")
                 .font(.title2.bold())
-            Text("Tafl moves and resizes windows with keyboard shortcuts. macOS only lets an app do that after you allow it under Privacy & Security, Accessibility.")
+            Text("Tafl moves and resizes windows with keyboard shortcuts. macOS only lets an app do that after you allow it in System Settings › Privacy & Security › Device Control and Data Access.")
             Text("Turn Tafl on in that list. Until you do, Tafl registers no shortcuts and moves nothing.")
                 .foregroundStyle(.secondary)
             HStack {
