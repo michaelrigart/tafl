@@ -81,52 +81,54 @@ final class Platform27: WindowPlatform {
 
     // MARK: Windows
 
-    /// Any window element the front-window lookup finds, dialogs and palettes included.
-    func focusedWindow() async -> Result<WindowSnapshot, PlatformFailure> {
+    /// Any window element the front-window lookup finds, dialogs and palettes included. It is
+    /// registered and handed to `take` inside the read, on the app's queue.
+    func focusedWindow<T: Sendable>(take: @escaping @Sendable (WindowSnapshot) -> T) async -> Result<T, PlatformFailure> {
         guard let app = await MainActor.run(body: AppInfo27.frontmost) else { return .failure(.noWindow) }
         let pid = app.pid
         Task { [observation] in await observation.discover(app) }
-        let read = await axQueue.run(pid: pid) { () -> Result<ElementRead, AXFailure> in
-            switch AXWindowAccess.findFocusedWindow(of: pid) {
+        let catalog = catalog
+        let read = await axQueue.run(pid: pid) { () -> Result<T, AXFailure> in
+            let found: Result<ElementRead, AXFailure> = switch AXWindowAccess.findFocusedWindow(of: pid) {
             case .failure(let failure): .failure(failure)
             case .success(let element): Windows27.read(element, pid: pid, resolveID: true)
             }
+            return found.map { take(catalog.register($0, app: app).snapshot) }
         }
-        switch read {
-        case .failure(let failure):
-            return .failure(Windows27.failure(for: failure.code))
-        case .success(let window):
-            return .success(await catalog.register(window, app: app).snapshot)
-        }
+        return read.mapError { Windows27.failure(for: $0.code) }
     }
 
-    func visibleWindows() async -> [WindowSnapshot] {
+    func visibleWindows<T: Sendable>(take: @escaping @Sendable (WindowSnapshot) -> T) async -> [T] {
         let apps = await MainActor.run(body: AppInfo27.regularApps)
-        return await withTaskGroup(of: (Int, [WindowSnapshot]).self) { group in
+        return await withTaskGroup(of: (Int, [T]).self) { group in
             for (index, app) in apps.enumerated() {
                 group.addTask {
                     await self.observation.discover(app)
-                    return (index, await self.catalog.windows(of: app).map(\.snapshot))
+                    return (index, await self.catalog.windows(of: app) { take($0.snapshot) })
                 }
             }
-            var parts: [(Int, [WindowSnapshot])] = []
+            var parts: [(Int, [T])] = []
             for await part in group { parts.append(part) }
             return parts.sorted { $0.0 < $1.0 }.flatMap(\.1)
         }
     }
 
-    func snapshot(of handle: WindowHandle) async -> Result<WindowSnapshot, PlatformFailure> {
+    /// Hands the snapshot to `take` inside the read, on the app's queue.
+    func snapshot<T: Sendable>(
+        of handle: WindowHandle,
+        take: @escaping @Sendable (WindowSnapshot) -> T
+    ) async -> Result<T, PlatformFailure> {
         guard let element = registry.element(for: handle), let app = AppInfo27.running(pid: handle.pid) else {
             return .failure(.noWindow)
         }
         let pid = handle.pid
-        switch await axQueue.run(pid: pid, { Windows27.read(element.element, pid: pid, resolveID: false) }) {
-        case .failure(let failure):
-            if failure.code == .invalidUIElement { registry.remove(handle) }
-            return .failure(Windows27.failure(for: failure.code))
-        case .success(let window):
-            return .success(Windows27.snapshot(handle: handle, app: app, attributes: window.attributes))
+        let read = await axQueue.run(pid: pid) {
+            Windows27.read(element.element, pid: pid, resolveID: false).map {
+                take(Windows27.snapshot(handle: handle, app: app, attributes: $0.attributes))
+            }
         }
+        if case .failure(let failure) = read, failure.code == .invalidUIElement { registry.remove(handle) }
+        return read.mapError { Windows27.failure(for: $0.code) }
     }
 
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> {

@@ -74,7 +74,8 @@ final class SettingsActions {
             model.captureNote = "Accessibility permission is needed to see the windows."
             return
         }
-        async let windows = platform.visibleWindows()
+        // Read only to build the snippet: nothing is recorded from it.
+        async let windows = platform.visibleWindows(take: { $0 })
         async let displays = platform.displays()
         let snippet = CaptureBuilder.snippet(windows: await windows, displays: await displays, gap: gap())
         model.capturedSnippet = snippet

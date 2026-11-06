@@ -88,7 +88,7 @@ extension WindowEngine {
     /// window's last known frame. A frame read before the window's newest accepted reading says
     /// nothing, and changes nothing.
     private func frameChanged(_ window: WindowHandle, token: Int, _ context: EventContext) async {
-        guard case .success(let snapshot) = await platform.snapshot(of: window), isLive(window, token: token) else {
+        guard case .success(let snapshot) = await platform.snapshot(of: window, take: { $0 }), isLive(window, token: token) else {
             return
         }
         let verdict = await writer.observe(window, frame: snapshot.frame, readAt: snapshot.readAt)
@@ -174,7 +174,7 @@ extension WindowEngine {
         since: Int
     ) async {
         let displays = knownDisplays
-        guard case .success(let snapshot) = await platform.snapshot(of: window), snapshot.isPlaceable,
+        guard case .success(let snapshot) = await platform.snapshot(of: window, take: { $0 }), snapshot.isPlaceable,
               let request = LayoutPlanner.requests(
                   definition, windows: [snapshot], displays: displays, source: .newWindow(layout: definition.name)
               ).first

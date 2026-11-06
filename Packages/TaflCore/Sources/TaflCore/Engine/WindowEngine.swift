@@ -212,7 +212,7 @@ public actor WindowEngine {
             knownDisplays = current
             listen()
             let since = reconfigurations.current
-            await recordLastKnown(windows: await platform.visibleWindows(), displays: current, since: since)
+            await recordLastKnown(windows: await platform.visibleWindows(take: { $0 }), displays: current, since: since)
             await memory.update { $0.lastDisplays = current }
         }
     }
@@ -329,7 +329,7 @@ public actor WindowEngine {
             return
         }
         let focused: WindowSnapshot
-        switch await platform.focusedWindow() {
+        switch await platform.focusedWindow(take: { $0 }) {
         case .failure(.notResponding):
             report(.failure(.notResponding(app: "The app"), display: nil))
             return
@@ -380,7 +380,7 @@ public actor WindowEngine {
     /// The display a failed window is on now. An app that did not answer is not asked again.
     private func displayIdentity(of window: WindowSnapshot, after kind: FailureKind) async -> DisplayIdentity? {
         var frame = window.frame
-        if case .notResponding = kind {} else if case .success(let current) = await platform.snapshot(of: window.handle) {
+        if case .notResponding = kind {} else if case .success(let current) = await platform.snapshot(of: window.handle, take: { $0 }) {
             frame = current.frame
         }
         return DisplayLocator.display(containing: frame, in: await platform.displays())?.identity
@@ -401,7 +401,7 @@ public actor WindowEngine {
         // Taken before anything is read: a reconfiguration that begins during the reads stops the run.
         let since = reconfigurations.current
         let displays = await platform.displays()
-        let windows = await platform.visibleWindows()
+        let windows = await platform.visibleWindows(take: { $0 })
         guard reconfigurations.isCurrent(since) else { return }
         let requests = LayoutPlanner.requests(definition, windows: windows, displays: displays, source: .layout(name))
         touched.formUnion(requests.map(\.window))

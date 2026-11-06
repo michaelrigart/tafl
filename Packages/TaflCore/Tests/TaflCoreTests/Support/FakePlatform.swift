@@ -37,7 +37,9 @@ final class FakeGate: Sendable {
 }
 
 /// A scripted platform. Every read is stamped with `ContinuousClock.now` as it is made, so a
-/// snapshot or read-back carries when it was read, whatever `windows` holds. Every write-session
+/// snapshot or read-back carries when it was read, whatever `windows` holds. A read hands what it
+/// read to the caller's `take` in the same actor step, as the platform does inside its app's queue:
+/// a gate that holds a read's result holds it after `take` has run. Every write-session
 /// call is logged as `"begin"`, `"size <w>x<h>"`,
 /// `"position <x>,<y>"`, `"read"` or `"end"`. Call indices count those calls from 0, in the
 /// order they start (a `beginWriting` that waits for its app's session slot starts once it has
@@ -175,12 +177,13 @@ actor FakePlatform: WindowPlatform {
         return displays
     }
 
-    func focusedWindow() async -> Result<WindowSnapshot, PlatformFailure> {
+    func focusedWindow<T: Sendable>(take: @escaping @Sendable (WindowSnapshot) -> T) async -> Result<T, PlatformFailure> {
         guard let focused else { return .failure(.noWindow) }
-        return await snapshot(of: focused)
+        return await snapshot(of: focused, take: take)
     }
 
-    func visibleWindows() async -> [WindowSnapshot] {
+    /// Each window is handed to `take` as it is read, before any gate that holds the result.
+    func visibleWindows<T: Sendable>(take: @escaping @Sendable (WindowSnapshot) -> T) async -> [T] {
         let index = visibleWindowsCount
         visibleWindowsCount += 1
         if let gate = visibleWindowsGate {
@@ -189,7 +192,7 @@ actor FakePlatform: WindowPlatform {
         }
         let read = windows.values
             .sorted { ($0.handle.pid, $0.handle.windowID) < ($1.handle.pid, $1.handle.windowID) }
-            .map(stamped)
+            .map { take(stamped($0)) }
         if let late = visibleWindowsLateGate {
             visibleWindowsLateGate = nil
             await late.wait()
@@ -198,7 +201,11 @@ actor FakePlatform: WindowPlatform {
         return read
     }
 
-    func snapshot(of handle: WindowHandle) async -> Result<WindowSnapshot, PlatformFailure> {
+    /// The window is handed to `take` as it is read, before any gate that holds the result.
+    func snapshot<T: Sendable>(
+        of handle: WindowHandle,
+        take: @escaping @Sendable (WindowSnapshot) -> T
+    ) async -> Result<T, PlatformFailure> {
         let index = snapshotCount
         snapshotCount += 1
         if let gate = snapshotGates.removeValue(forKey: index) { await gate.wait() }
@@ -211,7 +218,7 @@ actor FakePlatform: WindowPlatform {
             return .failure(.notResponding)
         }
         guard let window = windows[handle] else { return .failure(.noWindow) }
-        let read = stamped(window)
+        let read = take(stamped(window))
         if let late = snapshotLateGate {
             snapshotLateGate = nil
             await late.wait()
@@ -269,10 +276,13 @@ actor FakePlatform: WindowPlatform {
 
     // MARK: Session calls
 
-    fileprivate func read(_ handle: WindowHandle) async -> Result<FrameReading, PlatformFailure> {
+    fileprivate func read<T: Sendable>(
+        _ handle: WindowHandle,
+        take: @Sendable (FrameReading) -> T
+    ) async -> Result<T, PlatformFailure> {
         if await enter(handle, "read") { return .failure(.notResponding) }
         guard let window = windows[handle] else { return .failure(.noWindow) }
-        return .success(FrameReading(frame: window.frame, readAt: .now))
+        return .success(take(FrameReading(frame: window.frame, readAt: .now)))
     }
 
     fileprivate func writeSize(_ handle: WindowHandle, _ size: ScreenSize) async -> Result<Void, PlatformFailure> {
@@ -366,9 +376,9 @@ private final class FakeSession: WriteSession {
         self.handle = handle
     }
 
-    func readFrame() async -> Result<FrameReading, PlatformFailure> {
+    func readFrame<T: Sendable>(take: @escaping @Sendable (FrameReading) -> T) async -> Result<T, PlatformFailure> {
         if usedAfterEnd() { return .failure(.cannotMove) }
-        return await platform.read(handle)
+        return await platform.read(handle, take: take)
     }
 
     func setSize(_ size: ScreenSize) async -> Result<Void, PlatformFailure> {

@@ -13,9 +13,16 @@ final class UnsupportedPlatform: WindowPlatform {
     }
 
     func displays() async -> [Display] { [] }
-    func focusedWindow() async -> Result<WindowSnapshot, PlatformFailure> { .failure(.noWindow) }
-    func visibleWindows() async -> [WindowSnapshot] { [] }
-    func snapshot(of handle: WindowHandle) async -> Result<WindowSnapshot, PlatformFailure> { .failure(.noWindow) }
+    func focusedWindow<T: Sendable>(take: @escaping @Sendable (WindowSnapshot) -> T) async -> Result<T, PlatformFailure> {
+        .failure(.noWindow)
+    }
+    func visibleWindows<T: Sendable>(take: @escaping @Sendable (WindowSnapshot) -> T) async -> [T] { [] }
+    func snapshot<T: Sendable>(
+        of handle: WindowHandle,
+        take: @escaping @Sendable (WindowSnapshot) -> T
+    ) async -> Result<T, PlatformFailure> {
+        .failure(.noWindow)
+    }
     func appName(pid: Int32) async -> String? { nil }
     func launchDates(of pids: Set<Int32>) async -> [Int32: Date] { [:] }
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> { .failure(.noWindow) }

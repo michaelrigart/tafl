@@ -36,8 +36,9 @@ public struct CapabilityState: Equatable, Sendable {
 /// begins and restores it at `end()`. Enhanced UI is per app, so at most one session per app
 /// exists at a time, whoever asked for it.
 public protocol WriteSession: Sendable {
-    /// The frame, stamped when it was read.
-    func readFrame() async -> Result<FrameReading, PlatformFailure>
+    /// Reads the frame, stamped when it was read, and hands it to `take` inside the read (see
+    /// `WindowPlatform`). The result is what `take` returned.
+    func readFrame<T: Sendable>(take: @escaping @Sendable (FrameReading) -> T) async -> Result<T, PlatformFailure>
     func setSize(_ size: ScreenSize) async -> Result<Void, PlatformFailure>
     func setPosition(_ point: ScreenPoint) async -> Result<Void, PlatformFailure>
     func end() async
@@ -56,12 +57,19 @@ public struct UnobservableApp: Equatable, Sendable {
     }
 }
 
+/// Every read of a window hands what it read to the caller's `take` inside the read: in the same
+/// serial work for the window's app that made the read, before any later read of that app's windows
+/// begins. So a `take` sees one window's readings in the order they were read. Its result is the
+/// read's result. `take` must be quick and must not call back into the platform.
 public protocol WindowPlatform: Sendable {
     func displays() async -> [Display]
-    func focusedWindow() async -> Result<WindowSnapshot, PlatformFailure>
+    func focusedWindow<T: Sendable>(take: @escaping @Sendable (WindowSnapshot) -> T) async -> Result<T, PlatformFailure>
     /// Running apps, every display's current Space.
-    func visibleWindows() async -> [WindowSnapshot]
-    func snapshot(of handle: WindowHandle) async -> Result<WindowSnapshot, PlatformFailure>
+    func visibleWindows<T: Sendable>(take: @escaping @Sendable (WindowSnapshot) -> T) async -> [T]
+    func snapshot<T: Sendable>(
+        of handle: WindowHandle,
+        take: @escaping @Sendable (WindowSnapshot) -> T
+    ) async -> Result<T, PlatformFailure>
     /// The name of the running app with this process id, answered without asking the app, so it
     /// works for one that does not respond.
     func appName(pid: Int32) async -> String?

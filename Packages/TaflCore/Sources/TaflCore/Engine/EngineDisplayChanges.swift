@@ -106,7 +106,7 @@ extension WindowEngine {
 
         await setActiveLayout(nil)
         let known = await memory.read()
-        let visible = await platform.visibleWindows()
+        let visible = await platform.visibleWindows(take: { $0 })
         guard reconfigurations.isCurrent(began) else { return }
         let windows = visible.map { window in
             WindowAtChange(
@@ -123,7 +123,7 @@ extension WindowEngine {
         let count = await run(requests, since: began)
         guard !Task.isCancelled, !isStopping, reconfigurations.isCurrent(began) else { return }
 
-        let after = await platform.visibleWindows()
+        let after = await platform.visibleWindows(take: { $0 })
         let reconfigurations = reconfigurations
         await recordLastKnown(windows: after, displays: new, since: began)
         await memory.update { memory in

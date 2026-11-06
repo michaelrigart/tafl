@@ -376,7 +376,7 @@ public actor FrameWriter {
     ) async -> WriteResult {
         let request = context.request
         if Task.isCancelled || epoch != request.startEpoch { return earlier }
-        guard case .success(let read) = await context.session.readFrame() else { return earlier }
+        guard case .success(let read) = await context.session.readFrame(take: { $0 }) else { return earlier }
         request.read(read)
         if differs(read.frame, request.expected) { return .interrupted }
         let result = await sequence(context, beforeFirstWrite)
@@ -447,7 +447,7 @@ public actor FrameWriter {
         case .position(let point): await context.session.setPosition(point)
         }
         if case .failure(let failure) = written { throw Stop(result: .failed(failure, lastVerified: request.lastVerified)) }
-        switch await context.session.readFrame() {
+        switch await context.session.readFrame(take: { $0 }) {
         case .failure(let failure): throw Stop(result: .failed(failure, lastVerified: request.lastVerified))
         case .success(let read):
             request.read(read)

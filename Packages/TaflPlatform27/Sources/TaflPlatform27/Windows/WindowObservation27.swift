@@ -30,7 +30,7 @@ final class WindowObservation27: Sendable {
                 isLaunching: { LaunchWait.isLaunching(pid: $0) },
                 untilFinishedLaunching: { await LaunchWait.untilFinished(pid: $0) },
                 register: { hub, pid, bundleID, handler in hub.observe(pid: pid, bundleID: bundleID, handler: handler) },
-                windows: { app in await catalog.windows(of: app) })
+                windows: { app in await catalog.windows(of: app) { $0 } })
         }
     }
 

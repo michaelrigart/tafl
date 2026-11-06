@@ -37,7 +37,7 @@ private func waitForRequests(_ queue: WindowRequestQueue, _ count: Int) async {
             guard let session = try? await fake.beginWriting(handle).get() else { return "no session" }
             started.set()
             while !Task.isCancelled { await Task.yield() }
-            _ = await session.readFrame()
+            _ = await session.readFrame(take: { $0 })
             await session.end()
             return "first"
         }

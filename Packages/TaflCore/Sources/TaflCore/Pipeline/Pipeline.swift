@@ -132,7 +132,7 @@ public actor Pipeline {
         // Read first: a reconfiguration that begins after this cancels the write.
         let epoch = await writer.epoch
         let snapshot: WindowSnapshot
-        switch await platform.snapshot(of: window) {
+        switch await platform.snapshot(of: window, take: { $0 }) {
         case .failure(let failure): return (.failed(await failureKind(failure, window: window, appName: nil)), nil)
         case .success(let value): snapshot = value
         }

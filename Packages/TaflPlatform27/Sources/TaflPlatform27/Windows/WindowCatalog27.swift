@@ -19,25 +19,24 @@ final class WindowCatalog27: Sendable {
         self.axQueue = axQueue
     }
 
-    /// The app's standard windows and sheets. Window ids are resolved only for elements the registry
-    /// does not know yet.
-    func windows(of app: AppInfo27) async -> [Entry] {
+    /// The app's standard windows and sheets, each registered and handed to `take` inside the read, on
+    /// the app's queue, once every window has been read. Window ids are resolved only for elements the
+    /// registry does not know yet.
+    func windows<T: Sendable>(of app: AppInfo27, take: @escaping @Sendable (Entry) -> T) async -> [T] {
         let pid = app.pid
-        let known = registry.elements(pid: pid)
-        let reads = await axQueue.run(pid: pid) {
-            AXWindowAccess.windows(of: pid).compactMap { element -> ElementRead? in
+        return await axQueue.run(pid: pid) {
+            let known = self.registry.elements(pid: pid)
+            let reads = AXWindowAccess.windows(of: pid).compactMap { element -> ElementRead? in
                 let resolveID = !known.contains(AXElementBox(element))
                 guard case .success(let window) = Windows27.read(element, pid: pid, resolveID: resolveID) else { return nil }
                 return Windows27.isTracked(window.attributes) ? window : nil
             }
+            return reads.map { take(self.register($0, app: app)) }
         }
-        var entries: [Entry] = []
-        for window in reads { entries.append(await register(window, app: app)) }
-        return entries
     }
 
     /// Registers any window element, tracked or not: the focused path accepts dialogs and palettes.
-    func register(_ window: ElementRead, app: AppInfo27) async -> Entry {
+    func register(_ window: ElementRead, app: AppInfo27) -> Entry {
         let registration = registry.register(window.element, pid: app.pid, windowID: window.windowID)
         let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: window.attributes)
         return Entry(snapshot: snapshot, element: window.element, isNew: registration.isNew)
