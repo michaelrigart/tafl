@@ -8,8 +8,8 @@ struct WindowStates {
         /// The frame Tafl expects the window at. The first reading sets it (to a placed record's
         /// achieved frame, from disk, when the window is at it), and so do an external change and a
         /// request's own reads: Resolve's, its read-backs and readings while a write is in flight.
-        /// Any other reading judged Tafl's own leaves it, so small moves can't add up; after a
-        /// request it is the frame achieved.
+        /// Any other reading judged Tafl's own leaves it, so small moves can't add up. A request's
+        /// end sets it to the frame it records as achieved.
         var frame: ScreenRect
         /// Moved by someone else, or the target of a user action, since Tafl first read it.
         var touched = false
@@ -180,14 +180,16 @@ struct WindowStates {
         return windows[ticket.window]?.request?.interrupted == true ? .interrupted : .own(frame)
     }
 
-    /// Ends the request and records what it did on the window's placement in the same step. A window
-    /// that is gone, or whose request another took the place of, records nothing.
+    /// Ends the request and records what it did on the window's placement in the same step. The
+    /// frame recorded as achieved becomes the frame expected, so the two can't differ: a reapply
+    /// dropped after its first read keeps the earlier pass's frame. A window that is gone, or whose
+    /// request another took the place of, records nothing.
     mutating func endRequest(_ ticket: RequestTicket, recording applied: Applied?) -> RequestEnding {
         guard let request = current(ticket) else { return RequestEnding(interrupted: false, wrote: false) }
         windows[ticket.window]?.request = nil
         let ending = RequestEnding(interrupted: request.interrupted, wrote: request.wrote)
         var placement = memory.placement(of: ticket.window)
-        applied?.record(ending, &placement)
+        if let achieved = applied?.record(ending, &placement) { windows[ticket.window]?.frame = achieved }
         memory.setPlacement(placement, of: ticket.window)
         return ending
     }

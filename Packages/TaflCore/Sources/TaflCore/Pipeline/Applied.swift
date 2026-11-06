@@ -10,20 +10,22 @@ enum Applied {
     /// Apply ran.
     case wrote(WriteResult, MoveRequest, displays: [Display], fallback: Display)
 
-    /// Keeps the window's placement in step with what the request did. An interruption was recorded
-    /// by the reading that showed it, and stands.
-    func record(_ ending: RequestEnding, _ placement: inout WindowPlacement) {
-        guard !ending.interrupted else { return }
+    /// Keeps the window's placement in step with what the request did, and returns the frame it
+    /// records as achieved, if any. An interruption was recorded by the reading that showed it, and
+    /// stands.
+    func record(_ ending: RequestEnding, _ placement: inout WindowPlacement) -> ScreenRect? {
+        guard !ending.interrupted else { return nil }
         switch self {
         case .stopped:
-            return
+            return nil
         case .unchanged(let request, let frame, let display):
             // A request whose target is where the window already is: the window counts as placed by
             // it, and a restore that is already done completes. A display change leaves it alone.
-            guard request.source != .displayChange else { return }
+            guard request.source != .displayChange else { return nil }
             if request.source.countsForRestore { placement.openChain(before: frame, on: display) }
             placement.recordPlaced(Self.placedRecord(request, achieved: frame, display: display.identity))
             if request.source.completesRestore { placement.completeRestore() }
+            return frame
         case .wrote(let result, let request, let displays, let fallback):
             func display(of frame: ScreenRect) -> DisplayIdentity {
                 (DisplayLocator.display(containing: frame, in: displays) ?? fallback).identity
@@ -32,10 +34,12 @@ enum Applied {
             case .placed(let achieved), .sizeRefused(let achieved), .positionRefused(let achieved):
                 placement.recordPlaced(Self.placedRecord(request, achieved: achieved, display: display(of: achieved)))
                 if request.source.completesRestore, result == .placed(achieved) { placement.completeRestore() }
+                return achieved
             case .interrupted:
-                return
+                return nil
             case .cancelled(let verified):
                 if let verified { placement.recordPlaced(Self.ownRecord(verified, display: display(of: verified))) }
+                return verified
             case .failed(_, let verified):
                 if let verified {
                     placement.recordPlaced(Self.ownRecord(verified, display: display(of: verified)))
@@ -44,6 +48,7 @@ enum Applied {
                     // nothing external happened, so the chain stays open.
                     placement.placed = nil
                 }
+                return verified
             }
         }
     }

@@ -161,6 +161,25 @@ private func leftHalf(nudgedBy dx: Double) -> ScreenRect {
     #expect(reapplied.checkpoint(second.ticket) == .write)
 }
 
+@Test func aRequestEndsExpectingTheFrameItRecordsAsAchieved() {
+    let owner = WindowOwner(adjustments: MacOSAdjustment.measured27)
+    let request = owner.beginRequest(reading(start))
+    let sized = rect(100, 100, 500, 775)
+    #expect(owner.willWrite(request.ticket, .size, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .write)
+    #expect(owner.readBack(request.ticket, sized) == .own(sized))
+    #expect(owner.willWrite(request.ticket, .position, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .write)
+    #expect(owner.readBack(request.ticket, leftHalf) == .own(leftHalf))
+    // The reapply's first read finds the window a point across, and the reapply then writes nothing:
+    // Record keeps the first pass's frame.
+    #expect(owner.readBack(request.ticket, leftHalf(nudgedBy: 1)) == .own(leftHalf(nudgedBy: 1)))
+    owner.endRequest(request.ticket, recording: placedByLeftHalf())
+    #expect(owner.windowMemory.placed[handle]?.achieved == leftHalf)
+    // Readings are judged against that frame, not the reapply's read.
+    #expect(owner.read(reading(leftHalf(nudgedBy: -1))) == .own)
+    #expect(owner.windowMemory.placed[handle]?.achieved == leftHalf)
+    #expect(owner.read(reading(leftHalf(nudgedBy: 2))) == .external)
+}
+
 @Test func lastKnownFramesAreRecordedForTheDisplaysCurrentAtTheReading() {
     let owner = WindowOwner(adjustments: [])
     owner.recordLastKnown(for: [displayA])
