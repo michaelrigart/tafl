@@ -42,8 +42,9 @@ final class FakeGate: Sendable {
 ///
 /// Every write-session call is logged as `"begin"`, `"size <w>x<h>"`, `"position <x>,<y>"`,
 /// `"read"` or `"end"`. Call indices count those calls from 0, in the order they start (a
-/// `beginWriting` that waits for its app's session slot starts once it has the slot). A call keeps its index while it is held: a gated call is logged only when its gate
-/// opens, so another app's calls that start later may log ahead of it.
+/// `beginWriting` that waits for its app's session slot starts once it has the slot). A call
+/// keeps its index while it is held: a gated call is logged only when its gate opens, so another
+/// app's calls that start later may log ahead of it.
 ///
 /// Tests wait on an observable condition (`waitUntil`, a log entry, a clock's sleeper count or
 /// `task.value`), never on a yield budget.

@@ -65,13 +65,14 @@ public struct RequestEnding: Equatable, Sendable {
     public var wrote: Bool
 }
 
-/// The one owner of every window's state. Every reading of a window comes here from inside the read
-/// (a read's `take`, see `WindowPlatform`), so the owner sees each window's readings in the order they
-/// were read. In one step it judges a reading (Tafl's own frame, a named macOS adjustment, or someone
-/// else's move) and records what it implies: the touched mark, the placed record and restore chain, the
-/// last-known frame for the displays current when it was read, and the frame Tafl expects next. A
-/// request runs through it too, from Resolve's reading to its end, which records its outcome in the
-/// same step. Nothing else writes a window's state or its memory.
+/// The one owner of every window's state. A reading of a window comes here from inside the read (a
+/// read's `take`, see `WindowPlatform`), so the owner sees each window's readings in the order they
+/// were read; the reads that skip it are listed below. In one step it judges a reading (Tafl's own
+/// frame, a named macOS adjustment, or someone else's move) and records what it implies: the touched
+/// mark, the placed record and restore chain, the last-known frame for the displays current when it
+/// was read, and the frame Tafl expects next. A request runs through it too, from Resolve's reading
+/// to its end, which records its outcome in the same step. Nothing else writes a window's state or
+/// its memory.
 ///
 /// Not every read reaches it. Settings' Capture records nothing, and the platform's own reads of a
 /// window it is registering skip it: one for an element seen to move or resize before it was read,

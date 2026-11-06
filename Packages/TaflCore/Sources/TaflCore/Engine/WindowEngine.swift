@@ -76,8 +76,9 @@ struct RestartJournal {
 }
 
 /// Ties the core together: it turns shortcuts, layouts, platform events, display changes and
-/// config reloads into requests for the pipeline. Every reading of a window goes to the window
-/// owner, which keeps each window's state and memory.
+/// config reloads into requests for the pipeline. Every window reading the engine asks for goes to
+/// the window owner, which keeps each window's state and memory (`WindowOwner` lists the reads that
+/// skip it).
 ///
 /// An engine starts once and stops once; make a new one to start again. The state lives here;
 /// the event handling is in `EngineEvents.swift` and the display change handling in
