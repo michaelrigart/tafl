@@ -414,6 +414,14 @@ private func anOptionalQueryTakesItsDefaultHoweverItFails(_ asked: Asked) {
     }
 }
 
+/// The frame is the one attribute a read must have, so it can only be asked in the form that fails
+/// the read: a timeout is never "no value".
+@Test func theFrameIsNeverAskedInTheFormThatTakesDefaults() {
+    var window = AnsweringWindow()
+    window.frame = .failure(AXFailure(.cannotComplete))
+    #expect(window.queries.takingDefaults.frame("w") == .failure(AXFailure(.cannotComplete)))
+}
+
 @Test func anOptionalQueryThatTimesOutFallsBackAsAMissingOneDoes() {
     var fullScreen = Asked.fullScreenButton.window(failingWith: .cannotComplete)
     fullScreen.bools[Query("w", "AXFullScreen")] = .success(true)

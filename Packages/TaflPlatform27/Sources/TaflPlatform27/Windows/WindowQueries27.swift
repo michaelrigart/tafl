@@ -29,11 +29,12 @@ extension WindowQueries27<AXUIElement> {
 
 extension WindowQueries27 {
     /// The same queries, each failure read as the attribute's absence: a query asked through them
-    /// takes its default however it fails, a timeout included.
+    /// takes its default however it fails, a timeout included. The frame is left as it is: a read
+    /// must have it, so it can only be asked in the form that fails the read.
     var takingDefaults: Self {
         let absent = { (_: AXFailure) in AXFailure(.noValue) }
         return Self(
-            frame: { self.frame($0).mapError(absent) },
+            frame: frame,
             string: { self.string($0, $1).mapError(absent) },
             element: { self.element($0, $1).mapError(absent) },
             bool: { self.bool($0, $1).mapError(absent) },
