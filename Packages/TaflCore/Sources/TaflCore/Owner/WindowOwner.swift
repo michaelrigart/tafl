@@ -113,9 +113,10 @@ public final class WindowOwner: WindowNotices {
         state.withLock { $0.beginRequest(snapshot) }
     }
 
-    /// Whether the request may go on: not interrupted, over, or begun before a reconfiguration.
-    public func checkpoint(_ ticket: RequestTicket) -> WriteGo {
-        state.withLock { $0.checkpoint(ticket) }
+    /// Whether the request may go on: not interrupted, over, or begun before a reconfiguration. With
+    /// the request's first write, a request that yields to touch is declined for a touched window.
+    public func checkpoint(_ ticket: RequestTicket, firstWrite: FirstWrite? = nil) -> WriteGo {
+        state.withLock { $0.checkpoint(ticket, firstWrite: firstWrite) }
     }
 
     /// Before each write: the checkpoint, then the first write's terms, then the write is in flight.

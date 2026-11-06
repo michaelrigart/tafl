@@ -97,14 +97,17 @@ struct WindowStates {
         )
     }
 
-    func checkpoint(_ ticket: RequestTicket) -> WriteGo {
+    /// Whether the request may go on. Before its first write, a request that yields to touch is
+    /// declined for a window that has been touched.
+    func checkpoint(_ ticket: RequestTicket, firstWrite: FirstWrite? = nil) -> WriteGo {
         guard let request = current(ticket) else { return .cancelled }
         if request.interrupted { return .interrupted }
-        return request.epoch == epoch ? .write : .cancelled
+        guard request.epoch == epoch else { return .cancelled }
+        if !request.wrote, firstWrite?.yieldsToTouch == true, isTouched(ticket.window) { return .declined }
+        return .write
     }
 
-    /// Before each write. The first declines for a window touched when the request yields to touch,
-    /// and opens the restore chain at the start when asked to.
+    /// Before each write. The first opens the restore chain at the start when asked to.
     mutating func willWrite(
         _ ticket: RequestTicket,
         _ part: WritePart,
@@ -112,10 +115,9 @@ struct WindowStates {
         displays: [Display],
         firstWrite: FirstWrite
     ) -> WriteGo {
-        let go = checkpoint(ticket)
+        let go = checkpoint(ticket, firstWrite: firstWrite)
         guard go == .write, var state = windows[ticket.window], var request = state.request else { return go }
         if !request.wrote {
-            if firstWrite.yieldsToTouch, state.touched { return .declined }
             if let display = firstWrite.opensChainOn {
                 memory.openChain(ticket.window, before: request.start, on: display)
             }

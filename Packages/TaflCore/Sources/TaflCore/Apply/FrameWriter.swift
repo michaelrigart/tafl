@@ -116,9 +116,9 @@ public struct FrameWriter: Sendable {
         self.reapplyDelay = reapplyDelay
     }
 
-    /// A request already over when Apply begins opens no session.
+    /// A request already over when Apply begins, or one that yields to a touched window, opens no session.
     public func write(_ job: WriteJob) async -> WriteResult {
-        switch owner.checkpoint(job.ticket) {
+        switch owner.checkpoint(job.ticket, firstWrite: job.firstWrite) {
         case .write: break
         case .interrupted: return .interrupted
         case .cancelled, .declined: return .cancelled(lastVerified: nil)

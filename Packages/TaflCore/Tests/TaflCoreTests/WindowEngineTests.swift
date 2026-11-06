@@ -2094,7 +2094,8 @@ private func callsOf(_ placement: @Sendable (Rig) async -> Void, config: Config)
     late.open()
     await rig.waitForEvents(2)
     #expect(await rig.frame() == dragged)
-    #expect(await rig.log == ["begin", "end"])
+    // The placement declined the touched window before Apply opened a session.
+    #expect(await rig.log == [])
     #expect(await rig.isTouched())
 }
 

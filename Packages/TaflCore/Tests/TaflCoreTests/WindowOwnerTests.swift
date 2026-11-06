@@ -181,6 +181,22 @@ private func lastKnown(_ owner: WindowOwner, _ setup: DisplaySetup = onlyA) -> U
     #expect(owner.endRequest(request.ticket) == RequestEnding(interrupted: false, wrote: false))
 }
 
+@Test func theFirstCheckpointOfARequestThatYieldsDeclinesATouchedWindowButALaterOneDoesNot() {
+    let owner = WindowOwner(adjustments: [])
+    let request = owner.beginRequest(reading(start))
+    let yields = FirstWrite(yieldsToTouch: true)
+    #expect(owner.checkpoint(request.ticket, firstWrite: yields) == .write)
+    #expect(owner.willWrite(request.ticket, .size, targetVisible: v, displays: [displayA], firstWrite: yields) == .write)
+    // Once the first write has begun, a touch no longer stops the request.
+    owner.touch(handle)
+    #expect(owner.checkpoint(request.ticket, firstWrite: yields) == .write)
+    owner.endRequest(request.ticket)
+
+    let touched = owner.beginRequest(reading(start))
+    #expect(owner.checkpoint(touched.ticket, firstWrite: yields) == .declined)
+    #expect(owner.checkpoint(touched.ticket) == .write)
+}
+
 // MARK: Lifetimes
 
 @Test func aDestroyedWindowLeavesNothingAndItsIDStartsFresh() {

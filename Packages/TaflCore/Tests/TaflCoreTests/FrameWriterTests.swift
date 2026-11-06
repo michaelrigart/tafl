@@ -403,7 +403,8 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     rig.owner.touch(handle)
     let firstWrite = FirstWrite(opensChainOn: displayA, yieldsToTouch: true)
     #expect(await rig.start(crossJob(firstWrite: firstWrite)).value == .cancelled(lastVerified: nil))
-    #expect(await rig.log == ["begin", "end"])
+    // Declined at Apply's first checkpoint: no session, so no Enhanced UI switch for nothing.
+    #expect(await rig.log == [])
     #expect(await rig.fake.windows[handle]?.frame == crossStart)
     #expect(rig.chain == nil)
 }
