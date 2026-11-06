@@ -132,9 +132,6 @@ public actor WindowEngine {
     /// window that was destroyed, or whose app quit, meanwhile.
     var runWindows: [Int: Set<WindowHandle>] = [:]
     var nextRunID = 0
-    /// While start seeds last-known frames: the windows an event recorded a frame for since the
-    /// seed began reading. The seed leaves those alone, since the event is newer than its read.
-    var recordedDuringSeed: Set<WindowHandle>?
     /// While a restart is pending: what events said since the first pending one was asked for.
     var restartJournal: RestartJournal?
     /// The latest restart; the next one waits for it.
@@ -215,13 +212,7 @@ public actor WindowEngine {
             knownDisplays = current
             listen()
             let since = reconfigurations.current
-            recordedDuringSeed = []
-            let visible = await platform.visibleWindows()
-            let newer = recordedDuringSeed ?? []
-            recordedDuringSeed = nil
-            await recordLastKnown(
-                windows: visible.filter { !newer.contains($0.handle) }, displays: current, since: since
-            )
+            await recordLastKnown(windows: await platform.visibleWindows(), displays: current, since: since)
             await memory.update { $0.lastDisplays = current }
         }
     }

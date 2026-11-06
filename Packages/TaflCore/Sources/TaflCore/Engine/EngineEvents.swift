@@ -189,14 +189,12 @@ extension WindowEngine {
     /// arrived or one has begun since.
     func recordLastKnownLive(_ windows: [WindowSnapshot], _ context: EventContext) async {
         guard let since = context.since else { return }
-        recordedDuringSeed?.formUnion(windows.map(\.handle))
         await recordLastKnown(windows: windows, displays: context.displays, since: since)
     }
 
     /// Records where a request left windows, unless a change is in progress.
     func recordLastKnownLive(_ frames: [KnownFrame], since: Int) async {
         guard !isFrozen else { return }
-        recordedDuringSeed?.formUnion(frames.map(\.handle))
         await recordLastKnown(frames, displays: knownDisplays, since: since)
     }
 

@@ -1451,6 +1451,24 @@ private func pollUntilLastKnown(
     #expect(known?.relative == dragged.relative(to: displayB.visibleFrame))
 }
 
+@Test(.timeLimit(.minutes(1))) func theStartSeedRecordsAReadingNewerThanAnEventsDuringIt() async {
+    let onB = window(1, frame: rect(1100, 100, 400, 300))
+    let rig = await Rig(displays: bothDisplays, windows: [onB], focused: nil)
+    let seedRead = FakeGate()
+    await rig.fake.configure { $0.visibleWindowsGate = seedRead }
+    let starting = Task { await rig.engine.start(config: config()) }
+    await rig.fake.waitUntil { _ in seedRead.waiterCount == 1 }
+    // A move event is read and recorded while the seed waits to read; then the window moves again.
+    await rig.emit(.windowMoved(onB.handle))
+    await rig.waitForEvents(1)
+    let moved = rect(1500, 600, 400, 300)
+    await rig.fake.configure { $0.windows[onB.handle]?.frame = moved }
+    seedRead.open()
+    await starting.value
+    let known = await rig.engine.memory.read().lastKnown(onB.handle, setup: DisplaySetup(bothDisplays))
+    #expect(known?.relative == moved.relative(to: displayB.visibleFrame))
+}
+
 @Test(.timeLimit(.minutes(1))) func restartingObservationKeepsWhatAnEventLearnedMeanwhile() async {
     let rig = await Rig(windows: [window(1, frame: start)])
     await rig.engine.start(config: config())
