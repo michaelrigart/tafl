@@ -1983,6 +1983,44 @@ private func recordNewerLastKnown(
     #expect(memory.lastKnown(other.handle, setup: DisplaySetup([displayA])) != nil)
 }
 
+@Test(.timeLimit(.minutes(1))) func aFrameFromBeforeAChangeThatIsNotRecordedLeavesTheSeedsFrame() async {
+    let rig = await Rig(displays: bothDisplays, windows: [strayB1], focused: nil)
+    await rig.engine.start(config: config())
+    // A move event arrives before the change; its read waits until the rules' seed has read.
+    let eventRead = FakeGate()
+    await rig.fake.configure { $0.snapshotGate = eventRead }
+    await rig.emit(.windowMoved(strayB1.handle))
+    await rig.fake.waitUntil { _ in eventRead.waiterCount == 1 }
+    // Undock; the rules' first write is held while B comes back.
+    let writing = await rig.fake.pause(beforeCall: 0)
+    await rig.fake.configure { $0.displays = [displayA]; $0.windows[strayB1.handle]?.frame = rect(50, 50, 300, 300) }
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(2)
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: quiet)
+    await rig.fake.waitUntil { _ in writing.waiterCount == 1 }
+    // B comes back. The window can no longer be moved, so the rules run again on the setup the
+    // event belongs to and leave the window where it is; their seed reads it and waits.
+    await rig.fake.configure { $0.displays = bothDisplays; $0.windows[strayB1.handle]?.canMove = false }
+    let seedRead = await rig.fake.pauseVisibleWindowsResult(at: 3)
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(4)
+    writing.open()
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: quiet)
+    await rig.fake.waitUntil { _ in seedRead.waiterCount == 1 }
+    // The event reads the window after the seed did; its context is from before the change.
+    eventRead.open()
+    await rig.waitForEvents(5)
+    seedRead.open()
+    await rig.waitForChanges(1)
+    let known = await rig.engine.memory.read().lastKnown(strayB1.handle, setup: DisplaySetup(bothDisplays))
+    #expect(known?.display == displayA.identity)
+    #expect(known?.relative == rect(50, 50, 300, 300).relative(to: v))
+}
+
 @Test(.timeLimit(.minutes(1))) func aFrameReadBeforeANewWindowsPlacementIsNotATouch() async {
     let desk = layout("Desk", [slot(.rightHalf, title: "*Docs*"), slot(.leftHalf)])
     let rig = await Rig(focused: nil)

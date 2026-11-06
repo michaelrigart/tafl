@@ -209,8 +209,8 @@ extension WindowEngine {
     }
 
     /// Records frames of the apps whose moves are observed, each unless a newer reading of its
-    /// window is already recorded. With `since`, nothing is recorded once a reconfiguration has
-    /// begun since.
+    /// window is already recorded for the setup. With `since`, nothing is recorded once a
+    /// reconfiguration has begun since, and a frame not recorded holds no later one back.
     func recordLastKnown(_ frames: [KnownFrame], displays: [Display], since count: Int? = nil) async {
         let setup = DisplaySetup(displays)
         let entries = frames.compactMap { known -> (KnownFrame, Display)? in

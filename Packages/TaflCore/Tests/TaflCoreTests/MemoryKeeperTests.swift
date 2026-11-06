@@ -163,6 +163,33 @@ final class MemoryKeeperTests {
         #expect(await keeper.read().lastKnown(window, setup: setup)?.relative == rect(0, 25, 500, 775).relative(to: v))
     }
 
+    @Test func eachSetupKeepsItsOwnNewestLastKnownReading() async {
+        let keeper = MemoryKeeper()
+        let older = ContinuousClock.now
+        let newer = older.advanced(by: .milliseconds(1))
+        let desk = DisplaySetup([displayA, displayB])
+        await keeper.recordLastKnown(window, frame: rect(1100, 100, 400, 300), display: displayB, setup: desk, readAt: newer)
+        let recorded = await keeper.recordLastKnown(
+            window, frame: rect(100, 100, 400, 300), display: displayA, setup: DisplaySetup([displayA]), readAt: older
+        )
+        #expect(recorded)
+    }
+
+    @Test func aReadingThatIsNotRecordedHoldsNoOlderOneBack() async {
+        let keeper = MemoryKeeper()
+        let setup = DisplaySetup([displayA])
+        let older = ContinuousClock.now
+        let newer = older.advanced(by: .milliseconds(1))
+        // A reading from a context a reconfiguration has ended is not recorded.
+        let discarded = await keeper.recordLastKnown(
+            window, frame: rect(100, 100, 400, 300), display: displayA, setup: setup, readAt: newer, when: { false }
+        )
+        let recorded = await keeper.recordLastKnown(window, frame: rect(0, 25, 500, 775), display: displayA, setup: setup, readAt: older)
+        #expect(!discarded)
+        #expect(recorded)
+        #expect(await keeper.read().lastKnown(window, setup: setup)?.relative == rect(0, 25, 500, 775).relative(to: v))
+    }
+
     @Test func aPlacementChangesOnlyFromAReadingAsNewAsTheWindowsNewest() async {
         let readings = WindowReadings()
         let keeper = MemoryKeeper(readings: readings)

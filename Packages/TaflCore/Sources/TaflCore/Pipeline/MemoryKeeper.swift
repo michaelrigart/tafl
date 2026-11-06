@@ -25,6 +25,12 @@ struct GoneWindows: Sendable {
     }
 }
 
+/// Names a window's last-known frame for one display setup.
+struct LastKnownKey: Hashable, Sendable {
+    var window: WindowHandle
+    var setup: DisplaySetup
+}
+
 /// What the memory holds that belongs to no window, so it changes without a reading.
 public struct GeneralMemory: Sendable {
     public var activeLayout: String?
@@ -36,15 +42,15 @@ public struct GeneralMemory: Sendable {
 /// replaceable, so a file written by another version, or one that can't be read, is never
 /// overwritten. It also keeps which windows are gone, so no path writes their memory again. A
 /// window's memory changes only from a reading of it that no newer one has overtaken: its
-/// placement against the window's newest reading, which the writer shares, and its last-known
-/// frames against the newest recorded for them.
+/// placement against the window's newest reading, which the writer shares, and each last-known
+/// frame against the newest recorded for that setup.
 public actor MemoryKeeper {
     private var memory: WindowMemory
     private let store: MemoryStore?
     private var mayWrite = false
     private var gone = GoneWindows()
     private let readings: WindowReadings
-    private var lastKnownReadings = ReadingGate<WindowHandle>()
+    private var lastKnownReadings = ReadingGate<LastKnownKey>()
 
     public init(memory: WindowMemory = WindowMemory(), store: MemoryStore? = nil) {
         self.init(memory: memory, store: store, readings: WindowReadings())
@@ -100,8 +106,9 @@ public actor MemoryKeeper {
     }
 
     /// Records a window's last-known frame for a setup from a reading of it taken at `readAt`,
-    /// when no newer reading of the window has been recorded, `applies` holds, and the window is
-    /// not gone. Returns whether the frame was recorded.
+    /// when `applies` holds, no newer reading of the window for that setup has been recorded, and
+    /// the window is not gone. A reading that is not recorded leaves the next one free to be.
+    /// Returns whether the frame was recorded.
     @discardableResult
     public func recordLastKnown(
         _ window: WindowHandle,
@@ -111,7 +118,8 @@ public actor MemoryKeeper {
         readAt: ContinuousClock.Instant,
         when applies: @Sendable () -> Bool = { true }
     ) -> Bool {
-        guard !gone.contains(window), lastKnownReadings.admit(window, readAt: readAt), applies() else { return false }
+        let key = LastKnownKey(window: window, setup: setup)
+        guard !gone.contains(window), applies(), lastKnownReadings.admit(key, readAt: readAt) else { return false }
         memory.recordLastKnown(window, frame: frame, display: display, setup: setup)
         return true
     }
@@ -135,14 +143,14 @@ public actor MemoryKeeper {
     public func forget(_ window: WindowHandle) {
         gone.destroyed(window)
         memory.forget(window)
-        lastKnownReadings.forget { $0 == window }
+        lastKnownReadings.forget { $0.window == window }
     }
 
     /// The app quit: the memory of its windows goes, for good.
     public func forget(pid: Int32) {
         gone.quit(pid)
         memory.forget(pid: pid)
-        lastKnownReadings.forget { $0.pid == pid }
+        lastKnownReadings.forget { $0.window.pid == pid }
     }
 
     public func knows(_ window: WindowHandle) -> Bool {

@@ -87,6 +87,8 @@ actor FakePlatform: WindowPlatform {
     /// How many `snapshot(of:)` calls have started.
     private(set) var snapshotCount = 0
     private var snapshotGates: [Int: FakeGate] = [:]
+    private var visibleWindowsCount = 0
+    private var visibleWindowsResultGates: [Int: FakeGate] = [:]
 
     /// How many `beginWriting` calls wait for another session of the same app to end.
     var waitingSessionCount: Int { waiters.values.reduce(0) { $0 + $1.count } }
@@ -148,6 +150,14 @@ actor FakePlatform: WindowPlatform {
         return gate
     }
 
+    /// Reads the windows for the `visibleWindows()` call with this index, counted from 0, then holds
+    /// its result until the returned gate opens.
+    func pauseVisibleWindowsResult(at index: Int) -> FakeGate {
+        let gate = FakeGate()
+        visibleWindowsResultGates[index] = gate
+        return gate
+    }
+
     /// Holds the call with this index until the returned gate opens.
     func pause(beforeCall index: Int) -> FakeGate {
         let gate = FakeGate()
@@ -171,6 +181,8 @@ actor FakePlatform: WindowPlatform {
     }
 
     func visibleWindows() async -> [WindowSnapshot] {
+        let index = visibleWindowsCount
+        visibleWindowsCount += 1
         if let gate = visibleWindowsGate {
             visibleWindowsGate = nil
             await gate.wait()
@@ -182,6 +194,7 @@ actor FakePlatform: WindowPlatform {
             visibleWindowsLateGate = nil
             await late.wait()
         }
+        if let late = visibleWindowsResultGates.removeValue(forKey: index) { await late.wait() }
         return read
     }
 
