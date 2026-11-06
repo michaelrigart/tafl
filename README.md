@@ -43,8 +43,9 @@ displays connects.
 
 - macOS 27 or later, on Apple silicon.
 - Tafl must run from `/Applications`.
-- The Accessibility permission, which is how Tafl reads and moves other apps' windows. Tafl
-  asks for no other permission.
+- The Accessibility permission, which System Settings lists as "Device Control and Data
+  Access". It is how Tafl reads and moves other apps' windows. Tafl asks for no other
+  permission.
 - To build: Xcode 27 and [mise](https://mise.jdx.dev) for XcodeGen.
 
 ## Install
@@ -60,8 +61,8 @@ the first time you open it. After the first install:
 
 1. Open System Settings > Privacy & Security, find the message about Tafl and click
    **Open Anyway**.
-2. Allow Tafl under Privacy & Security > Accessibility. Tafl's onboarding window opens that
-   page; **Check Again** picks up the permission.
+2. Allow Tafl under Privacy & Security > Device Control and Data Access. Tafl's onboarding
+   window opens that page; **Check Again** picks up the permission.
 3. Quit Rectangle, or any other app that uses the same shortcuts, before you start Tafl.
    Tafl's defaults are Rectangle's alternate set, so both would register the same keys. If
    another app holds a shortcut, Tafl gets no error when it registers the same key
@@ -83,10 +84,10 @@ permission has not been confirmed; if macOS asks again after a renewal, repeat t
 
 If you built Tafl yourself before, quit it and delete every copy first, including the build
 in your checkout's `build/`. Then run `tccutil reset Accessibility com.michaelrigart.tafl`,
-or remove Tafl from the Accessibility list. A build signed differently from the Homebrew one
-has an old entry that stays in the list and can look switched on while it no longer applies.
-Moving from an ad hoc build to a signed one needs the Accessibility permission given once
-more.
+or remove Tafl from the Device Control and Data Access list. A build signed differently from
+the Homebrew one has an old entry that stays in the list and can look switched on while it no
+longer applies. Moving from an ad hoc build to a signed one needs the Accessibility
+permission given once more.
 
 `brew uninstall --cask tafl` keeps `~/.config/tafl/config.toml`. It is your file, often a
 symlink into a dotfiles repository, and neither uninstalling nor `--zap` removes it. `--zap`
@@ -152,6 +153,7 @@ ditto build/Build/Products/Debug/Tafl.app /Applications/Tafl.app
 open /Applications/Tafl.app --args -TaflProbe windows
 ```
 
+Quit Tafl first: `open` on a running Tafl only brings it forward and drops the arguments.
 `AGENTS.md` lists the subcommands. The probe quits when it finishes. `apply` moves a window
 you pick.
 

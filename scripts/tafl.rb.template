@@ -35,7 +35,7 @@ cask "tafl" do
     permission; if macOS asks again, repeat it.
 
     Quit Rectangle, or any other app that uses the same shortcuts, before you
-    start Tafl: if another app holds a shortcut, Tafl gets no error and the
-    shortcut does nothing.
+    start Tafl: if another app holds a shortcut, Tafl gets no error, so the
+    shortcut may not reach Tafl.
   EOS
 end
