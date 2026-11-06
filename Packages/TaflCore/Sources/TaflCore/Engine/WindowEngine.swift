@@ -95,7 +95,7 @@ public actor WindowEngine {
     /// Display reconfigurations: one that begins stops every run that started before it.
     let reconfigurations = Generation()
     /// Layout applications, by a shortcut, the menu or a display change: the newest one decides
-    /// the active layout.
+    /// the active layout, and stops the runs planned before it began.
     let layoutApplications = Generation()
     /// Observation restarts: only the newest commits what it learned.
     let restarts = Generation()
@@ -405,12 +405,13 @@ public actor WindowEngine {
         await save()
     }
 
-    /// Runs the requests: apps side by side, each app's windows in order, so an app that does
-    /// not answer holds up only its own windows. A reconfiguration that has begun since `since`
-    /// stops the run. A layout application's run (`application`) also stops once a newer one has
-    /// begun: it sends no further request, and counts only what it sent. Each request records its
-    /// result in the window's owner as it ends.
-    func run(_ requests: [MoveRequest], since: Int, application: Int? = nil) async -> RunCount {
+    /// Runs the requests of a layout applied, the display-change rules, or a new window's placement
+    /// by the active layout: apps side by side, each app's windows in order, so an app that does not
+    /// answer holds up only its own windows. A reconfiguration that has begun since `since` stops
+    /// the run, and so does a layout application newer than `application` (the run's own, or the
+    /// one current when its requests were planned): the run sends no further request, and counts
+    /// only what it sent. Each request records its result in the window's owner as it ends.
+    func run(_ requests: [MoveRequest], since: Int, application: Int) async -> RunCount {
         var order: [Int32] = []
         var byApp: [Int32: [MoveRequest]] = [:]
         for request in requests {
@@ -422,7 +423,7 @@ public actor WindowEngine {
         let config = config
         let reconfigurations = reconfigurations
         let layoutApplications = layoutApplications
-        let isOvertaken: @Sendable () -> Bool = { application.map { !layoutApplications.isCurrent($0) } ?? false }
+        let isOvertaken: @Sendable () -> Bool = { !layoutApplications.isCurrent(application) }
         let total = await withTaskGroup(of: RunCount.self) { group in
             for pid in order {
                 let batch = byApp[pid] ?? []

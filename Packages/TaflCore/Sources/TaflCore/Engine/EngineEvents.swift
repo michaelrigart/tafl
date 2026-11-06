@@ -63,7 +63,8 @@ extension WindowEngine {
 
     /// Places a new window when a layout is active and has an entry for it. The announcement's
     /// reading reached the owner as it was read; the window counts as new only when that reading
-    /// was the first Tafl had of it, and nothing has touched it since.
+    /// was the first Tafl had of it, and nothing has touched it since. A layout applied after the
+    /// placement was planned overtakes it.
     private func windowCreated(_ snapshot: WindowSnapshot) {
         let window = snapshot.handle
         guard !isFrozen,
@@ -84,22 +85,25 @@ extension WindowEngine {
             return
         }
         let since = reconfigurations.current
-        track { _ = await self.run([request], since: since) }
+        let application = layoutApplications.current
+        track { _ = await self.run([request], since: since, application: application) }
     }
 
     /// The first title change of a new window gets one more look at the layout's entries. Whether
-    /// the window was touched is known once the frames read before it have reached the owner.
+    /// the window was touched is known once the frames read before it have reached the owner. A
+    /// layout applied after the title changed overtakes the placement.
     private func titleChanged(_ window: WindowHandle) {
         let time = clock.now
         let since = isFrozen ? nil : reconfigurations.current
+        let application = layoutApplications.current
         let reading = frameReads[window]
         track {
             await reading?.value
-            await self.recheckTitle(window, at: time, since: since)
+            await self.recheckTitle(window, at: time, since: since, application: application)
         }
     }
 
-    private func recheckTitle(_ window: WindowHandle, at time: Duration, since: Int?) async {
+    private func recheckTitle(_ window: WindowHandle, at time: Duration, since: Int?, application: Int) async {
         guard let applied = titleCheck.titleChanged(window, at: time, touched: owner.isTouched(window)),
               let since,
               !isStopping,
@@ -107,14 +111,15 @@ extension WindowEngine {
               !isLeftOutOfPlacement(pid: window.pid),
               let definition = activeLayout.definition(in: config)
         else { return }
-        await placeAfterTitleChange(window, in: definition, applied: applied, since: since)
+        await placeAfterTitleChange(window, in: definition, applied: applied, since: since, application: application)
     }
 
     private func placeAfterTitleChange(
         _ window: WindowHandle,
         in definition: LayoutDefinition,
         applied: MoveRequest?,
-        since: Int
+        since: Int,
+        application: Int
     ) async {
         let displays = knownDisplays
         guard case .success(let snapshot) = await platform.snapshot(of: window, take: owner.take), snapshot.isPlaceable,
@@ -123,6 +128,6 @@ extension WindowEngine {
               ).first
         else { return }
         if let applied, applied.spec == request.spec, applied.display == request.display { return }
-        _ = await run([request], since: since)
+        _ = await run([request], since: since, application: application)
     }
 }

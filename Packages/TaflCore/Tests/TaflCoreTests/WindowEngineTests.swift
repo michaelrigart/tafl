@@ -1750,6 +1750,90 @@ private func pollUntilLastKnown(
     #expect(await rig.engine.activeLayoutName == "Coding")
 }
 
+/// The dock rules are reading the windows when Coding is applied, places the window and becomes active.
+private func rulesOvertakenByALayout() async -> Rig {
+    let coding = layout("Coding", [slot(.rightHalf)])
+    let rig = await Rig(windows: [window(1, frame: start)], focused: nil)
+    await rig.engine.start(config: config(layouts: [dock, coding]))
+    let reads = FakeGate()
+    await rig.fake.configure { $0.visibleWindowsGate = reads }
+    await rig.changeDisplays(to: bothDisplays, eventsHandledAfter: 2)
+    await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    // Without the held read, the layout's own read would take the gate and wait for it forever.
+    guard reads.waiterCount == 1 else {
+        reads.open()
+        return rig
+    }
+    await rig.engine.applyLayout(named: "Coding")
+    #expect(await rig.frame() == rightHalfA)
+    reads.open()
+    await rig.waitForChanges(1)
+    return rig
+}
+
+@Test(.timeLimit(.minutes(1))) func aLayoutAppliedWhileTheRulesReadTheWindowsKeepsItsPlacements() async {
+    let rig = await rulesOvertakenByALayout()
+    #expect(await rig.frame() == rightHalfA)
+    #expect(rig.reports.contains(.displayChangeHandled(moved: 0, failed: 0)))
+    #expect(await rig.engine.activeLayoutName == "Coding")
+}
+
+@Test(.timeLimit(.minutes(1))) func anOvertakenRulesRunStillRecordsLastKnownFramesForTheNewSetup() async {
+    let rig = await rulesOvertakenByALayout()
+    #expect(await rig.engine.isFrozen == false)
+    #expect(await rig.engine.knownDisplays == bothDisplays)
+    // The seed after the run reads where Coding put the window.
+    let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup(bothDisplays))
+    #expect(known?.relative == rightHalfA.relative(to: v))
+    #expect(await rig.engine.memory.read().lastDisplays == bothDisplays)
+}
+
+@Test(.timeLimit(.minutes(1))) func aNewWindowsPlacementOvertakenByALayoutApplicationLeavesTheWindowAlone() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let coding = layout("Coding", [slot(.leftHalf, app: "com.b")])
+    let other = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let rig = await Rig(windows: [other], focused: nil)
+    await rig.engine.start(config: config(layouts: [desk, coding]))
+    await rig.engine.applyLayout(named: "Desk")
+    // The new window's placement, planned from Desk, is reading the window when Coding is applied.
+    let created = window(1, frame: start)
+    let reads = FakeGate()
+    await rig.fake.configure { $0.windows[created.handle] = created; $0.snapshotGate = reads }
+    await rig.emit(.windowCreated(created))
+    await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    guard reads.waiterCount == 1 else { return reads.open() }
+    await rig.engine.applyLayout(named: "Coding")
+    #expect(await rig.frame(of: other.handle) == leftHalfA)
+    reads.open()
+    await rig.waitForEvents(1)
+    #expect(await rig.frame() == start)
+    #expect(await rig.engine.activeLayoutName == "Coding")
+}
+
+@Test(.timeLimit(.minutes(1))) func aTitlePlacementOvertakenByALayoutApplicationLeavesTheWindowAlone() async {
+    let desk = layout("Desk", [slot(.rightHalf, title: "*Docs*")])
+    let coding = layout("Coding", [slot(.leftHalf, app: "com.b")])
+    let other = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let rig = await Rig(windows: [other], focused: nil)
+    await rig.engine.start(config: config(layouts: [desk, coding]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = titled(window(1, frame: start), "Untitled")
+    await rig.fake.configure { $0.windows[created.handle] = created }
+    await rig.emit(.windowCreated(created))
+    await rig.waitForEvents(1)
+    // The title now matches Desk's entry; its placement is reading the window when Coding is applied.
+    let reads = FakeGate()
+    await rig.fake.configure { $0.windows[handle]?.title = "Docs"; $0.snapshotGate = reads }
+    await rig.emit(.titleChanged(handle, "Docs"))
+    await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    guard reads.waiterCount == 1 else { return reads.open() }
+    await rig.engine.applyLayout(named: "Coding")
+    #expect(await rig.frame(of: other.handle) == leftHalfA)
+    reads.open()
+    await rig.waitForEvents(2)
+    #expect(await rig.frame() == start)
+}
+
 @Test(.timeLimit(.minutes(1))) func appsThatQuitDuringARestartAreNotMergedBack() async {
     let rig = await Rig(windows: [window(1, frame: start)])
     await rig.engine.start(config: config())
