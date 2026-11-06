@@ -33,7 +33,9 @@ final class StatusItemController: NSObject {
 
     private func makeItem() -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "rectangle.split.2x2", accessibilityDescription: "Tafl")
+        let image = NSImage(named: "TaflMenuBar")
+        image?.accessibilityDescription = "Tafl"
+        item.button?.image = image
         self.item = item
         return item
     }
