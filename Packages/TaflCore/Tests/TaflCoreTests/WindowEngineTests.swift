@@ -1750,7 +1750,7 @@ private func pollUntilLastKnown(
     #expect(await rig.engine.activeLayoutName == "Coding")
 }
 
-/// The dock rules are reading the windows when Coding is applied, places the window and becomes active.
+/// While the dock rules read the windows, Coding is applied, places the window and becomes active.
 private func rulesOvertakenByALayout() async -> Rig {
     let coding = layout("Coding", [slot(.rightHalf)])
     let rig = await Rig(windows: [window(1, frame: start)], focused: nil)
