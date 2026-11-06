@@ -358,10 +358,13 @@ private enum QueuedStop: CaseIterable {
     case overtake
 }
 
-/// Call 1 is the first write, held as if behind other work on the app's queue (a size write) or
-/// while its settability query blocks (a position write): it has passed every check made before it
-/// was queued, and only its admission can still refuse it. The admission comes after that query, so
-/// a stop that arrives while the query is held makes no write.
+/// Call 1 is the first write, held as if behind other work on the app's queue: the fake's gate holds
+/// the claim, before both a position write's settability query and the admission. The write has
+/// passed every check made before it was queued, and this pins only that its admission refuses it
+/// after a stop. That the admission comes after the query, so that a stop arriving while the query
+/// blocks makes no write, is pinned by the order of steps in FakePlatformTests
+/// (`aPositionWriteThatFailsItsSettabilityQueryIsNotAdmitted`) and by Platform27's
+/// `aStopArrivingWhileThePositionsSettabilityQueryBlocksRefusesTheWrite`.
 @Test(.timeLimit(.minutes(1)), arguments: FirstPart.allCases, QueuedStop.allCases)
 private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: FirstPart, _ stop: QueuedStop) async {
     let sameDisplayStart = rect(600, 100, 300, 300)

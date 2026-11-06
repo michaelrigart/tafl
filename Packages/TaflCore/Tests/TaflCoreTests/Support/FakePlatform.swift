@@ -369,7 +369,10 @@ actor FakePlatform: WindowPlatform {
                 await hungWait()
                 return .failure(.notResponding)
             }
-            guard let window = windows[handle] else { return .failure(.noWindow) }
+            guard let window = windows[handle] else {
+                callLog.append(entry)
+                return .failure(.noWindow)
+            }
             guard window.canMove else {
                 callLog.append(entry)
                 return .failure(.cannotMove)

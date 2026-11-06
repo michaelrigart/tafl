@@ -352,3 +352,17 @@ private final class Admissions: Sendable {
     #expect(await hungAppsWrite.value == .failure(.notResponding))
     #expect(admissions.count == 0)
 }
+
+/// Every write-session call is logged, including a position write whose window has gone.
+@Test(.timeLimit(.minutes(1))) func aPositionWriteToAWindowThatHasGoneIsLoggedAndNotAdmitted() async throws {
+    let window = window(1, frame: rect(10, 10, 400, 300))
+    let (fake, _) = await makeFake(window)
+    let admissions = Admissions()
+    let admit: @Sendable () -> WriteGo = { admissions.ask() }
+    let s = try await session(fake, window.handle)
+    await fake.configure { $0.windows[window.handle] = nil }
+
+    #expect(await s.setPosition(ScreenPoint(x: 0, y: 25), admit: admit) == .failure(.noWindow))
+    #expect(admissions.count == 0)
+    #expect(await fake.callLog == ["begin", "position 0,25"])
+}
