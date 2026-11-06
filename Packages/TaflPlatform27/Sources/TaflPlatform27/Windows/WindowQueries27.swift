@@ -26,6 +26,19 @@ extension WindowQueries27<AXUIElement> {
 }
 
 extension WindowQueries27 {
+    /// The same queries, each failure read as the attribute's absence: a query asked through them
+    /// takes its default however it fails, a timeout included.
+    var takingDefaults: Self {
+        let absent = { (_: AXFailure) in AXFailure(.noValue) }
+        return Self(
+            frame: { self.frame($0).mapError(absent) },
+            string: { self.string($0, $1).mapError(absent) },
+            element: { self.element($0, $1).mapError(absent) },
+            bool: { self.bool($0, $1).mapError(absent) },
+            size: { self.size($0, $1).mapError(absent) },
+            settable: { self.settable($0, $1).mapError(absent) })
+    }
+
     /// Rectangle's `windowElement` (see `AXWindowAccess.resolveWindowElement`), asking for the role,
     /// and for the subrole only when it decides.
     func windowElement(of element: Element) throws(AXFailure) -> Element? {

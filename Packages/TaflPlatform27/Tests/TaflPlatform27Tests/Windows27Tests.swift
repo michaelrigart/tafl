@@ -255,12 +255,34 @@ private struct AnsweringWindow {
     func read() -> Result<WindowAttributes27, AXFailure> {
         Windows27.attributes(of: "w", asking: queries)
     }
+
+    /// Reads "w", noting each query as it is asked: `"<kind> <element>.<attribute>"`.
+    func read(noting asked: QueryLog) -> Result<WindowAttributes27, AXFailure> {
+        let answer = queries
+        return Windows27.attributes(of: "w", asking: WindowQueries27(
+            frame: { asked.note("frame \($0)"); return answer.frame($0) },
+            string: { asked.note("string \($0).\($1)"); return answer.string($0, $1) },
+            element: { asked.note("element \($0).\($1)"); return answer.element($0, $1) },
+            bool: { asked.note("bool \($0).\($1)"); return answer.bool($0, $1) },
+            size: { asked.note("size \($0).\($1)"); return answer.size($0, $1) },
+            settable: { asked.note("settable \($0).\($1)"); return answer.settable($0, $1) }))
+    }
+}
+
+private final class QueryLog {
+    private(set) var entries: [String] = []
+    func note(_ entry: String) { entries.append(entry) }
 }
 
 /// Each query a read of "w" makes after its frame, with the window set up so the read asks it.
 private enum Asked: CaseIterable {
     case role, subrole, containingWindow, title, positionSettable, sizeSettable
     case minSize, minimumSize, fullScreenButton, buttonSubrole, fullScreenAttribute, minimized
+
+    /// The queries whose failure changes the one Tafl reports: whether the window can be moved or resized.
+    static let settability: [Asked] = [.positionSettable, .sizeSettable]
+    /// The queries that only refine a read.
+    static let optional = allCases.filter { !settability.contains($0) }
 
     func window(failingWith code: AXError) -> AnsweringWindow {
         var window = AnsweringWindow()
@@ -330,14 +352,42 @@ private enum Asked: CaseIterable {
 }
 
 /// A timeout arrives as `cannotComplete`; a window closed during the read gives `invalidUIElement`.
-@Test(arguments: Asked.allCases)
-private func everyQueryTheAppDoesNotAnswerFailsTheReadAsItsFrameWould(_ asked: Asked) {
+@Test(arguments: Asked.settability)
+private func aSettabilityQueryTheAppDoesNotAnswerFailsTheReadAsItsFrameWould(_ asked: Asked) {
     let timedOut = asked.window(failingWith: .cannotComplete).read()
     #expect(timedOut.mapError { Windows27.failure(for: $0.code) } == .failure(.notResponding))
     let gone = asked.window(failingWith: .invalidUIElement).read()
     #expect(gone.mapError { Windows27.failure(for: $0.code) } == .failure(.noWindow))
     // Any other failure is the attribute's absence.
     #expect((try? asked.window(failingWith: .attributeUnsupported).read().get()) != nil)
+}
+
+/// An app may answer an optional query with an immediate `cannotComplete`: its windows are read
+/// all the same, as if they lacked the attribute. A hung app fails at the settability queries.
+@Test(arguments: Asked.optional)
+private func anOptionalQueryTakesItsDefaultHoweverItFails(_ asked: Asked) {
+    let lacking = asked.window(failingWith: .attributeUnsupported).read()
+    #expect((try? lacking.get()) != nil)
+    for code in [AXError.cannotComplete, .invalidUIElement, .failure] {
+        #expect(asked.window(failingWith: code).read() == lacking, "\(code.rawValue)")
+    }
+}
+
+@Test func anOptionalQueryThatTimesOutFallsBackAsAMissingOneDoes() {
+    var fullScreen = Asked.fullScreenButton.window(failingWith: .cannotComplete)
+    fullScreen.bools[Query("w", "AXFullScreen")] = .success(true)
+    #expect((try? fullScreen.read().get())?.isFullscreen == true)
+    var minimum = Asked.minSize.window(failingWith: .cannotComplete)
+    minimum.sizes[Query("w", "AXMinimumSize")] = .success(CGSize(width: 80, height: 40))
+    #expect((try? minimum.read().get())?.minSize == CGSize(width: 80, height: 40))
+}
+
+@Test func aReadAsksTheQueriesThatCanFailItFirstAndStopsAtTheOneThatDoes() {
+    var window = AnsweringWindow()
+    window.settable[Query("w", "AXSize")] = .failure(AXFailure(.cannotComplete))
+    let asked = QueryLog()
+    #expect(window.read(noting: asked) == .failure(AXFailure(.cannotComplete)))
+    #expect(asked.entries == ["frame w", "settable w.AXPosition", "settable w.AXSize"])
 }
 
 /// What a refused position write asks before it says "full screen" or "can't move".

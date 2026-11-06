@@ -39,28 +39,34 @@ enum Windows27 {
         }
     }
 
-    /// A window's frame is the one attribute it must give. Any other it lacks takes its default (no
-    /// role, no title, not settable, no minimum size, not full screen, not minimized), but a query
-    /// the app did not answer, or one that found the window gone, fails the read as a frame query
-    /// would, at the first: a timeout is never a "no". The role and subrole are read once, and the
-    /// window element is resolved once for the full-screen and minimized tests.
+    /// A window's frame is the one attribute it must give, and whether it can be moved and resized
+    /// are the two whose failure changes the one Tafl reports. A query among them that the app did
+    /// not answer, or that found the window gone, fails the read as a frame query would: a timeout
+    /// is never a "can't move". They are asked first, so a read that fails asks nothing more. Every
+    /// other attribute only refines the read, and takes its default however its query fails (no
+    /// role, no title, no minimum size, not full screen, not minimized): an app that answers one
+    /// with an immediate error still has its windows read, and a hung app has already failed. The
+    /// role and subrole are read once, and the window element is resolved once for the full-screen
+    /// and minimized tests.
     static func attributes<Element>(
         of element: Element,
         asking ask: WindowQueries27<Element>
     ) -> Result<WindowAttributes27, AXFailure> {
         Result { () throws(AXFailure) -> WindowAttributes27 in
             let frame = try ask.frame(element).get()
-            let role = try ask.string(element, kAXRoleAttribute).answer()
-            let subrole = try ask.string(element, kAXSubroleAttribute).answer()
-            let window = try ask.windowElement(of: element, role: role, subrole: { subrole })
-            let title = try ask.string(element, kAXTitleAttribute).answer() ?? ""
             let canMove = try ask.settable(element, kAXPositionAttribute).answer() ?? false
             let canResize = try ask.settable(element, kAXSizeAttribute).answer() ?? false
-            var minSize = try ask.size(element, "AXMinSize").answer()
-            if minSize == nil { minSize = try ask.size(element, "AXMinimumSize").answer() }
-            let isFullscreen = try ask.isFullscreen(element, window: window)
+            // Asked through `takingDefaults`, none of these fails the read.
+            let optional = ask.takingDefaults
+            let role = try optional.string(element, kAXRoleAttribute).answer()
+            let subrole = try optional.string(element, kAXSubroleAttribute).answer()
+            let window = try optional.windowElement(of: element, role: role, subrole: { subrole })
+            let title = try optional.string(element, kAXTitleAttribute).answer() ?? ""
+            var minSize = try optional.size(element, "AXMinSize").answer()
+            if minSize == nil { minSize = try optional.size(element, "AXMinimumSize").answer() }
+            let isFullscreen = try optional.isFullscreen(element, window: window)
             var isMinimized = false
-            if let window { isMinimized = try ask.bool(window, kAXMinimizedAttribute).answer() ?? false }
+            if let window { isMinimized = try optional.bool(window, kAXMinimizedAttribute).answer() ?? false }
             return WindowAttributes27(
                 role: role, subrole: subrole, title: title, frame: frame, canMove: canMove, canResize: canResize,
                 minSize: minSize, isFullscreen: isFullscreen, isMinimized: isMinimized)
