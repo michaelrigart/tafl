@@ -492,7 +492,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 
 @Test func aFrameReadBeforeTheRequestStartedIsStale() async {
     let rig = await Rig(start: crossStart)
-    let earlier = ContinuousClock.now
+    let earlier = ContinuousClock.now.advanced(by: .seconds(-1))
     let gate = await rig.fake.pause(beforeCall: 2)
     let task = rig.start(crossJob())
     #expect(await pollUntil { gate.waiterCount == 1 })
@@ -517,7 +517,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 
 @Test func aRequestThatWroteNothingKeepsItsReadingAccepted() async {
     let rig = await Rig(start: crossStart)
-    let earlier = ContinuousClock.now
+    let earlier = ContinuousClock.now.advanced(by: .seconds(-1))
     #expect(await rig.start(crossJob(), before: { false }).value == .cancelled(lastVerified: nil))
     #expect(await rig.writer.observe(handle, frame: rect(400, 400, 400, 300), readAt: earlier) == .stale)
 }
@@ -538,7 +538,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 
 @Test func aNewerFrameElsewhereAcceptedBeforeResolveRegistersOvertakesTheRequest() async {
     let rig = await Rig(start: crossStart)
-    let resolved = FrameReading(frame: crossStart, readAt: .now)
+    let resolved = FrameReading(frame: crossStart, readAt: .now.advanced(by: .seconds(-1)))
     #expect(await rig.writer.observe(handle, frame: rect(400, 400, 400, 300), readAt: .now) == .external)
     #expect(await rig.writer.begin(handle, start: resolved) == .overtaken)
     #expect(await !rig.writer.isWriting(handle))
@@ -562,7 +562,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 
 @Test func endReturnsAHeldFrameThatShowsAMoveAndKeepsItAsTheNewest() async {
     let rig = await Rig(start: crossStart)
-    let earlier = ContinuousClock.now
+    let earlier = ContinuousClock.now.advanced(by: .seconds(-1))
     _ = await rig.writer.begin(handle, start: FrameReading(frame: crossStart, readAt: .now))
     let moved = FrameReading(frame: rect(400, 400, 400, 300), readAt: .now)
     #expect(await rig.writer.observe(handle, frame: moved.frame, readAt: moved.readAt) == .heldForWrite)
