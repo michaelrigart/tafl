@@ -6,8 +6,7 @@ import TaflCore
 private func box(_ pid: pid_t) -> AXElementBox { AXElementBox(AXUIElementCreateApplication(pid)) }
 private let gone: Result<Int, AXFailure> = .failure(AXFailure(.invalidUIElement))
 
-/// A failed read removes its own registration. Without the check, a replacement registered while the
-/// read was in flight is removed with it, and later snapshots and writes find "no window".
+/// A read that finds the element invalid removes its own registration, and the window ends.
 @Test func aReadFoundGoneWithdrawsTheRegistrationItRead() async {
     let harness = EndsHarness()
     let registry = harness.registry
@@ -18,6 +17,8 @@ private let gone: Result<Int, AXFailure> = .failure(AXFailure(.invalidUIElement)
     #expect(harness.notices.all == [.destroyed(handle)])
 }
 
+/// Only the pair the read used is withdrawn. Without the check, a replacement registered while the
+/// read was in flight is removed with it, and later snapshots and writes find "no window".
 @Test func aReadFoundGoneLeavesAReplacementRegisteredMeanwhile() async {
     let harness = EndsHarness()
     let registry = harness.registry
@@ -34,6 +35,7 @@ private let gone: Result<Int, AXFailure> = .failure(AXFailure(.invalidUIElement)
     #expect(harness.notices.all.isEmpty)
 }
 
+/// A handle with no registration has no element to read: the read never runs.
 @Test func aReadOfAnUnregisteredHandleReadsNothing() async {
     let harness = EndsHarness()
     let handle = WindowHandle(pid: 10, windowID: 7, isStable: true)
@@ -44,6 +46,7 @@ private let gone: Result<Int, AXFailure> = .failure(AXFailure(.invalidUIElement)
     #expect(result == nil)
 }
 
+/// Only an invalid element means the window is gone: a read that timed out keeps the registration.
 @Test func aReadThatFailsOtherwiseKeepsTheRegistration() async {
     let harness = EndsHarness()
     let registry = harness.registry
