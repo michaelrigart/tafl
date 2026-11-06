@@ -279,8 +279,10 @@ style_status=0
 style_output="$(cd "$style_dir" && brew style "$style_dir/tafl.rb" 2>&1)" || style_status=$?
 expect "a: the cask passes brew style" test "$style_status" -eq 0
 if [[ "$style_status" -ne 0 ]]; then echo "$style_output" >&2; fi
-zap_entries="$(awk '/^  zap trash: \[/ { in_zap = 1; next } in_zap && /^  \]/ { exit } in_zap { gsub(/^ *"|",$/, ""); print }' "$cask")"
-expect "a: the cask's zap removes the window memory and the preferences, in that order" test "$zap_entries" == "$(printf '%s\n%s' '~/.local/state/tafl' '~/Library/Preferences/com.michaelrigart.tafl.plist')"
+expect "a: the cask has exactly one zap stanza" test "$(grep -c '^  zap ' "$cask")" -eq 1
+zap_block="$(awk '/^  zap / { in_zap = 1 } in_zap { print } in_zap && $0 == "  ]" { exit }' "$cask")"
+zap_expected="$(printf '%s\n' '  zap trash: [' '    "~/.local/state/tafl",' '    "~/Library/Preferences/com.michaelrigart.tafl.plist",' '  ]')"
+expect "a: the cask's zap is exactly the window memory and the preferences, in that order" test "$zap_block" == "$zap_expected"
 expect "a: the cask never mentions .config" lacks "$(cat "$cask")" ".config"
 expect "a: the cask never mentions quarantine" lacks "$(cat "$cask")" "quarantine"
 expect "a: the cask never mentions xattr" lacks "$(cat "$cask")" "xattr"
