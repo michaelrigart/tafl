@@ -1938,3 +1938,33 @@ private func recordNewerLastKnown(
     #expect(memory.lastKnown(handle, setup: DisplaySetup([displayA])) == nil)
     #expect(memory.lastKnown(other.handle, setup: DisplaySetup([displayA])) != nil)
 }
+
+@Test(.timeLimit(.minutes(1))) func aFrameReadBeforeANewWindowsPlacementIsNotATouch() async {
+    let desk = layout("Desk", [slot(.rightHalf, title: "*Docs*"), slot(.leftHalf)])
+    let rig = await Rig(focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = titled(window(1, frame: start), "Untitled")
+    let placing = FakeGate()
+    await rig.fake.configure { $0.windows[created.handle] = created; $0.snapshotGate = placing }
+    await rig.emit(.windowCreated(created))
+    await rig.fake.waitUntil { _ in placing.waiterCount == 1 }
+    // A move event reads the window where the app opened it, before the placement reads it; the
+    // answer arrives once the placement has landed.
+    let late = FakeGate()
+    await rig.fake.configure { $0.snapshotLateGate = late }
+    await rig.emit(.windowMoved(handle))
+    await rig.fake.waitUntil { _ in late.waiterCount == 1 }
+    placing.open()
+    let setup = DisplaySetup([displayA])
+    #expect(await pollUntilLastKnown(rig, handle, setup) { $0 == leftHalfA.relative(to: v) })
+    late.open()
+    await rig.waitForEvents(2)
+    #expect(await !rig.engine.touched.contains(handle))
+    #expect(await rig.engine.memory.read().lastKnown(handle, setup: setup)?.relative == leftHalfA.relative(to: v))
+
+    // The title that matches comes within the second, and the user has not touched the window.
+    await rig.fake.configure { $0.windows[handle]?.title = "Docs" }
+    await rig.emit(.titleChanged(handle, "Docs"))
+    await rig.waitForFrame(rightHalfA)
+}

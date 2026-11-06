@@ -253,7 +253,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await pollUntil { gate.waiterCount == 1 })
     #expect(await rig.writer.isWriting(handle))
 
-    _ = await rig.writer.observe(handle, frame: rect(400, 400, 1200, 900))
+    _ = await rig.writer.observe(handle, frame: rect(400, 400, 1200, 900), readAt: .now)
     gate.open()
     #expect(await task.value == .interrupted)
     #expect(await rig.log == ["begin", "size 1200x900", "read", "end"])
@@ -265,7 +265,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     let task = rig.start(crossJob())
     #expect(await pollUntil { gate.waiterCount == 1 })
 
-    _ = await rig.writer.observe(handle, frame: rect(100, 100, 1100, 900))
+    _ = await rig.writer.observe(handle, frame: rect(100, 100, 1100, 900), readAt: .now)
     gate.open()
     #expect(await task.value == .placed(crossTarget))
 }
@@ -276,7 +276,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     let task = rig.start(crossJob())
     #expect(await pollUntil { gate.waiterCount == 1 })
 
-    _ = await rig.writer.observe(handle, frame: rect(400, 400, 400, 300))
+    _ = await rig.writer.observe(handle, frame: rect(400, 400, 400, 300), readAt: .now)
     gate.open()
     #expect(await task.value == .interrupted)
     #expect(await rig.log == ["begin", "end"])
@@ -285,7 +285,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 @Test func eventsAreIgnoredWhileNothingIsWriting() async {
     let rig = await Rig(start: crossStart)
     #expect(await !rig.writer.isWriting(handle))
-    _ = await rig.writer.observe(handle, frame: rect(400, 400, 400, 300))
+    _ = await rig.writer.observe(handle, frame: rect(400, 400, 400, 300), readAt: .now)
 
     #expect(await rig.start(crossJob()).value == .placed(crossTarget))
     #expect(await !rig.writer.isWriting(handle))
@@ -395,7 +395,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
-    _ = await rig.writer.observe(handle, frame: steppedAchieved)
+    _ = await rig.writer.observe(handle, frame: steppedAchieved, readAt: .now)
 
     await rig.clock.advance(by: .milliseconds(25))
     #expect(await task.value == .placed(steppedAchieved))
@@ -406,7 +406,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
-    _ = await rig.writer.observe(handle, frame: rect(1100, 50, 1200, 900))
+    _ = await rig.writer.observe(handle, frame: rect(1100, 50, 1200, 900), readAt: .now)
 
     await rig.clock.advance(by: .milliseconds(25))
     #expect(await task.value == .interrupted)
@@ -419,7 +419,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     let task = rig.start(crossJob())
     #expect(await pollUntil { gate.waiterCount == 1 })
     #expect(await rig.writer.isWriting(handle))
-    _ = await rig.writer.observe(handle, frame: rect(1500, 700, 1200, 900))
+    _ = await rig.writer.observe(handle, frame: rect(1500, 700, 1200, 900), readAt: .now)
     gate.open()
 
     #expect(await task.value == .interrupted)
@@ -430,7 +430,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     let gate = await rig.fake.pause(beforeCall: 5)
     let task = rig.start(crossJob())
     #expect(await pollUntil { gate.waiterCount == 1 })
-    _ = await rig.writer.observe(handle, frame: crossTarget)
+    _ = await rig.writer.observe(handle, frame: crossTarget, readAt: .now)
     gate.open()
 
     #expect(await task.value == .placed(crossTarget))
@@ -442,7 +442,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     let gate = await rig.fake.pause(beforeCall: 0)
     let task = rig.start(job(start: target, target: target))
     #expect(await pollUntil { gate.waiterCount == 1 })
-    _ = await rig.writer.observe(handle, frame: rect(300, 300, 500, 775))
+    _ = await rig.writer.observe(handle, frame: rect(300, 300, 500, 775), readAt: .now)
     gate.open()
 
     #expect(await task.value == .interrupted)
@@ -452,18 +452,18 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 @Test func observeSaysWhoseFrameItIs() async {
     let rig = await Rig(start: crossStart)
     // Nothing has been written yet, so no frame is Tafl's own.
-    #expect(await rig.writer.observe(handle, frame: crossTarget) == .external)
+    #expect(await rig.writer.observe(handle, frame: crossTarget, readAt: .now) == .external)
 
     #expect(await rig.start(crossJob()).value == .placed(crossTarget))
     #expect(await !rig.writer.isWriting(handle))
     // After `write` returns and before the next one starts, a late frame equal to the achieved one is Tafl's.
-    #expect(await rig.writer.observe(handle, frame: crossTarget) == .own)
-    #expect(await rig.writer.observe(handle, frame: rect(1000.5, 0, 1200, 899.5)) == .own)
-    #expect(await rig.writer.observe(handle, frame: rect(1002, 0, 1200, 900)) == .external)
-    #expect(await rig.writer.observe(WindowHandle(pid: 100, windowID: 2, isStable: true), frame: crossTarget) == .external)
+    #expect(await rig.writer.observe(handle, frame: crossTarget, readAt: .now) == .own)
+    #expect(await rig.writer.observe(handle, frame: rect(1000.5, 0, 1200, 899.5), readAt: .now) == .own)
+    #expect(await rig.writer.observe(handle, frame: rect(1002, 0, 1200, 900), readAt: .now) == .external)
+    #expect(await rig.writer.observe(WindowHandle(pid: 100, windowID: 2, isStable: true), frame: crossTarget, readAt: .now) == .external)
 
     await rig.writer.forget(handle)
-    #expect(await rig.writer.observe(handle, frame: crossTarget) == .external)
+    #expect(await rig.writer.observe(handle, frame: crossTarget, readAt: .now) == .external)
 }
 
 @Test func observeHoldsFramesForAWriteThatIsRunning() async {
@@ -473,21 +473,54 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     let task = rig.start(job(start: crossTarget, target: crossStart, crosses: true))
     #expect(await pollUntil { gate.waiterCount == 1 })
     // Even the frame the last write left is now held for the new one, not called Tafl's own.
-    #expect(await rig.writer.observe(handle, frame: crossTarget) == .heldForWrite)
+    #expect(await rig.writer.observe(handle, frame: crossTarget, readAt: .now) == .heldForWrite)
     gate.open()
     #expect(await task.value == .placed(crossStart))
-    #expect(await rig.writer.observe(handle, frame: crossStart) == .own)
-    #expect(await rig.writer.observe(handle, frame: crossTarget) == .external)
+    #expect(await rig.writer.observe(handle, frame: crossStart, readAt: .now) == .own)
+    #expect(await rig.writer.observe(handle, frame: crossTarget, readAt: .now) == .external)
 }
 
 @Test func observeHoldsFramesThroughTheReapplyWait() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
-    #expect(await rig.writer.observe(handle, frame: steppedAchieved) == .heldForWrite)
+    #expect(await rig.writer.observe(handle, frame: steppedAchieved, readAt: .now) == .heldForWrite)
     await rig.clock.advance(by: .milliseconds(25))
     _ = await task.value
-    #expect(await rig.writer.observe(handle, frame: steppedAchieved) == .own)
+    #expect(await rig.writer.observe(handle, frame: steppedAchieved, readAt: .now) == .own)
+}
+
+@Test func aFrameReadBeforeTheRequestStartedIsStale() async {
+    let rig = await Rig(start: crossStart)
+    let earlier = ContinuousClock.now
+    let gate = await rig.fake.pause(beforeCall: 2)
+    let task = rig.start(crossJob())
+    #expect(await pollUntil { gate.waiterCount == 1 })
+    // Read before Resolve read the start: it says nothing the request does not already know.
+    #expect(await rig.writer.observe(handle, frame: rect(400, 400, 400, 300), readAt: earlier) == .stale)
+    gate.open()
+    #expect(await task.value == .placed(crossTarget))
+}
+
+@Test func aFrameReadBeforeTheAchievedOneIsStale() async {
+    let rig = await Rig(start: crossStart)
+    let gate = await rig.fake.pause(beforeCall: 3)
+    let task = rig.start(crossJob())
+    #expect(await pollUntil { gate.waiterCount == 1 })
+    // Read after the size landed and before the position did, judged once the request is over.
+    let midway = ContinuousClock.now
+    gate.open()
+    #expect(await task.value == .placed(crossTarget))
+    #expect(await rig.writer.observe(handle, frame: rect(100, 100, 1200, 900), readAt: midway) == .stale)
+    #expect(await rig.writer.observe(handle, frame: rect(100, 100, 1200, 900), readAt: .now) == .external)
+}
+
+@Test func afterARequestThatWroteNothingAnOlderFrameIsStillJudged() async {
+    let rig = await Rig(start: crossStart)
+    let earlier = ContinuousClock.now
+    #expect(await rig.start(crossJob(), before: { false }).value == .cancelled(lastVerified: nil))
+    // Nothing of Tafl's own is there to be newer than it.
+    #expect(await rig.writer.observe(handle, frame: rect(400, 400, 400, 300), readAt: earlier) == .external)
 }
 
 // MARK: The first-write callback
@@ -510,8 +543,8 @@ private func aChangeDuringTheFirstWriteCallbackIsJudgedBeforeTheWrite(_ during: 
     switch during {
     case .cancel: task.cancel()
     case .reconfigure: await rig.writer.reconfigurationBegan()
-    case .externalMove: _ = await rig.writer.observe(handle, frame: rect(400, 400, 400, 300))
-    case .unchangedStart: _ = await rig.writer.observe(handle, frame: crossStart)
+    case .externalMove: _ = await rig.writer.observe(handle, frame: rect(400, 400, 400, 300), readAt: .now)
+    case .unchangedStart: _ = await rig.writer.observe(handle, frame: crossStart, readAt: .now)
     }
     _ = release.next()
 
@@ -610,7 +643,7 @@ private func observeDuring(_ rig: Rig, call: Int, frame: ScreenRect, job: WriteJ
     let gate = await rig.fake.pause(beforeCall: call)
     let task = rig.start(job)
     #expect(await pollUntil { gate.waiterCount == 1 })
-    #expect(await rig.writer.observe(handle, frame: frame) == .heldForWrite)
+    #expect(await rig.writer.observe(handle, frame: frame, readAt: .now) == .heldForWrite)
     gate.open()
     return await task.value
 }
@@ -694,7 +727,7 @@ private func writeReturned(_ rig: Rig, timeout: Duration = .seconds(2)) async ->
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(25))
     #expect(await pollUntil { gate.waiterCount == 1 })
-    #expect(await rig.writer.observe(handle, frame: rect(300, 300, 1200, 900)) == .heldForWrite)
+    #expect(await rig.writer.observe(handle, frame: rect(300, 300, 1200, 900), readAt: .now) == .heldForWrite)
     await rig.fake.configure { $0.windows[handle] = nil }
     gate.open()
 
@@ -727,7 +760,7 @@ private func writeReturned(_ rig: Rig, timeout: Duration = .seconds(2)) async ->
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
-    #expect(await rig.writer.observe(handle, frame: rect(300, 300, 1200, 900)) == .heldForWrite)
+    #expect(await rig.writer.observe(handle, frame: rect(300, 300, 1200, 900), readAt: .now) == .heldForWrite)
     await rig.writer.reconfigurationBegan()
     await rig.clock.advance(by: .milliseconds(25))
 
@@ -739,7 +772,7 @@ private func writeReturned(_ rig: Rig, timeout: Duration = .seconds(2)) async ->
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
-    #expect(await rig.writer.observe(handle, frame: rect(300, 300, 1200, 900)) == .heldForWrite)
+    #expect(await rig.writer.observe(handle, frame: rect(300, 300, 1200, 900), readAt: .now) == .heldForWrite)
     task.cancel()
 
     #expect(await task.value == .interrupted)
@@ -760,7 +793,7 @@ private func writeReturned(_ rig: Rig, timeout: Duration = .seconds(2)) async ->
     #expect(await pollUntil { gateB.waiterCount == 1 })
 
     #expect(await rig.writer.isWriting(handle))
-    #expect(await rig.writer.observe(handle, frame: rect(500, 500, 400, 300)) == .heldForWrite)
+    #expect(await rig.writer.observe(handle, frame: rect(500, 500, 400, 300), readAt: .now) == .heldForWrite)
     gateB.open()
     #expect(await b.value == .interrupted)
 }
@@ -824,7 +857,7 @@ private func aRequestCancelledMidSequenceJudgesTheFramesItHeld(_ cancellation: C
     case .newerRequest: task.cancel()
     }
     // Someone moves the window while the size's read-back is in flight.
-    _ = await rig.writer.observe(handle, frame: rect(400, 400, 1200, 900))
+    _ = await rig.writer.observe(handle, frame: rect(400, 400, 1200, 900), readAt: .now)
     gate.open()
     #expect(await task.value == .interrupted)
     #expect(await rig.log == ["begin", "size 1200x900", "read", "end"])

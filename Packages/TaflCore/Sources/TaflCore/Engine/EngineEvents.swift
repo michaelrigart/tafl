@@ -85,13 +85,14 @@ extension WindowEngine {
 
     /// Decides whose the window's new frame is through the writer, and keeps the memory in step.
     /// A frame judged while a write runs counts too: the last one the write puts there is the
-    /// window's last known frame.
+    /// window's last known frame. A frame read before the newest the writer has of its own says
+    /// nothing, and changes nothing.
     private func frameChanged(_ window: WindowHandle, token: Int, _ context: EventContext) async {
         guard case .success(let snapshot) = await platform.snapshot(of: window), isLive(window, token: token) else {
             return
         }
-        let verdict = await writer.observe(window, frame: snapshot.frame)
-        guard isLive(window, token: token) else { return }
+        let verdict = await writer.observe(window, frame: snapshot.frame, readAt: snapshot.readAt)
+        guard isLive(window, token: token), verdict != .stale else { return }
         if verdict == .external {
             touched.insert(window)
             await memory.record(window, .placement, readAt: snapshot.readAt) { $0.recordExternalChange(window) }

@@ -60,6 +60,9 @@ public enum WriteResult: Equatable, Sendable {
 
 /// Whose a frame read for a window is, as `FrameWriter.observe` decides it.
 public enum FrameObservation: Equatable, Sendable {
+    /// Read before the newest frame the writer has of its own for the window: older than what Tafl
+    /// knows, so it says nothing.
+    case stale
     /// A write for the window is running; the frame was kept and is judged against it.
     case heldForWrite
     /// Within a point of where the window's last write left it.
@@ -144,6 +147,9 @@ public actor FrameWriter {
     private let reapplyDelay: Duration?
     private var requests: [WindowHandle: Request] = [:]
     private var achieved: [WindowHandle: ScreenRect] = [:]
+    /// The newest reading behind the writer's own frame for each window: the start of a request
+    /// while it runs, its newest reading once it has left a frame. A frame read before it is stale.
+    private var readings = ReadingGate()
 
     /// Bumped when a display reconfiguration begins; a write that started earlier is cancelled.
     public private(set) var epoch = 0
@@ -173,19 +179,29 @@ public actor FrameWriter {
         let request = Request(job: job, startEpoch: epoch)
         requests[job.window] = request
         achieved[job.window] = nil
+        readings.admit(job.window, readAt: job.startReadAt)
         var result = await run(request, beforeFirstWrite)
         if judgePending(request) { result = .interrupted }
         if requests[job.window] === request {
             requests[job.window] = nil
-            achieved[job.window] = result.frame ?? request.lastOwn
+            let own = result.frame ?? request.lastOwn
+            achieved[job.window] = own
+            if own == nil {
+                readings.forget(job.window)
+            } else {
+                readings.admit(job.window, readAt: request.readAt)
+            }
         }
         return (result, request.readAt)
     }
 
-    /// Decides in one step what a frame read for this window is: `.heldForWrite` while a write
-    /// for it runs (the frame is kept and judged against the request), else `.own` when it is
-    /// where the window's last write left it, else `.external`.
-    public func observe(_ window: WindowHandle, frame: ScreenRect) -> FrameObservation {
+    /// Decides in one step what a frame read for this window is: `.stale` when it was read before
+    /// the newest frame the writer has of its own (a running request's start, or what the last
+    /// one left), else `.heldForWrite` while a write for it runs (the frame is kept and judged
+    /// against the request), else `.own` when it is where the window's last write left it, else
+    /// `.external`.
+    public func observe(_ window: WindowHandle, frame: ScreenRect, readAt: ContinuousClock.Instant) -> FrameObservation {
+        guard readings.accepts(window, readAt: readAt) else { return .stale }
         if let request = requests[window] {
             request.observed.append(PendingFrame(frame: frame, part: request.inFlight))
             return .heldForWrite
@@ -197,11 +213,13 @@ public actor FrameWriter {
     /// Drops the window's last achieved frame, for a window that is gone.
     public func forget(_ window: WindowHandle) {
         achieved[window] = nil
+        readings.forget(window)
     }
 
     /// Drops the last achieved frames of an app's windows, for an app that quit.
     public func forget(pid: Int32) {
         achieved = achieved.filter { $0.key.pid != pid }
+        readings.forget(pid: pid)
     }
 
     /// True from the start of a `write` for this window until it returns, the reapply wait included.

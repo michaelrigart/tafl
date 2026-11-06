@@ -80,6 +80,8 @@ actor FakePlatform: WindowPlatform {
     var visibleWindowsLateGate: FakeGate?
     /// Holds the next `snapshot(of:)` call until the gate opens.
     var snapshotGate: FakeGate?
+    /// Reads the window, then holds the result of the next `snapshot(of:)` until the gate opens.
+    var snapshotLateGate: FakeGate?
     /// How many `snapshot(of:)` calls have started.
     private(set) var snapshotCount = 0
     private var snapshotGates: [Int: FakeGate] = [:]
@@ -188,7 +190,12 @@ actor FakePlatform: WindowPlatform {
             return .failure(.notResponding)
         }
         guard let window = windows[handle] else { return .failure(.noWindow) }
-        return .success(stamped(window))
+        let read = stamped(window)
+        if let late = snapshotLateGate {
+            snapshotLateGate = nil
+            await late.wait()
+        }
+        return .success(read)
     }
 
     func appName(pid: Int32) async -> String? {
