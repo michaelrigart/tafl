@@ -694,6 +694,34 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
     #expect(await rig.frame().map { isClose($0, start) } == true)
 }
 
+/// The unchanged-setup read records the windows against the new geometry. A change that begins
+/// while that read is held must see that geometry as where it began from, not the one before the
+/// first change, or its rules recognise placements against displays that are gone.
+@Test(.timeLimit(.minutes(1))) func aChangeBeginningDuringTheUnchangedSetupReadStartsFromTheRecordedGeometry() async {
+    let wide = Display(
+        identity: displayA.identity, frame: rect(0, 0, 2000, 800), visibleFrame: rect(0, 25, 2000, 775)
+    )
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    await rig.fake.configure { $0.displays = [wide] }
+    let reads = FakeGate()
+    await rig.fake.configure { $0.visibleWindowsGate = reads }
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.reconfigurationEnded)
+    await rig.waitForEvents(2)
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: quiet)
+    await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    // Another change begins while the settled change reads the windows into the new geometry.
+    await rig.emit(.reconfigurationBegan)
+    await rig.waitForEvents(3)
+    reads.open()
+    await rig.engine.rulesTask?.value
+    #expect(await rig.engine.changeOrigin == [wide])
+    // The stopped run leaves the stored setup to the change that follows.
+    #expect(await rig.engine.memory.read().lastDisplays == [displayA])
+}
+
 @Test func windowMovesPushTheSettleDeadline() async {
     let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: rect(1100, 100, 400, 300))])
     await rig.engine.start(config: config())

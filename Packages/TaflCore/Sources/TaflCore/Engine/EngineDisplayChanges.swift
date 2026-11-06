@@ -79,9 +79,11 @@ extension WindowEngine {
         if DisplaySetup(old) == DisplaySetup(new), !rulesStarted {
             // A display that dropped out and came back, or a change of geometry: nothing moves, but
             // frames may have changed while recording was frozen, and no event follows them.
+            // The origin goes in the step that resumes recording, so a change that begins during the
+            // read starts from the geometry being recorded.
+            changeOrigin = nil
             await resumeRecording(for: new)
             guard reconfigurations.isCurrent(began) else { return }
-            changeOrigin = nil
             await memory.update { $0.lastDisplays = new }
         } else {
             await applyDisplayChange(from: old, to: new, since: began)
