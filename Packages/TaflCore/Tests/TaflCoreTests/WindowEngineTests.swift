@@ -673,6 +673,27 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
     #expect(await rig.engine.activeLayoutName == nil)
 }
 
+/// A resolution change leaves the setup the same and moves no window: the window keeps its points,
+/// so its relative frame changes with nothing to announce it. Recording that frame is the change's
+/// job; a stale one comes back as a wrong frame when another display connects and leaves.
+@Test(.timeLimit(.minutes(1))) func aChangeThatEndsOnTheSameSetupRecordsWhereTheWindowsAre() async {
+    let wide = Display(
+        identity: displayA.identity, frame: rect(0, 0, 2000, 800), visibleFrame: rect(0, 25, 2000, 775)
+    )
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    await rig.changeDisplays(to: [wide], eventsHandledAfter: 2)
+    let setup = DisplaySetup([displayA])
+    let recorded = await pollUntilLastKnown(rig, handle, setup) { $0 == start.relative(to: wide.visibleFrame) }
+    #expect(recorded)
+
+    await rig.changeDisplays(to: [wide, displayB], eventsHandledAfter: 4)
+    await rig.waitForChanges(1)
+    await rig.changeDisplays(to: [wide], eventsHandledAfter: 6)
+    await rig.waitForChanges(2)
+    #expect(await rig.frame().map { isClose($0, start) } == true)
+}
+
 @Test func windowMovesPushTheSettleDeadline() async {
     let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: rect(1100, 100, 400, 300))])
     await rig.engine.start(config: config())

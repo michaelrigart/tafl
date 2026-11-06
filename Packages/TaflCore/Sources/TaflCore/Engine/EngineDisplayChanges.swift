@@ -77,13 +77,24 @@ extension WindowEngine {
         guard reconfigurations.isCurrent(began) else { return }
         let old = changeOrigin ?? knownDisplays
         if DisplaySetup(old) == DisplaySetup(new), !rulesStarted {
-            // A display that dropped out and came back, or a change of geometry: nothing moves.
-            owner.recordLastKnown(for: new)
+            // A display that dropped out and came back, or a change of geometry: nothing moves, but
+            // frames may have changed while recording was frozen, and no event follows them.
+            await resumeRecording(for: new)
+            guard reconfigurations.isCurrent(began) else { return }
             changeOrigin = nil
             await memory.update { $0.lastDisplays = new }
         } else {
             await applyDisplayChange(from: old, to: new, since: began)
         }
+    }
+
+    /// Resumes recording last-known frames for `displays` and reads every window into it: frames
+    /// that changed while recording was frozen are recorded now, since nothing announces them.
+    /// Recording resumes before the first await, so the caller's check of the count before the call
+    /// still holds for it.
+    private func resumeRecording(for displays: [Display]) async {
+        owner.recordLastKnown(for: displays)
+        _ = await platform.visibleWindows(take: owner.take)
     }
 
     // MARK: The rules
@@ -125,8 +136,7 @@ extension WindowEngine {
 
         // No await between the check above and this: a reconfiguration that begins from here
         // freezes recording again.
-        owner.recordLastKnown(for: new)
-        _ = await platform.visibleWindows(take: owner.take)
+        await resumeRecording(for: new)
         let reconfigurations = reconfigurations
         await memory.update { memory in
             if reconfigurations.isCurrent(began) { memory.lastDisplays = new }
