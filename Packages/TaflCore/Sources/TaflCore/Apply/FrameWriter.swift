@@ -58,8 +58,9 @@ public enum WriteResult: Equatable, Sendable {
 /// Applies a frame as a sequence of writes, one at a time, each read back. The owner judges every
 /// read-back, and every other reading of the window, as it is read: a frame someone else moved
 /// interrupts the request, and the writer stops at its next step. The owner admits each write on the
-/// app's queue as it is made, so a write queued behind the reading that interrupted the request is
-/// not made either. One request per window at a time;
+/// app's queue as it is made, against every condition that stops a request (see
+/// `WindowOwner.checkpoint`), so a write queued behind the reading that interrupted the request, or
+/// behind the cancellation of its task, is not made either. One request per window at a time;
 /// `WindowRequestQueue` provides that. The writer's result says what it saw itself; a reading the
 /// owner judged after the writer's last step reaches the request's end, not this result.
 public struct FrameWriter: Sendable {
@@ -118,8 +119,20 @@ public struct FrameWriter: Sendable {
         self.reapplyDelay = reapplyDelay
     }
 
-    /// A request already over when Apply begins, or one that yields to a touched window, opens no session.
+    /// A request already over when Apply begins, or one that yields to a touched window, opens no
+    /// session. The owner learns of the task's cancellation as it happens, so a write already
+    /// waiting on the app's queue is refused at its admission.
     public func write(_ job: WriteJob) async -> WriteResult {
+        let owner = owner
+        let ticket = job.ticket
+        return await withTaskCancellationHandler {
+            await apply(job)
+        } onCancel: {
+            owner.cancel(ticket)
+        }
+    }
+
+    private func apply(_ job: WriteJob) async -> WriteResult {
         switch owner.checkpoint(job.ticket, firstWrite: job.firstWrite) {
         case .write: break
         case .interrupted: return .interrupted

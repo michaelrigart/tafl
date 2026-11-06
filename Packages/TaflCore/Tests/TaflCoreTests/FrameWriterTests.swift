@@ -49,10 +49,10 @@ private struct Rig {
     /// the request, the writer writes, and the request ends. The value is what the request comes to:
     /// the writer's result, or `.interrupted` when a reading the owner judged after the writer's last
     /// step showed that someone else moved the window.
-    func start(_ job: WriteJob) -> Task<WriteResult, Never> {
+    func start(_ job: WriteJob, layoutApplication: Int? = nil) -> Task<WriteResult, Never> {
         Task { [writer, owner] in
             var job = job
-            job.ticket = owner.beginRequest(window(1, frame: job.start)).ticket
+            job.ticket = owner.beginRequest(window(1, frame: job.start), layoutApplication: layoutApplication).ticket
             let result = await writer.write(job)
             return owner.endRequest(job.ticket).interrupted ? .interrupted : result
         }
@@ -345,6 +345,40 @@ private func aReadingQueuedAheadOfAWriteThatFindsAnExternalChangeStopsTheWrite(_
     #expect(await rig.fake.windows[handle]?.frame == usersFrame)
     let write = part == .size ? "size 1200x900" : "position 0,25"
     #expect(await rig.log == ["begin", "\(write) interrupted", "end"])
+}
+
+/// What stops a request while its write waits on the app's queue, besides a reading (above).
+private enum QueuedStop: CaseIterable {
+    /// The task running the request is cancelled, as a newer request for the window does.
+    case cancel
+    case reconfigure
+    /// The user's action touches the window, and the request yields to that.
+    case touch
+    /// A newer layout application begins.
+    case overtake
+}
+
+/// Call 1 is the first write, held as if behind other work on the app's queue: it has passed every
+/// check made before it was queued, and only its admission can still refuse it.
+@Test(.timeLimit(.minutes(1)), arguments: QueuedStop.allCases)
+private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ stop: QueuedStop) async {
+    let rig = await Rig(start: crossStart)
+    rig.owner.layoutApplicationBegan(1)
+    let gate = await rig.fake.pause(beforeCall: 1)
+    let task = rig.start(crossJob(firstWrite: FirstWrite(opensChainOn: displayA, yieldsToTouch: true)), layoutApplication: 1)
+    #expect(await pollUntil { gate.waiterCount == 1 })
+    switch stop {
+    case .cancel: task.cancel()
+    case .reconfigure: rig.owner.reconfigurationBegan()
+    case .touch: rig.owner.touch(handle)
+    case .overtake: rig.owner.layoutApplicationBegan(2)
+    }
+    gate.open()
+
+    #expect(await task.value == .cancelled(lastVerified: nil))
+    #expect(await rig.fake.windows[handle]?.frame == crossStart)
+    #expect(await rig.log == ["begin", "size 1200x900 \(stop == .touch ? "declined" : "cancelled")", "end"])
+    #expect(rig.chain == nil)
 }
 
 @Test(.timeLimit(.minutes(1))) func aMoveBeforeTheRequestDoesNotStopIt() async {

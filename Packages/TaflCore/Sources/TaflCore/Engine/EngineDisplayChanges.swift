@@ -91,15 +91,15 @@ extension WindowEngine {
     /// Handles a display setup that differs from the one before, or whose rules an earlier
     /// change began and did not finish: the active layout ends; each window is handled by the
     /// first rule that applies; a layout that claims the new setup becomes active. A layout
-    /// applied since the rules began overtakes them: they send no further request, and the
-    /// claiming layout does not become active. Recording stays frozen until the rules have run,
-    /// overtaken or not; then it resumes for the new setup, and the seed reads every window into
-    /// it. A reconfiguration that begins meanwhile takes over: the run stops and leaves the state
-    /// to the change that follows.
+    /// applied since the rules began overtakes them: they send no further request, a request they
+    /// sent writes no more, and the claiming layout does not become active. Recording stays frozen
+    /// until the rules have run, overtaken or not; then it resumes for the new setup, and the seed
+    /// reads every window into it. A reconfiguration that begins meanwhile takes over: the run
+    /// stops and leaves the state to the change that follows.
     func applyDisplayChange(from old: [Display], to new: [Display], since began: Int? = nil) async {
         let began = began ?? reconfigurations.current
         guard !isStopping, reconfigurations.isCurrent(began) else { return }
-        let application = layoutApplications.begin()
+        let application = beginLayoutApplication()
         rulesStarted = true
         let oldSetup = DisplaySetup(old)
         let newSetup = DisplaySetup(new)

@@ -42,7 +42,8 @@ public enum WriteGo: Equatable, Sendable {
     case write
     /// A reading after Resolve's showed that someone else moved the window.
     case interrupted
-    /// A display reconfiguration began, or the request is over.
+    /// The request is over or was cancelled, a display reconfiguration began, or a newer layout
+    /// application overtook the one it is part of.
     case cancelled
     /// The window was touched, and the request yields to that.
     case declined
@@ -115,15 +116,23 @@ public final class WindowOwner: WindowNotices {
 
     // MARK: Requests
 
-    /// Resolve's reading: it begins the window's request.
-    public func beginRequest(_ snapshot: WindowSnapshot) -> RequestStart {
-        state.withLock { $0.beginRequest(snapshot) }
+    /// Resolve's reading: it begins the window's request, as part of the layout application given,
+    /// if any.
+    public func beginRequest(_ snapshot: WindowSnapshot, layoutApplication: Int? = nil) -> RequestStart {
+        state.withLock { $0.beginRequest(snapshot, layoutApplication: layoutApplication) }
     }
 
-    /// Whether the request may go on: not interrupted, over, or begun before a reconfiguration. With
-    /// the request's first write, a request that yields to touch is declined for a touched window.
+    /// Whether the request may go on: not over, interrupted, cancelled, begun before a
+    /// reconfiguration, or overtaken by a newer layout application. With the request's first write,
+    /// a request that yields to touch is declined for a touched window.
     public func checkpoint(_ ticket: RequestTicket, firstWrite: FirstWrite? = nil) -> WriteGo {
         state.withLock { $0.checkpoint(ticket, firstWrite: firstWrite) }
+    }
+
+    /// The task running the request was cancelled. Called from its cancellation handler, so a write
+    /// already waiting on the app's queue is refused when it comes to be admitted.
+    public func cancel(_ ticket: RequestTicket) {
+        state.withLock { $0.cancel(ticket) }
     }
 
     /// A write's admission, which the platform asks on the app's queue immediately before the write
@@ -184,6 +193,11 @@ public final class WindowOwner: WindowNotices {
     /// Stops recording last-known frames, and stops every request begun before now from writing.
     public func reconfigurationBegan() {
         state.withLock { $0.reconfigurationBegan() }
+    }
+
+    /// The engine began this layout application: every request of an older one writes no more.
+    public func layoutApplicationBegan(_ application: Int) {
+        state.withLock { $0.layoutApplicationBegan(application) }
     }
 
     /// Records last-known frames for these displays from now on.

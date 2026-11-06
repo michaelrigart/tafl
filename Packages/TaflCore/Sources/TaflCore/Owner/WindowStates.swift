@@ -25,10 +25,14 @@ struct WindowStates {
         let start: ScreenRect
         /// The reconfiguration epoch it began in.
         let epoch: Int
+        /// The layout application it is part of; nil for a request no layout application stops.
+        let layoutApplication: Int?
         /// Its first write has begun.
         var wrote = false
         /// A reading after Resolve's showed that someone else moved the window.
         var interrupted = false
+        /// The task running it was cancelled: by a newer request for the window, or by Tafl stopping.
+        var cancelled = false
         var inFlight: WriteInFlight?
     }
 
@@ -44,6 +48,8 @@ struct WindowStates {
     private var leftOut: Set<Int32> = []
     /// Bumped when a display reconfiguration begins: a request begun earlier writes no more.
     private(set) var epoch = 0
+    /// The newest layout application begun: a request of an older one writes no more.
+    private(set) var layoutApplication = 0
     private var nextRequest = 0
 
     init(check: FrameCheck) {
@@ -98,27 +104,41 @@ struct WindowStates {
     /// Resolve's reading, judged as one taken before the request (a move closes the old chain but
     /// interrupts nothing); the request starts at it, and so does the frame it expects. A request
     /// still under way for the window is over.
-    mutating func beginRequest(_ snapshot: WindowSnapshot) -> RequestStart {
+    mutating func beginRequest(_ snapshot: WindowSnapshot, layoutApplication: Int? = nil) -> RequestStart {
         let window = snapshot.handle
         windows[window]?.request = nil
         _ = read(window, snapshot.frame, placeable: snapshot.isPlaceable)
         windows[window]?.frame = snapshot.frame
         nextRequest += 1
-        windows[window]?.request = Request(number: nextRequest, start: snapshot.frame, epoch: epoch)
+        windows[window]?.request = Request(
+            number: nextRequest, start: snapshot.frame, epoch: epoch, layoutApplication: layoutApplication
+        )
         return RequestStart(
             ticket: RequestTicket(window: window, number: nextRequest),
             placement: memory.placement(of: window)
         )
     }
 
-    /// Whether the request may go on. Before its first write, a request that yields to touch is
-    /// declined for a window that has been touched.
+    /// Whether the request may go on. Every condition that stops a request is here, so a write's
+    /// admission sees each of them: the request is over, interrupted, cancelled, begun before a
+    /// reconfiguration, or part of a layout application a newer one has overtaken. Before its first
+    /// write, a request that yields to touch is declined for a window that has been touched.
     func checkpoint(_ ticket: RequestTicket, firstWrite: FirstWrite? = nil) -> WriteGo {
         guard let request = current(ticket) else { return .cancelled }
         if request.interrupted { return .interrupted }
-        guard request.epoch == epoch else { return .cancelled }
+        guard !request.cancelled, request.epoch == epoch, !isOvertaken(request) else { return .cancelled }
         if !request.wrote, firstWrite?.yieldsToTouch == true, isTouched(ticket.window) { return .declined }
         return .write
+    }
+
+    private func isOvertaken(_ request: Request) -> Bool {
+        request.layoutApplication.map { $0 != layoutApplication } ?? false
+    }
+
+    /// The task running the request was cancelled.
+    mutating func cancel(_ ticket: RequestTicket) {
+        guard current(ticket) != nil else { return }
+        windows[ticket.window]?.request?.cancelled = true
     }
 
     /// A write's admission, just before it is made. The first opens the restore chain at the start
@@ -212,6 +232,10 @@ struct WindowStates {
     mutating func reconfigurationBegan() {
         isFrozen = true
         epoch += 1
+    }
+
+    mutating func layoutApplicationBegan(_ application: Int) {
+        layoutApplication = application
     }
 
     mutating func recordLastKnown(for displays: [Display]) {

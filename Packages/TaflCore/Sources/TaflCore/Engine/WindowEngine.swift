@@ -95,7 +95,8 @@ public actor WindowEngine {
     /// Display reconfigurations: one that begins stops every run that started before it.
     let reconfigurations = Generation()
     /// Layout applications, by a shortcut, the menu or a display change: the newest one decides
-    /// the active layout, and stops the runs planned before it began.
+    /// the active layout, and stops the runs planned before it began. Begun only through
+    /// `beginLayoutApplication()`, which tells the owner.
     let layoutApplications = Generation()
     /// Observation restarts: only the newest commits what it learned.
     let restarts = Generation()
@@ -375,7 +376,7 @@ public actor WindowEngine {
             return
         }
         guard let definition = config.layouts.first(where: { $0.name == name }) else { return }
-        let application = layoutApplications.begin()
+        let application = beginLayoutApplication()
         // Taken before anything is read: a reconfiguration that begins during the reads stops the run.
         let since = reconfigurations.current
         let displays = await platform.displays()
@@ -391,6 +392,14 @@ public actor WindowEngine {
         if let failure = count.firstFailure, let window = windows.first(where: { $0.handle == failure.window }) {
             report(.failure(failure.kind, display: await displayIdentity(of: window, after: failure.kind)))
         }
+    }
+
+    /// In one step of the engine: the count stops the runs planned before it, and the owner stops
+    /// the requests they sent from writing.
+    func beginLayoutApplication() -> Int {
+        let application = layoutApplications.begin()
+        owner.layoutApplicationBegan(application)
+        return application
     }
 
     /// A layout the current config lacks neither becomes active nor is saved.
@@ -410,7 +419,9 @@ public actor WindowEngine {
     /// answer holds up only its own windows. A reconfiguration that has begun since `since` stops
     /// the run, and so does a layout application newer than `application` (the run's own, or the
     /// one current when its requests were planned): the run sends no further request, and counts
-    /// only what it sent. Each request records its result in the window's owner as it ends.
+    /// only what it sent. A request it sent is part of `application`, so the owner admits none of
+    /// its writes once a newer one has begun. Each request records its result in the window's owner
+    /// as it ends.
     func run(_ requests: [MoveRequest], since: Int, application: Int) async -> RunCount {
         var order: [Int32] = []
         var byApp: [Int32: [MoveRequest]] = [:]
@@ -433,7 +444,9 @@ public actor WindowEngine {
                         if Task.isCancelled || !reconfigurations.isCurrent(since) || isOvertaken() { break }
                         // The checks inside the plan close the gap before Resolve's reading begins the request.
                         let refused = Mutex(false)
-                        let outcome = await pipeline.run(request.window, config: config) { _ in
+                        let outcome = await pipeline.run(
+                            request.window, config: config, layoutApplication: application
+                        ) { _ in
                             guard reconfigurations.isCurrent(since), !isOvertaken() else {
                                 refused.withLock { $0 = true }
                                 return .nothing

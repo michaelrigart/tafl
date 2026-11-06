@@ -259,6 +259,38 @@ private func leftHalf(nudgedBy dx: Double) -> ScreenRect {
     #expect(owner.willWrite(later.ticket, .size, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .write)
 }
 
+@Test func aCancelledRequestWritesNothingMore() {
+    let owner = WindowOwner(adjustments: [])
+    let request = owner.beginRequest(reading(start))
+    owner.cancel(request.ticket)
+    #expect(owner.checkpoint(request.ticket) == .cancelled)
+    #expect(owner.willWrite(request.ticket, .size, targetVisible: v, displays: [displayA], firstWrite: FirstWrite(opensChainOn: displayA)) == .cancelled)
+    #expect(owner.windowMemory.restore[handle] == nil)
+    #expect(owner.endRequest(request.ticket) == RequestEnding(interrupted: false, wrote: false))
+    // A cancellation that arrives after its request ended leaves the next one alone.
+    let next = owner.beginRequest(reading(start))
+    owner.cancel(request.ticket)
+    #expect(owner.willWrite(next.ticket, .size, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .write)
+}
+
+@Test func aRequestOfAnOvertakenLayoutApplicationWritesNothingMore() {
+    let owner = WindowOwner(adjustments: [])
+    owner.layoutApplicationBegan(1)
+    let request = owner.beginRequest(reading(start), layoutApplication: 1)
+    #expect(owner.willWrite(request.ticket, .position, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .write)
+    #expect(owner.readBack(request.ticket, rect(0, 25, 400, 300)) == .own(rect(0, 25, 400, 300)))
+    owner.layoutApplicationBegan(2)
+    #expect(owner.willWrite(request.ticket, .size, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .cancelled)
+    owner.endRequest(request.ticket)
+    // The newer application's requests write, and so does one no layout application stops.
+    let newer = owner.beginRequest(reading(rect(0, 25, 400, 300)), layoutApplication: 2)
+    #expect(owner.willWrite(newer.ticket, .size, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .write)
+    owner.endRequest(newer.ticket)
+    let action = owner.beginRequest(reading(rect(0, 25, 400, 300)))
+    owner.layoutApplicationBegan(3)
+    #expect(owner.willWrite(action.ticket, .size, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .write)
+}
+
 @Test func theFirstWriteOfARequestThatYieldsDeclinesForATouchedWindow() {
     let owner = WindowOwner(adjustments: [])
     let request = owner.beginRequest(reading(start))

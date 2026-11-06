@@ -87,14 +87,19 @@ public actor Pipeline {
         self.steps = steps
     }
 
+    /// `layoutApplication` is the layout application the request is part of: a newer one stops it
+    /// before its next write.
     public func run(
         _ window: WindowHandle,
         config: Config,
         unplaceable: Unplaceable = .skipped,
+        layoutApplication: Int? = nil,
         plan: @escaping @Sendable (ResolvedWindow) -> PlanResult
     ) async -> PlacementOutcome {
         let outcome = await queue.run(window) { [self] in
-            await execute(window, config: config, unplaceable: unplaceable, plan: plan)
+            await execute(
+                window, config: config, unplaceable: unplaceable, layoutApplication: layoutApplication, plan: plan
+            )
         }
         return outcome ?? .superseded
     }
@@ -110,12 +115,16 @@ public actor Pipeline {
         _ window: WindowHandle,
         config: Config,
         unplaceable: Unplaceable,
+        layoutApplication: Int?,
         plan: @Sendable (ResolvedWindow) -> PlanResult
     ) async -> PlacementOutcome {
         let owner = owner
         let snapshot: WindowSnapshot
         let start: RequestStart
-        switch await platform.snapshot(of: window, take: { ($0, owner.beginRequest($0)) }) {
+        let begin: @Sendable (WindowSnapshot) -> (WindowSnapshot, RequestStart) = {
+            ($0, owner.beginRequest($0, layoutApplication: layoutApplication))
+        }
+        switch await platform.snapshot(of: window, take: begin) {
         case .failure(let failure): return .failed(await failureKind(failure, window: window, appName: nil))
         case .success(let read): (snapshot, start) = read
         }

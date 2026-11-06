@@ -58,10 +58,17 @@ private func chain(_ frame: ScreenRect, open: Bool = true) -> RestoreRecord {
     RestoreRecord(frame: frame, display: displayA.identity, visibleFrame: displayA.visibleFrame, chainOpen: open)
 }
 
+private final class Seen: Sendable {
+    private let value = Mutex<ScreenRect?>(nil)
+    func record(_ frame: ScreenRect) { value.withLock { $0 = frame } }
+    var frame: ScreenRect? { value.withLock { $0 } }
+}
+
 private struct Rig {
     let clock = ManualClock()
     let fake: FakePlatform
     let owner = WindowOwner(adjustments: MacOSAdjustment.measured27)
+    let queue = WindowRequestQueue()
     let writer: FrameWriter
     let pipeline: Pipeline
 
@@ -78,8 +85,18 @@ private struct Rig {
             configure(fake)
         }
         writer = FrameWriter(platform: fake, clock: clock, owner: owner, reapplyDelay: nil)
-        pipeline = Pipeline(platform: fake, writer: writer, queue: WindowRequestQueue(), owner: owner, steps: steps)
+        pipeline = Pipeline(platform: fake, writer: writer, queue: queue, owner: owner, steps: steps)
         owner.loadWindows(from: initial)
+    }
+
+    /// Waits until the window request queue has been asked for `count` requests in all.
+    func waitForRequests(_ count: Int) async -> Bool {
+        let begun = ContinuousClock.now
+        while await queue.requestCount < count {
+            if begun.duration(to: .now) > .seconds(2) { return false }
+            await Task.yield()
+        }
+        return true
     }
 
     func run(_ request: MoveRequest, gap: Double = 0) async -> PlacementOutcome {
@@ -455,6 +472,31 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(await second.value == .placed(rightHalf))
     #expect(rig.stored.restore[handle] == chain(start))
     #expect(rig.stored.placed[handle]?.action == .rightHalf)
+}
+
+@Test(.timeLimit(.minutes(1))) func aNewerRequestStartsWhereTheWindowIsNotWhereTheOlderOnesQueuedWriteWouldPutIt() async {
+    let start = rect(100, 100, 400, 300)
+    let rig = await Rig(start: start)
+    // The older request's first write waits on the app's queue, past every check made before it was queued.
+    let gate = await rig.fake.pause(beforeCall: 1)
+    let older = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
+    #expect(await pollUntil { gate.waiterCount == 1 })
+    let resolved = Seen()
+    let newer = Task { [pipeline = rig.pipeline] in
+        await pipeline.run(handle, config: config()) { window in
+            resolved.record(window.snapshot.frame)
+            return .request(request(.named(.rightHalf), source: .action(.rightHalf)))
+        }
+    }
+    // The newer request has cancelled the older one, and waits for it to finish.
+    #expect(await rig.waitForRequests(2))
+    gate.open()
+
+    #expect(await older.value == .superseded)
+    #expect(await newer.value == .placed(rightHalf))
+    #expect(resolved.frame == start)
+    #expect(await rig.log.prefix(3) == ["begin", "position 0,25 cancelled", "end"])
+    #expect(rig.stored.restore[handle] == chain(start))
 }
 
 @Test func partialWriteCountsAsTafls() async {

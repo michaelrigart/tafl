@@ -1648,6 +1648,28 @@ private func pollUntilLastKnown(
     await rig.waitForReport { $0 == .layoutApplied(name: "First", placed: 0, failed: 0) }
 }
 
+@Test(.timeLimit(.minutes(1))) func aLayoutRunOvertakenWhileItsWriteWaitsOnTheQueueLeavesTheWindowAlone() async {
+    let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
+    let other = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let first = layout("First", [slot(.topHalf, app: "com.c")])
+    let second = layout("Second", [slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [slow, other], focused: nil)
+    await rig.engine.start(config: config(layouts: [first, second]))
+    // First's first write (call 1) waits on its app's queue, past every check made before it was queued.
+    let write = await rig.fake.pause(beforeCall: 1)
+    let applyingFirst = Task { await rig.engine.applyLayout(named: "First") }
+    await rig.fake.waitUntil { _ in write.waiterCount == 1 }
+    // Without the held write, Second's own write would take the gate and wait for it forever.
+    guard write.waiterCount == 1 else { return write.open() }
+    await rig.engine.applyLayout(named: "Second")
+    #expect(await rig.frame(of: other.handle) == rightHalfA)
+    write.open()
+    await applyingFirst.value
+    #expect(await rig.frame(of: slow.handle) == start)
+    await rig.waitForReport { $0 == .layoutApplied(name: "First", placed: 0, failed: 0) }
+    #expect(await rig.engine.activeLayoutName == "Second")
+}
+
 @Test(.timeLimit(.minutes(1))) func aReloadThatRemovesARunningLayoutKeepsItInactiveAndUnsaved() async {
     let (store, directory) = temporaryStore()
     defer { try? FileManager.default.removeItem(at: directory) }
