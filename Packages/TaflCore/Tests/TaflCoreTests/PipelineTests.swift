@@ -458,7 +458,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(rig.stored.placed[handle] == nil)
 }
 
-@Test func cancelledRequestKeepsItsRestoreFrame() async {
+@Test(.timeLimit(.minutes(1))) func cancelledRequestKeepsItsRestoreFrame() async {
     let start = rect(100, 100, 400, 300)
     let rig = await Rig(start: start)
     // Held on the read after the first write: the chain is open and one part is written.
@@ -466,6 +466,8 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let first = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
     #expect(await pollUntil { gate.waiterCount == 1 })
     let second = rig.start(request(.named(.rightHalf), source: .action(.rightHalf)))
+    // The queue has the second request once it has cancelled the first.
+    #expect(await rig.waitForRequests(2))
     gate.open()
 
     #expect(await first.value == .superseded)
