@@ -18,6 +18,11 @@ private func placedLeftHalf() -> PlacedRecord {
     PlacedRecord(action: .leftHalf, layout: nil, placement: .leftHalf, cycleStep: 0, achieved: leftHalf, display: displayA.identity)
 }
 
+/// What a request that wrote the left half and found it placed has to record.
+private func placedByLeftHalf() -> Applied {
+    .wrote(.placed(leftHalf), leftHalfRequest(for: handle), displays: [displayA], fallback: displayA)
+}
+
 /// The window placed at the left half by a request that began at `start`, its chain open.
 private func placedOwner() -> WindowOwner {
     let owner = WindowOwner(adjustments: MacOSAdjustment.measured27)
@@ -28,7 +33,7 @@ private func placedOwner() -> WindowOwner {
     #expect(owner.readBack(request.ticket, sized) == .own(sized))
     #expect(owner.willWrite(request.ticket, .position, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .write)
     #expect(owner.readBack(request.ticket, leftHalf) == .own(leftHalf))
-    owner.endRequest(request.ticket) { _, placement in placement.recordPlaced(placedLeftHalf()) }
+    owner.endRequest(request.ticket, recording: placedByLeftHalf())
     return owner
 }
 
@@ -186,7 +191,7 @@ private func lastKnown(_ owner: WindowOwner, _ setup: DisplaySetup = onlyA) -> U
     #expect(!owner.knows(handle))
     #expect(!owner.windowMemory.holdsWindow { $0 == handle })
     // The request it had records nothing when it ends.
-    let ending = owner.endRequest(request.ticket) { _, placement in placement.recordPlaced(placedLeftHalf()) }
+    let ending = owner.endRequest(request.ticket, recording: placedByLeftHalf())
     #expect(ending == RequestEnding(interrupted: false, wrote: false))
     #expect(owner.windowMemory.placed[handle] == nil)
     // A window that gets the id is new: its first reading is no move, and nothing is touched.

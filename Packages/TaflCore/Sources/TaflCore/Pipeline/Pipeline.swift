@@ -60,16 +60,6 @@ public enum PlanResult: Sendable {
     case fail(FailureKind)
 }
 
-/// What the stages after Resolve's reading came to, for Record.
-private enum Applied {
-    /// Stopped before writing, by Resolve or by the plan: nothing to record.
-    case stopped(PlacementOutcome)
-    /// The window is already where the request puts it.
-    case unchanged(MoveRequest, frame: ScreenRect, display: Display)
-    /// Apply ran.
-    case wrote(WriteResult, MoveRequest, displays: [Display], fallback: Display)
-}
-
 /// Resolve, Calculate, Adjust, Apply, Record: every window move runs through here. The stages
 /// run inside the window's queue, so planning sees the frame left by an earlier request. The
 /// request runs through the window's owner: Resolve's reading begins it, and its end records the
@@ -130,9 +120,7 @@ public actor Pipeline {
         case .success(let read): (snapshot, start) = read
         }
         let applied = await proceed(snapshot, start, config: config, unplaceable: unplaceable, plan: plan)
-        let ending = owner.endRequest(start.ticket) { ending, placement in
-            Self.record(applied, ending, &placement)
-        }
+        let ending = owner.endRequest(start.ticket, recording: applied)
         return await outcome(of: applied, ending, snapshot: snapshot)
     }
 
@@ -215,60 +203,6 @@ public actor Pipeline {
         ))
     }
 
-    /// Record: keeps the window's placement in step with what the request did, in the owner's step
-    /// that ends it. An interruption was recorded by the reading that showed it, and stands.
-    private static func record(_ applied: Applied, _ ending: RequestEnding, _ placement: inout WindowPlacement) {
-        guard !ending.interrupted else { return }
-        switch applied {
-        case .stopped:
-            return
-        case .unchanged(let request, let frame, let display):
-            // A request whose target is where the window already is: the window counts as placed by
-            // it, and a restore that is already done completes. A display change leaves it alone.
-            guard request.source != .displayChange else { return }
-            if request.source.countsForRestore { placement.openChain(before: frame, on: display) }
-            placement.recordPlaced(placedRecord(request, achieved: frame, display: display.identity))
-            if request.source.completesRestore { placement.completeRestore() }
-        case .wrote(let result, let request, let displays, let fallback):
-            func display(of frame: ScreenRect) -> DisplayIdentity {
-                (DisplayLocator.display(containing: frame, in: displays) ?? fallback).identity
-            }
-            switch result {
-            case .placed(let achieved), .sizeRefused(let achieved), .positionRefused(let achieved):
-                placement.recordPlaced(placedRecord(request, achieved: achieved, display: display(of: achieved)))
-                if request.source.completesRestore, result == .placed(achieved) { placement.completeRestore() }
-            case .interrupted:
-                return
-            case .cancelled(let verified):
-                if let verified { placement.recordPlaced(ownRecord(verified, display: display(of: verified))) }
-            case .failed(_, let verified):
-                if let verified {
-                    placement.recordPlaced(ownRecord(verified, display: display(of: verified)))
-                } else if ending.wrote {
-                    // Nothing verified after a write: the window is no longer at the old record, but
-                    // nothing external happened, so the chain stays open.
-                    placement.placed = nil
-                }
-            }
-        }
-    }
-
-    private static func placedRecord(_ request: MoveRequest, achieved: ScreenRect, display: DisplayIdentity) -> PlacedRecord {
-        PlacedRecord(
-            action: request.source.action,
-            layout: request.source.layoutName,
-            placement: request.placement,
-            cycleStep: request.cycleStep,
-            achieved: achieved,
-            display: display
-        )
-    }
-
-    /// A frame verified before a request stopped is Tafl's own, though nothing repeats from it.
-    private static func ownRecord(_ frame: ScreenRect, display: DisplayIdentity) -> PlacedRecord {
-        PlacedRecord(action: nil, layout: nil, placement: nil, cycleStep: 0, achieved: frame, display: display)
-    }
-
     /// The outcome a request reports. One that reached Apply and was interrupted was moved during
     /// placement, whatever the writer saw.
     private func outcome(of applied: Applied, _ ending: RequestEnding, snapshot: WindowSnapshot) async -> PlacementOutcome {
@@ -301,25 +235,5 @@ public actor Pipeline {
             // The window could not be read, so the app's name comes from the platform by pid.
             return .notResponding(app: await platform.appName(pid: window.pid) ?? "The app")
         }
-    }
-}
-
-private extension RequestSource {
-    var action: Action? {
-        switch self {
-        case .action(let action): action
-        case .layout, .newWindow, .displayChange: nil
-        }
-    }
-
-    var layoutName: String? {
-        switch self {
-        case .layout(let name), .newWindow(let name): name
-        case .action, .displayChange: nil
-        }
-    }
-
-    var completesRestore: Bool {
-        self == .action(.restore)
     }
 }

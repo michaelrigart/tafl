@@ -140,13 +140,11 @@ public final class WindowOwner: WindowNotices {
         state.withLock { $0.readBack(ticket, frame) }
     }
 
-    /// Ends the request, and records its outcome on the window's placement in the same step.
+    /// Ends the request, and records what it did on the window's placement in the same step. The
+    /// outcome is a value: no caller code runs under the lock.
     @discardableResult
-    public func endRequest(
-        _ ticket: RequestTicket,
-        _ record: (RequestEnding, inout WindowPlacement) -> Void = { _, _ in }
-    ) -> RequestEnding {
-        state.withLock { $0.endRequest(ticket, record) }
+    func endRequest(_ ticket: RequestTicket, recording applied: Applied? = nil) -> RequestEnding {
+        state.withLock { $0.endRequest(ticket, recording: applied) }
     }
 
     // MARK: Touch and creation

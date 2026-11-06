@@ -35,8 +35,10 @@ final class MemoryKeeperTests {
 
     /// Changes the window's memory as a request does: a reading begins it, and its end records.
     private func change(_ owner: WindowOwner) {
-        let start = owner.beginRequest(TaflCoreTests.window(1, frame: rect(1, 2, 3, 4)))
-        owner.endRequest(start.ticket) { _, placement in placement.openChain(before: rect(1, 2, 3, 4), on: displayA) }
+        let snapshot = TaflCoreTests.window(1, frame: rect(1, 2, 3, 4))
+        let start = owner.beginRequest(snapshot)
+        let unchanged = Applied.unchanged(leftHalfRequest(for: snapshot.handle), frame: rect(1, 2, 3, 4), display: displayA)
+        owner.endRequest(start.ticket, recording: unchanged)
     }
 
     private func isSuccess(_ result: Result<Void, any Error>) -> Bool {

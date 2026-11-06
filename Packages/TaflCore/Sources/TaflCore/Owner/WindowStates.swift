@@ -142,17 +142,14 @@ struct WindowStates {
         return windows[ticket.window]?.request?.interrupted == true ? .interrupted : .own(frame)
     }
 
-    /// Ends the request and lets `record` change the window's placement in the same step. A window
+    /// Ends the request and records what it did on the window's placement in the same step. A window
     /// that is gone, or whose request another took the place of, records nothing.
-    mutating func endRequest(
-        _ ticket: RequestTicket,
-        _ record: (RequestEnding, inout WindowPlacement) -> Void
-    ) -> RequestEnding {
+    mutating func endRequest(_ ticket: RequestTicket, recording applied: Applied?) -> RequestEnding {
         guard let request = current(ticket) else { return RequestEnding(interrupted: false, wrote: false) }
         windows[ticket.window]?.request = nil
         let ending = RequestEnding(interrupted: request.interrupted, wrote: request.wrote)
         var placement = memory.placement(of: ticket.window)
-        record(ending, &placement)
+        applied?.record(ending, &placement)
         memory.setPlacement(placement, of: ticket.window)
         return ending
     }

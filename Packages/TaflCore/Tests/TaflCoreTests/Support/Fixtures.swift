@@ -8,6 +8,14 @@ func rect(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -> ScreenRect {
     ScreenRect(x: x, y: y, width: w, height: h)
 }
 
+/// A request placing the window at its left half, from the Left Half action.
+func leftHalfRequest(for window: WindowHandle) -> MoveRequest {
+    MoveRequest(
+        window: window, spec: .named(.leftHalf), display: displayA.identity,
+        placement: .leftHalf, cycleStep: 0, source: .action(.leftHalf)
+    )
+}
+
 func display(_ visible: ScreenRect) -> Display {
     Display(
         identity: DisplayIdentity(name: "Test", vendor: 1, model: 2, serial: 3),
