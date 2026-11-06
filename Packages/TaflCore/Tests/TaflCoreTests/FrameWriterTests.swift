@@ -315,9 +315,16 @@ private enum FirstPart: CaseIterable {
     case size, position
 }
 
+private enum UsersChange: CaseIterable {
+    /// The user resizes and moves the window.
+    case both
+    /// The user changes only the part the first write sets: judged as if that write were in flight, it would pass.
+    case writtenPartOnly
+}
+
 /// Call 1 is the first write; the window's app has a reading of it queued ahead of that write.
-@Test(.timeLimit(.minutes(1)), arguments: FirstPart.allCases)
-private func aReadingQueuedAheadOfAWriteThatFindsAnExternalChangeStopsTheWrite(_ part: FirstPart) async {
+@Test(.timeLimit(.minutes(1)), arguments: FirstPart.allCases, UsersChange.allCases)
+private func aReadingQueuedAheadOfAWriteThatFindsAnExternalChangeStopsTheWrite(_ part: FirstPart, _ change: UsersChange) async {
     let sameDisplayStart = rect(600, 100, 300, 300)
     let started = part == .size ? crossJob() : job(start: sameDisplayStart, target: rect(0, 25, 500, 775))
     let rig = await Rig(start: started.start)
@@ -325,8 +332,13 @@ private func aReadingQueuedAheadOfAWriteThatFindsAnExternalChangeStopsTheWrite(_
     let task = rig.start(started)
     #expect(await pollUntil { gate.waiterCount == 1 })
 
-    // The user resizes and moves the window; the reading queued first sees it.
-    let usersFrame = rect(300, 300, 450, 350)
+    // The reading queued first sees the user's change.
+    let moved = rect(300, 300, 450, 350)
+    let usersFrame = switch (change, part) {
+    case (.both, _): moved
+    case (.writtenPartOnly, .size): ScreenRect(origin: started.start.origin, size: moved.size)
+    case (.writtenPartOnly, .position): ScreenRect(origin: moved.origin, size: started.start.size)
+    }
     #expect(await rig.move(to: usersFrame) == .external)
     gate.open()
     #expect(await task.value == .interrupted)
