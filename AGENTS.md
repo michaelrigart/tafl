@@ -64,8 +64,8 @@ points at Xcode, and don't change `xcode-select`.
   it on in System Settings, Privacy & Security, Accessibility. The onboarding window's button
   opens that page, and Check Again picks up the grant. Whether a renewed certificate (yearly)
   keeps the grant is unconfirmed.
-- Paths: the config is `~/.config/tafl/config.toml` (it may be a symlink; Tafl never writes
-  it); the window memory is `~/.local/state/tafl/memory.json`.
+- Paths: the config is `~/.config/tafl/config.toml` (it may be a symlink; Tafl writes it only
+  as a starter file when none exists, on request); the window memory is `~/.local/state/tafl/memory.json`.
 - While Tafl runs, a zero-length `config.toml` is read as a save in progress and ignored (an
   editor may truncate the file before it writes). To return to the built-in defaults, delete
   the file; an empty file at launch does mean defaults.
@@ -82,8 +82,11 @@ points at Xcode, and don't change `xcode-select`.
 A Debug-only probe in `Tafl/Probe/` exercises the platform types Tafl ships, so a new macOS can
 be checked by rerunning it. It needs the Accessibility grant and quits when it finishes.
 
-- Launch: `open /Applications/Tafl.app --args -TaflProbe <subcommand> [arguments]`. A panel with
-  a Continue button pauses the steps that need a human look.
+- Launch: quit Tafl first, then `open /Applications/Tafl.app --args -TaflProbe <subcommand>
+  [arguments]`; `open` on a running Tafl only brings it forward and drops the arguments. (`open -n`
+  would start a second copy, which runs the probe before the earlier-instance hand-over, but the
+  running Tafl would hold the shortcuts `keys` tests.) A panel with a Continue button pauses the
+  steps that need a human look.
 - Read the log: `/usr/bin/log show --last 10m --style compact --predicate 'subsystem ==
   "com.michaelrigart.tafl" AND category == "probe"'`.
 

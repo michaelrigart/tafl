@@ -5,19 +5,22 @@
 Tafl is a macOS menu bar app that places windows on a grid from the keyboard: halves,
 quarters, thirds, two-thirds, maximize and more, on one display or across several. Its
 settings live in one TOML file, `~/.config/tafl/config.toml`, which Tafl reloads as soon as
-it changes and never writes. Layouts in that file put your windows in place when a set of
+it changes. Tafl never writes that file, apart from a starter file you ask for when there is
+none. Layouts in that file put your windows in place when a set of
 displays connects.
 
 ## Features
 
 - Placements: left, right, top and bottom halves, the four quarters, thirds and two-thirds,
   maximize, maximize height, center, larger, smaller, and restore, which returns a window to
-  the frame it had before Tafl's first placement on it. Thirds follow a display's
+  the frame it had before Tafl's latest run of placements on it. Thirds follow a display's
   orientation, so on a portrait display they are rows.
 - Display moves: to the display on the left, right, above or below, or to the one under the
   pointer. A window keeps its placement when it moves.
-- Repeats: repeating a half moves the window to the next display in that direction, or
-  cycles its size, or does nothing. The `repeat` setting chooses.
+- Repeats: the `repeat` setting chooses what repeating a placement does. By default,
+  repeating left half or right half moves the window to the other display in that
+  direction, and other placements don't repeat. It can instead cycle a half's size, or do
+  nothing.
 - Display changes: when the set of connected displays changes and settles, Tafl puts windows
   where its fixed rules say, and waking from sleep moves nothing.
 - Layouts: named in the config file, each with an optional set of displays that applies it
@@ -61,8 +64,8 @@ the first time you open it. After the first install:
    page; **Check Again** picks up the permission.
 3. Quit Rectangle, or any other app that uses the same shortcuts, before you start Tafl.
    Tafl's defaults are Rectangle's alternate set, so both would register the same keys. If
-   another app holds a shortcut, Tafl gets no error and the shortcut does nothing (measured
-   on macOS 27.2).
+   another app holds a shortcut, Tafl gets no error when it registers the same key
+   (measured on macOS 27.2), so the shortcut may not reach Tafl.
 
 Without a config file Tafl runs on its built-in defaults. Settings > Overview can create a
 starter file with every setting at its default, commented. That is the only time Tafl writes
@@ -70,8 +73,9 @@ the file, and it never overwrites one.
 
 Upgrade with `brew upgrade --cask tafl`. Releases are signed with the same certificate, and
 macOS ties the Accessibility permission to that certificate, so an upgrade should keep the
-permission and launch at login. That is how it works for Hulder, the same kind of app signed
-the same way, where it was checked; for Tafl it has not been checked yet. Whether an upgrade
+permission and launch at login. For [Hulder](https://github.com/michaelrigart/hulder), the
+same kind of app signed the same way, rebuilds signed with the same certificate were checked
+to keep the permission; upgrades were not, and for Tafl neither has been checked yet. Whether an upgrade
 needs **Open Anyway** again has not been checked either; if macOS blocks it, repeat step 1.
 
 The developer certificate is renewed every year. Whether a renewed certificate keeps the
@@ -119,8 +123,9 @@ the Accessibility permission again, and the old build's entry stays in the list 
 working. Run `tccutil reset Accessibility com.michaelrigart.tafl` to clear it, then allow
 Tafl again.
 
-Builds made without the override are signed with the maintainer's certificate and keep the
-permission across rebuilds, because macOS ties the permission to the signature.
+Builds made without the override are signed with the maintainer's certificate and should
+keep the permission across rebuilds, because macOS ties the permission to the certificate
+(confirmed for Hulder; not yet checked for Tafl).
 
 A build made without a version shows `dev` as its version.
 
@@ -167,9 +172,9 @@ Most of these come from macOS 27, not from Tafl. v1's design takes what macOS al
 Rectangle's source and Apple's documentation; the only item below that has been measured on
 macOS 27.2 is the first one.
 
-- **A shortcut another app holds does nothing, and Tafl isn't told.** Registering a key
-  another app already holds gives Tafl no error (measured on 27.2), so quit Rectangle or
-  any other app that uses the same keys.
+- **A shortcut another app holds may not reach Tafl, and Tafl isn't told.** Registering a
+  key another app already holds gives Tafl no error (measured on 27.2). Where the key press
+  goes was not recorded, so quit Rectangle or any other app that uses the same keys.
 - **No Spaces.** macOS has no public API for them, so Tafl doesn't move windows between
   Spaces and has no per-Space layouts. Layouts and display-change rules reach the windows
   of the current Space; windows on other Spaces stay where macOS put them.
@@ -193,8 +198,8 @@ macOS 27.2 is the first one.
 - **A private macOS call identifies windows.** If a macOS release removes it, Tafl falls
   back to matching windows by process and frame, and Settings says so.
 - **Layouts never launch apps.** An entry for an app that isn't running is skipped.
-- **The config file is yours to edit.** Tafl never writes it, apart from the starter file
-  you ask for, and Settings only shows it.
+- **The config file is yours to edit.** Tafl never writes it, apart from a starter file you
+  ask for when there is none, and Settings only shows it.
 - **What v1 leaves out:** animation, gestures, nudging and width- or height-only resizes,
   grids beyond the named placements, per-app rules outside layouts, a URL scheme, command
   line tool, AppleScript or Shortcuts, Stage Manager awareness (Tafl ignores its strip),
