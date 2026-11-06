@@ -4,6 +4,8 @@ public struct WriteJob: Sendable {
     public var window: WindowHandle
     public var appName: String
     public var start: ScreenRect
+    /// When `start` was read.
+    public var startReadAt: ContinuousClock.Instant
     public var target: ScreenRect
     public var targetVisible: ScreenRect
     public var crossesDisplays: Bool
@@ -21,6 +23,7 @@ public struct WriteJob: Sendable {
         window: WindowHandle,
         appName: String,
         start: ScreenRect,
+        startReadAt: ContinuousClock.Instant,
         target: ScreenRect,
         targetVisible: ScreenRect,
         crossesDisplays: Bool,
@@ -33,6 +36,7 @@ public struct WriteJob: Sendable {
         self.window = window
         self.appName = appName
         self.start = start
+        self.startReadAt = startReadAt
         self.target = target
         self.targetVisible = targetVisible
         self.crossesDisplays = crossesDisplays
@@ -90,6 +94,8 @@ public actor FrameWriter {
         var verified: [ScreenRect] = []
         /// The last frame read back that passed its check, in any session.
         var lastOwn: ScreenRect?
+        /// When the newest of the request's own readings was taken: its start, or its last read.
+        var readAt: ContinuousClock.Instant
         // The current session's.
         var expected: ScreenRect
         var inFlight: WritePart?
@@ -100,6 +106,7 @@ public actor FrameWriter {
             self.job = job
             self.startEpoch = startEpoch
             expected = job.start
+            readAt = job.startReadAt
         }
 
         func beginSession(from start: ScreenRect) {
@@ -156,9 +163,13 @@ public actor FrameWriter {
     /// `beforeFirstWrite` runs once the request is registered, just before its first write; when it
     /// answers false the request stops with nothing written. However the request ends (placed,
     /// failed or cancelled), the frames held for it meanwhile are judged before it lets go of the
-    /// window: an external change among them makes the result `.interrupted`.
-    public func write(_ job: WriteJob, beforeFirstWrite: @Sendable () async -> Bool) async -> WriteResult {
-        if let planned = job.plannedEpoch, planned != epoch { return .cancelled(lastVerified: nil) }
+    /// window: an external change among them makes the result `.interrupted`. `readAt` is when the
+    /// newest of the request's own readings was taken, which is what its result rests on.
+    public func write(
+        _ job: WriteJob,
+        beforeFirstWrite: @Sendable () async -> Bool
+    ) async -> (result: WriteResult, readAt: ContinuousClock.Instant) {
+        if let planned = job.plannedEpoch, planned != epoch { return (.cancelled(lastVerified: nil), job.startReadAt) }
         let request = Request(job: job, startEpoch: epoch)
         requests[job.window] = request
         achieved[job.window] = nil
@@ -168,7 +179,7 @@ public actor FrameWriter {
             requests[job.window] = nil
             achieved[job.window] = result.frame ?? request.lastOwn
         }
-        return result
+        return (result, request.readAt)
     }
 
     /// Decides in one step what a frame read for this window is: `.heldForWrite` while a write
@@ -261,6 +272,7 @@ public actor FrameWriter {
         let request = context.request
         if Task.isCancelled || epoch != request.startEpoch { return earlier }
         guard case .success(let read) = await context.session.readFrame() else { return earlier }
+        request.readAt = read.readAt
         if differs(read.frame, request.expected) { return .interrupted }
         let result = await sequence(context, beforeFirstWrite)
         return result == .cancelled(lastVerified: nil) ? earlier : result
@@ -330,7 +342,9 @@ public actor FrameWriter {
         if case .failure(let failure) = written { throw Stop(result: .failed(failure, lastVerified: request.lastVerified)) }
         switch await context.session.readFrame() {
         case .failure(let failure): throw Stop(result: .failed(failure, lastVerified: request.lastVerified))
-        case .success(let read): if !commit(request, write.part, read.frame) { throw Stop(result: .interrupted) }
+        case .success(let read):
+            request.readAt = read.readAt
+            if !commit(request, write.part, read.frame) { throw Stop(result: .interrupted) }
         }
     }
 

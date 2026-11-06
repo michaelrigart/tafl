@@ -54,6 +54,7 @@ struct RunFailure: Sendable {
 struct KnownFrame: Sendable {
     var handle: WindowHandle
     var frame: ScreenRect
+    var readAt: ContinuousClock.Instant
 }
 
 /// What events said about apps while observation restarted. It is newer than a restart's answer,
@@ -228,7 +229,7 @@ public actor WindowEngine {
     private func forgetGoneProcesses() async {
         let saved = await memory.read()
         let gone = saved.goneProcesses(launched: await platform.launchDates(of: saved.windowPids))
-        await memory.update { $0.forget(pids: gone) }
+        await memory.forgetEntries(of: gone)
     }
 
     /// A layout application still running finishes against the config in force then: a layout the
@@ -371,9 +372,10 @@ public actor WindowEngine {
             case .nothing: return .nothing
             case .fail(let kind): return .fail(kind)
             }
-        }, landed: { outcome in
-            if case .placed(let frame) = outcome {
-                await self.recordLastKnownLive([KnownFrame(handle: focused.handle, frame: frame)], since: since)
+        }, landed: { outcome, readAt in
+            if case .placed(let frame) = outcome, let readAt {
+                let known = KnownFrame(handle: focused.handle, frame: frame, readAt: readAt)
+                await self.recordLastKnownLive([known], since: since)
             }
         })
         if case .failed(let kind) = outcome {
@@ -462,8 +464,8 @@ public actor WindowEngine {
                         }, eligible: {
                             guard request.source.yieldsToTouch else { return true }
                             return await self.isUntouched(window)
-                        }, landed: { outcome in
-                            await self.landed(outcome, of: request.window, run: runID, since: since)
+                        }, landed: { outcome, readAt in
+                            await self.landed(outcome, readAt: readAt, of: request.window, run: runID, since: since)
                         })
                         if !reconfigurations.isCurrent(since) { break }
                         switch outcome {
@@ -493,10 +495,18 @@ public actor WindowEngine {
     /// window, as last known unless a change is in progress, or that someone moved the window
     /// meanwhile, so a title check does not place it again. A window destroyed, or whose app quit,
     /// during the run gets nothing.
-    private func landed(_ outcome: PlacementOutcome, of window: WindowHandle, run runID: Int, since: Int) async {
+    private func landed(
+        _ outcome: PlacementOutcome,
+        readAt: ContinuousClock.Instant?,
+        of window: WindowHandle,
+        run runID: Int,
+        since: Int
+    ) async {
         guard runWindows[runID]?.contains(window) == true else { return }
         switch outcome {
-        case .placed(let frame): await recordLastKnownLive([KnownFrame(handle: window, frame: frame)], since: since)
+        case .placed(let frame):
+            guard let readAt else { return }
+            await recordLastKnownLive([KnownFrame(handle: window, frame: frame, readAt: readAt)], since: since)
         case .failed(.movedDuringPlacement): touched.insert(window)
         case .unchanged, .failed, .superseded, .skipped: break
         }

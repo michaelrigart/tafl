@@ -94,7 +94,7 @@ extension WindowEngine {
         guard isLive(window, token: token) else { return }
         if verdict == .external {
             touched.insert(window)
-            await memory.update { $0.recordExternalChange(window) }
+            await memory.record(window, .placement, readAt: snapshot.readAt) { $0.recordExternalChange(window) }
             guard isLive(window, token: token) else { return }
         }
         await recordLastKnownLive([snapshot], context)
@@ -198,25 +198,28 @@ extension WindowEngine {
 
     /// Records the frames of the windows that can be placed, relative to the display each is on.
     func recordLastKnown(windows: [WindowSnapshot], displays: [Display], since count: Int? = nil) async {
-        let frames = windows.filter(\.isPlaceable).map { KnownFrame(handle: $0.handle, frame: $0.frame) }
+        let frames = windows.filter(\.isPlaceable).map {
+            KnownFrame(handle: $0.handle, frame: $0.frame, readAt: $0.readAt)
+        }
         await recordLastKnown(frames, displays: displays, since: count)
     }
 
-    /// Records frames of the apps whose moves are observed. With `since`, nothing is recorded
-    /// once a reconfiguration has begun since.
+    /// Records frames of the apps whose moves are observed, each unless a newer reading of its
+    /// window is already recorded. With `since`, nothing is recorded once a reconfiguration has
+    /// begun since.
     func recordLastKnown(_ frames: [KnownFrame], displays: [Display], since count: Int? = nil) async {
         let setup = DisplaySetup(displays)
-        let entries = frames.compactMap { known -> (WindowHandle, ScreenRect, Display)? in
+        let entries = frames.compactMap { known -> (KnownFrame, Display)? in
             guard !isLeftOutOfRules(pid: known.handle.pid),
                   let display = DisplayLocator.display(containing: known.frame, in: displays)
             else { return nil }
-            return (known.handle, known.frame, display)
+            return (known, display)
         }
         let reconfigurations = reconfigurations
-        await memory.update { memory in
-            if let count, !reconfigurations.isCurrent(count) { return }
-            for (handle, frame, display) in entries {
-                memory.recordLastKnown(handle, frame: frame, display: display, setup: setup)
+        for (known, display) in entries {
+            await memory.record(known.handle, .lastKnown, readAt: known.readAt) { memory in
+                if let count, !reconfigurations.isCurrent(count) { return }
+                memory.recordLastKnown(known.handle, frame: known.frame, display: display, setup: setup)
             }
         }
     }

@@ -1849,3 +1849,92 @@ private func callsOf(_ placement: @Sendable (Rig) async -> Void, config: Config)
     await rig.waitForReport { if case .failure = $0 { true } else { false } }
     #expect(rig.reports.contains { if case .failure(.movedDuringPlacement, _) = $0 { true } else { false } })
 }
+
+// MARK: Readings
+
+/// Later than any reading a test makes: what it records stands for a newer reading of the window.
+private let later = ContinuousClock.now.advanced(by: .seconds(3600))
+private let newerFrame = rect(200, 200, 300, 300)
+
+/// Records `frame` as the window's last-known frame, from a reading newer than any the engine takes.
+private func recordNewerLastKnown(
+    _ rig: Rig, _ window: WindowHandle = handle, frame: ScreenRect = newerFrame, on display: Display = displayA,
+    setup: DisplaySetup = DisplaySetup([displayA])
+) async {
+    await rig.engine.memory.record(window, .lastKnown, readAt: later) {
+        $0.recordLastKnown(window, frame: frame, display: display, setup: setup)
+    }
+}
+
+@Test(.timeLimit(.minutes(1))) func anOlderStartSeedLeavesANewerLastKnownFrame() async {
+    let onB = window(1, frame: rect(1100, 100, 400, 300))
+    let rig = await Rig(displays: bothDisplays, windows: [onB], focused: nil)
+    let late = FakeGate()
+    await rig.fake.configure { $0.visibleWindowsLateGate = late }
+    let starting = Task { await rig.engine.start(config: config()) }
+    await rig.fake.waitUntil { _ in late.waiterCount == 1 }
+    let setup = DisplaySetup(bothDisplays)
+    let dragged = rect(1500, 600, 400, 300)
+    await recordNewerLastKnown(rig, frame: dragged, on: displayB, setup: setup)
+    late.open()
+    await starting.value
+    #expect(await rig.engine.memory.read().lastKnown(handle, setup: setup)?.relative == dragged.relative(to: displayB.visibleFrame))
+}
+
+@Test func anOlderFrameEventLeavesANewerLastKnownFrameAndPlacement() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    let placed = PlacedRecord(
+        action: .leftHalf, layout: nil, placement: .leftHalf, cycleStep: 0, achieved: leftHalfA, display: displayA.identity
+    )
+    await recordNewerLastKnown(rig)
+    await rig.engine.memory.record(handle, .placement, readAt: later) { memory in
+        memory.openChain(handle, before: start, on: displayA)
+        memory.recordPlaced(handle, placed)
+    }
+    await rig.fake.configure { $0.windows[handle]?.frame = rect(300, 300, 400, 300) }
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(1)
+    let memory = await rig.engine.memory.read()
+    #expect(memory.lastKnown(handle, setup: DisplaySetup([displayA]))?.relative == newerFrame.relative(to: v))
+    #expect(memory.placed[handle] == placed)
+    #expect(memory.restore[handle]?.chainOpen == true)
+}
+
+@Test func anOlderActionLeavesANewerLastKnownFrame() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    await recordNewerLastKnown(rig)
+    await rig.engine.perform(.leftHalf)
+    #expect(await rig.frame() == leftHalfA)
+    let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA]))
+    #expect(known?.relative == newerFrame.relative(to: v))
+}
+
+@Test func anOlderLayoutRunLeavesANewerLastKnownFrame() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config(layouts: [desk]))
+    await recordNewerLastKnown(rig)
+    await rig.engine.applyLayout(named: "Desk")
+    #expect(await rig.frame() == rightHalfA)
+    let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA]))
+    #expect(known?.relative == newerFrame.relative(to: v))
+}
+
+@Test func anOlderRulesSeedLeavesANewerLastKnownFrame() async {
+    let other = window(2, frame: rect(1100, 600, 400, 300))
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: leftHalfB), other])
+    await rig.engine.start(config: config())
+    // Newer than the seed that follows the rules, though for the setup before the change.
+    await recordNewerLastKnown(rig, frame: rect(1500, 600, 400, 300), on: displayB, setup: DisplaySetup(bothDisplays))
+    await rig.fake.configure {
+        $0.windows[handle]?.frame = rect(0, 25, 600, 500)
+        $0.windows[other.handle]?.frame = rect(100, 100, 400, 300)
+    }
+    await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
+    await rig.waitForChanges(1)
+    let memory = await rig.engine.memory.read()
+    #expect(memory.lastKnown(handle, setup: DisplaySetup([displayA])) == nil)
+    #expect(memory.lastKnown(other.handle, setup: DisplaySetup([displayA])) != nil)
+}

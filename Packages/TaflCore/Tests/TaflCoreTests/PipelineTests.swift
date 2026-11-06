@@ -561,3 +561,84 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(retried == .placed(target))
     #expect(await rig.stored.restore[handle] == nil)
 }
+
+// MARK: Readings
+
+/// Later than any reading a test makes: what it records stands for a newer reading of the window.
+private let later = ContinuousClock.now.advanced(by: .seconds(3600))
+
+/// Records the window's placement memory as a reading newer than any the request takes.
+private func recordNewer(_ rig: Rig, placed record: PlacedRecord?, restore: RestoreRecord?) async {
+    await rig.memory.record(handle, .placement, readAt: later) { memory in
+        memory.placed[handle] = record
+        memory.restore[handle] = restore
+    }
+}
+
+@Test func anOlderResolveLeavesANewerPlacement() async {
+    let rig = await Rig(start: rect(300, 300, 400, 300))
+    await recordNewer(rig, placed: placed(leftHalf), restore: chain(rect(10, 40, 300, 200)))
+    _ = await rig.pipeline.run(handle, config: config()) { _ in .nothing }
+    #expect(await rig.stored.placed[handle] == placed(leftHalf))
+    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200)))
+}
+
+@Test func anOlderPlacementLeavesANewerExternalChange() async {
+    let rig = await Rig(start: rect(100, 100, 400, 300))
+    await recordNewer(rig, placed: nil, restore: chain(rect(10, 40, 300, 200), open: false))
+    let outcome = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
+    #expect(outcome == .placed(rightHalf))
+    #expect(await rig.stored.placed[handle] == nil)
+    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200), open: false))
+}
+
+@Test func anOlderUnchangedPlacementLeavesANewerExternalChange() async {
+    let rig = await Rig(start: leftHalf)
+    await recordNewer(rig, placed: nil, restore: chain(rect(10, 40, 300, 200), open: false))
+    let outcome = await rig.run(request(.named(.leftHalf), placement: .leftHalf, source: .action(.leftHalf)))
+    #expect(outcome == .unchanged)
+    #expect(await rig.stored.placed[handle] == nil)
+    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200), open: false))
+}
+
+@Test func anOlderInterruptionLeavesANewerPlacement() async {
+    let rig = await Rig(start: leftHalf) { $0.beforeCall = [2: dragged] }
+    await recordNewer(rig, placed: placed(leftHalf), restore: chain(rect(10, 40, 300, 200)))
+    let outcome = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
+    #expect(outcome == .failed(.movedDuringPlacement))
+    #expect(await rig.stored.placed[handle] == placed(leftHalf))
+    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200)))
+}
+
+@Test func anOlderPartialWriteLeavesANewerExternalChange() async {
+    let rig = await Rig(start: rect(100, 100, 400, 300))
+    await recordNewer(rig, placed: nil, restore: chain(rect(10, 40, 300, 200), open: false))
+    let gate = await rig.fake.pause(beforeCall: 2)
+    let task = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
+    #expect(await pollUntil { gate.waiterCount == 1 })
+    await rig.writer.reconfigurationBegan()
+    gate.open()
+    #expect(await task.value == .superseded)
+    #expect(await rig.stored.placed[handle] == nil)
+    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200), open: false))
+}
+
+@Test func anOlderFailedWriteLeavesANewerPlacement() async {
+    let start = rect(0, 25, 400, 300)
+    // Size first, then the position write fails, with nothing verified since the write.
+    let rig = await Rig(start: start) { $0.beforeCall = [2: { $0.canMove = false }] }
+    await recordNewer(rig, placed: placed(start), restore: chain(rect(10, 40, 300, 200)))
+    let outcome = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
+    #expect(outcome == .failed(.cannotMove))
+    #expect(await rig.stored.placed[handle] == placed(start))
+}
+
+@Test func anOlderRestoreLeavesANewerChain() async {
+    let target = rect(100, 100, 400, 300)
+    let rig = await Rig(start: leftHalf)
+    await recordNewer(rig, placed: nil, restore: chain(target))
+    let outcome = await rig.run(request(.frame(target), source: .action(.restore)))
+    #expect(outcome == .placed(target))
+    #expect(await rig.stored.restore[handle] == chain(target))
+    #expect(await rig.stored.placed[handle] == nil)
+}

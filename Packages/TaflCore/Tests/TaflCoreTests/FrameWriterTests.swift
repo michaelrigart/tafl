@@ -44,7 +44,7 @@ private struct Rig {
     }
 
     func start(_ job: WriteJob, before: @escaping @Sendable () async -> Bool = { true }) -> Task<WriteResult, Never> {
-        Task { [writer] in await writer.write(job, beforeFirstWrite: before) }
+        Task { [writer] in await writer.write(job, beforeFirstWrite: before).result }
     }
 
     var log: [String] { get async { await fake.callLog } }
@@ -58,7 +58,7 @@ private func job(
     minSize: ScreenSize? = nil
 ) -> WriteJob {
     WriteJob(
-        window: handle, appName: "Example", start: start, target: target, targetVisible: visible,
+        window: handle, appName: "Example", start: start, startReadAt: .now, target: target, targetVisible: visible,
         crossesDisplays: crosses, minSize: minSize, displays: bothDisplays
     )
 }
