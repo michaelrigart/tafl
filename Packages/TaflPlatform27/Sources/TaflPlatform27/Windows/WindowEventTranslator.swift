@@ -81,7 +81,7 @@ final class WindowEventTranslator: Sendable {
         switch event.notification {
         case kAXUIElementDestroyedNotification:
             guard let known else { return }
-            registry.remove(known)
+            registry.withdraw([(known, element)])
             let notices = notices
             reader.afterReads(pid) { notices.destroyed(known) }
             events.yield(.windowDestroyed(known))

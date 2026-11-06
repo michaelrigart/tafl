@@ -121,17 +121,33 @@ final class Platform27: WindowPlatform {
         of handle: WindowHandle,
         take: @escaping @Sendable (WindowSnapshot) -> T
     ) async -> Result<T, PlatformFailure> {
-        guard let element = registry.element(for: handle), let app = AppInfo27.running(pid: handle.pid) else {
-            return .failure(.noWindow)
-        }
+        guard let app = AppInfo27.running(pid: handle.pid) else { return .failure(.noWindow) }
         let pid = handle.pid
-        let read = await axQueue.run(pid: pid) {
-            Windows27.read(element.element, pid: pid, resolveID: false).map {
-                take(Windows27.snapshot(handle: handle, app: app, attributes: $0.attributes))
+        let axQueue = axQueue
+        let read = await Self.readRegistered(handle, in: registry) { element in
+            await axQueue.run(pid: pid) {
+                Windows27.read(element.element, pid: pid, resolveID: false).map {
+                    take(Windows27.snapshot(handle: handle, app: app, attributes: $0.attributes))
+                }
             }
         }
-        if case .failure(let failure) = read, failure.code == .invalidUIElement { registry.remove(handle) }
-        return read.mapError { Windows27.failure(for: $0.code) }
+        return read?.mapError { Windows27.failure(for: $0.code) } ?? .failure(.noWindow)
+    }
+
+    /// Reads the element registered for `handle`, or nil when none is. A window found gone is taken
+    /// out of the registry as the pair this read used: if another read registered a new element for the
+    /// handle while this one was in flight, that registration stays.
+    static func readRegistered<T: Sendable>(
+        _ handle: WindowHandle,
+        in registry: WindowRegistry,
+        read: (AXElementBox) async -> Result<T, AXFailure>
+    ) async -> Result<T, AXFailure>? {
+        guard let element = registry.element(for: handle) else { return nil }
+        let result = await read(element)
+        if case .failure(let failure) = result, failure.code == .invalidUIElement {
+            registry.withdraw([(handle, element)])
+        }
+        return result
     }
 
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> {

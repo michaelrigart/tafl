@@ -114,10 +114,6 @@ final class WindowRegistry: Sendable {
         }
     }
 
-    func remove(_ handle: WindowHandle) {
-        state.withLock { $0.entries.removeAll { $0.handle == handle } }
-    }
-
     func removeApp(pid: Int32) {
         state.withLock { $0.entries.removeAll { $0.handle.pid == pid } }
     }

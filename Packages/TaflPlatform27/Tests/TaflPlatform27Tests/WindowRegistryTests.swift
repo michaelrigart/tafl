@@ -94,7 +94,7 @@ private func guess(_ id: UInt32) -> ResolvedWindowID { ResolvedWindowID(id: id, 
     let registry = WindowRegistry()
     let gone = registry.handle(for: box(10), pid: 10, windowID: exact(7))
     let kept = registry.handle(for: box(11), pid: 11, windowID: exact(8))
-    registry.remove(gone)
+    registry.withdraw([(gone, box(10))])
     #expect(registry.element(for: gone) == nil)
     #expect(registry.element(for: kept) != nil)
 
