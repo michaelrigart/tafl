@@ -48,4 +48,13 @@ private func tilingReading(_ values: [String: Any]) -> Tiling27 {
 
 @Test func missingDefaultsReadAsAllNil() {
     #expect(Tiling27(read: { _ in nil }).read() == .init(edgeDrag: nil, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: nil))
+    #expect(Tiling27(defaults: nil).read() == .init(edgeDrag: nil, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: nil))
+}
+
+@Test func everySettingIsReadFromTheOneDefaultsObjectGiven() throws {
+    // Registered values live in memory only: nothing is written to disk.
+    let defaults = try #require(UserDefaults(suiteName: "com.michaelrigart.tafl.tests.\(UUID().uuidString)"))
+    defaults.register(defaults: ["EnableTilingByEdgeDrag": 0, "EnableTiledWindowMargins": true])
+    let settings = Tiling27(defaults: defaults).read()
+    #expect(settings == .init(edgeDrag: false, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: true))
 }

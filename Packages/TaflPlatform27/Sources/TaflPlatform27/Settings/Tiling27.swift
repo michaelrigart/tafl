@@ -4,10 +4,15 @@ import TaflCore
 public struct Tiling27: Sendable {
     private let value: @Sendable (String) -> Any?
 
-    /// `read` looks a key up; by default in Apple's `com.apple.WindowManager` domain, which Tafl only reads.
-    public init(read value: @escaping @Sendable (String) -> Any? = { key in
-        UserDefaults(suiteName: "com.apple.WindowManager")?.object(forKey: key)
-    }) {
+    /// Reads one defaults object, opened once; by default Apple's `com.apple.WindowManager` domain,
+    /// which Tafl only reads.
+    public init(defaults: UserDefaults? = UserDefaults(suiteName: "com.apple.WindowManager")) {
+        nonisolated(unsafe) let defaults = defaults // reason: UserDefaults is documented as thread-safe
+        self.init(read: { defaults?.object(forKey: $0) })
+    }
+
+    /// `read` looks a key up.
+    public init(read value: @escaping @Sendable (String) -> Any?) {
         self.value = value
     }
 
