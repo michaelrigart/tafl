@@ -125,7 +125,7 @@ private struct ObservationHarness {
                     if let catchUpGate { await catchUpGate.wait() }
                     var entries: [WindowCatalog27.Entry] = []
                     for id in found {
-                        let registration = await registry.register(
+                        let registration = registry.register(
                             windowBox(id), pid: app.pid, windowID: ResolvedWindowID(id: id, by: .privateSymbol))
                         let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: catchUpAttributes)
                         entries.append(WindowCatalog27.Entry(snapshot: snapshot, element: windowBox(id), isNew: registration.isNew))
@@ -312,7 +312,7 @@ func aLaunchMissingOnlyTitleChangesStillAnnouncesItsWindows() async {
 @Test(.timeLimit(.minutes(1)))
 func aCatchUpAnnouncesAWindowAQueryRegisteredFirst() async {
     var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
-    _ = await harness.registry.register(windowBox(5001), pid: 4242, windowID: ResolvedWindowID(id: 5001, by: .privateSymbol))
+    _ = harness.registry.register(windowBox(5001), pid: 4242, windowID: ResolvedWindowID(id: 5001, by: .privateSymbol))
     await harness.observation.appLaunched(launching)
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
@@ -339,7 +339,7 @@ func aCatchUpForAnAppThatQuitMeanwhilePublishesAndKeepsNothing() async {
     #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
     #expect(await harness.next() == .appQuit(pid: 4242))
     #expect(await harness.next() == .reconfigurationEnded)
-    #expect(await harness.registry.knownHandle(of: windowBox(5001)) == nil)
+    #expect(harness.registry.knownHandle(of: windowBox(5001)) == nil)
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -354,7 +354,7 @@ func aCatchUpOvertakenByARestartLeavesItsWindowsToTheNewRun() async {
     gate.release()
     await launch.value
     // The stale catch-up published nothing and withdrew nothing: the app still runs.
-    #expect(await harness.registry.knownHandle(of: windowBox(5001)) == foundWindow)
+    #expect(harness.registry.knownHandle(of: windowBox(5001)) == foundWindow)
     // The new run observes the app, adopts the window and owes it its announcement still.
     let observing = Task { await observation.attempt(launching) }
     #expect(await gate.waitForWaiters(1))

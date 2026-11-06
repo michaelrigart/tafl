@@ -23,7 +23,7 @@ final class WindowCatalog27: Sendable {
     /// does not know yet.
     func windows(of app: AppInfo27) async -> [Entry] {
         let pid = app.pid
-        let known = await registry.elements(pid: pid)
+        let known = registry.elements(pid: pid)
         let reads = await axQueue.run(pid: pid) {
             AXWindowAccess.windows(of: pid).compactMap { element -> ElementRead? in
                 let resolveID = !known.contains(AXElementBox(element))
@@ -38,7 +38,7 @@ final class WindowCatalog27: Sendable {
 
     /// Registers any window element, tracked or not: the focused path accepts dialogs and palettes.
     func register(_ window: ElementRead, app: AppInfo27) async -> Entry {
-        let registration = await registry.register(window.element, pid: app.pid, windowID: window.windowID)
+        let registration = registry.register(window.element, pid: app.pid, windowID: window.windowID)
         let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: window.attributes)
         return Entry(snapshot: snapshot, element: window.element, isNew: registration.isNew)
     }

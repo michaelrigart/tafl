@@ -171,7 +171,7 @@ final class WindowObservation27: Sendable {
             await axQueue.run(pid: pid) { hub.stopObserving(pid: pid) }
         }
         translator.closeLane(pid: pid)
-        await registry.removeApp(pid: pid)
+        registry.removeApp(pid: pid)
         await axQueue.forget(pid: pid)
     }
 
@@ -281,12 +281,12 @@ final class WindowObservation27: Sendable {
         let found = await environment.windows(app)
         var refused = false
         for entry in found {
-            let step = await registry.announce(entry.snapshot) { event in self.publish([event], pid: app.pid, claim: claim) }
+            let step = registry.announce(entry.snapshot) { event in self.publish([event], pid: app.pid, claim: claim) }
             if step == .refused { refused = true }
         }
         if !refused { payDebt(of: app.pid, claim: claim) }
         if !isCurrent(pid: app.pid, claim: claim), !environment.isRunning(app.pid) {
-            await registry.withdraw(found.filter(\.isNew).map { ($0.snapshot.handle, $0.element) })
+            registry.withdraw(found.filter(\.isNew).map { ($0.snapshot.handle, $0.element) })
         }
     }
 

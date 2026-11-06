@@ -68,17 +68,17 @@ final class WindowEventTranslator: Sendable {
     private func handle(_ event: AXObserverHub.Event) async {
         let element = AXElementBox(event.element)
         let pid = event.pid
-        let known = await registry.knownHandle(of: element)
+        let known = registry.knownHandle(of: element)
         switch event.notification {
         case kAXUIElementDestroyedNotification:
             guard let known else { return }
-            await registry.remove(known)
+            registry.remove(known)
             events.yield(.windowDestroyed(known))
         case kAXWindowCreatedNotification:
             // Announced once, whoever registered the window first: a query registers but never announces.
             guard let entry = await learn(element, pid: pid, resolveID: known == nil) else { return }
             let events = events
-            _ = await registry.announce(entry.snapshot) { event in
+            _ = registry.announce(entry.snapshot) { event in
                 events.yield(event)
                 return true
             }
@@ -106,7 +106,7 @@ final class WindowEventTranslator: Sendable {
     /// standard window or sheet, and a window whose process is gone, is never registered.
     private func learn(_ element: AXElementBox, pid: pid_t, resolveID: Bool = true) async -> WindowCatalog27.Entry? {
         guard let window = await reader.readTracked(element, pid, resolveID), let app = reader.app(pid) else { return nil }
-        let registration = await registry.register(window.element, pid: pid, windowID: window.windowID)
+        let registration = registry.register(window.element, pid: pid, windowID: window.windowID)
         let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: window.attributes)
         return WindowCatalog27.Entry(snapshot: snapshot, element: window.element, isNew: registration.isNew)
     }

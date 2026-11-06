@@ -71,18 +71,18 @@ func eventsForWindowsThatAreNotStandardOrSheetsAreDropped() async {
     }
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
     #expect(await harness.next() == .windowMoved(handle(10, 2020)))
-    #expect(await harness.registry.knownHandle(of: box(1010)) == nil)
+    #expect(harness.registry.knownHandle(of: box(1010)) == nil)
     harness.translator.closeAll()
 }
 
 @Test(.timeLimit(.minutes(1)))
 func aWindowOfAProcessThatIsGoneIsNotRegistered() async {
     var harness = Harness(reader(gone: [10]))
-    _ = await harness.registry.register(box(2020), pid: 10, windowID: ResolvedWindowID(id: 2020, by: .privateSymbol))
+    _ = harness.registry.register(box(2020), pid: 10, windowID: ResolvedWindowID(id: 2020, by: .privateSymbol))
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
     #expect(await harness.next() == .windowMoved(handle(10, 2020)))
-    #expect(await harness.registry.knownHandle(of: box(1010)) == nil)
+    #expect(harness.registry.knownHandle(of: box(1010)) == nil)
     harness.translator.closeAll()
 }
 
@@ -105,11 +105,11 @@ func aCreatedWindowIsAnnouncedOnceAndItsTitleIsReadFresh() async {
 @Test(.timeLimit(.minutes(1)))
 func aWindowTheCatchUpAlreadyAnnouncedIsNotAnnouncedByItsNotification() async {
     var harness = Harness(reader())
-    let registered = await harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
+    let registered = harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
     let found = WindowSnapshot(
         handle: registered.handle, bundleID: nil, appName: "App", title: "Doc", frame: ScreenRect(x: 0, y: 0, width: 100, height: 100),
         canMove: true, canResize: true, minSize: nil, isFullscreen: false, isSheet: false, isMinimized: false, isAppHidden: false, readAt: .now)
-    _ = await harness.registry.announce(found) { _ in true }
+    _ = harness.registry.announce(found) { _ in true }
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
     #expect(await harness.next() == .windowMoved(handle(10, 1010)))
@@ -120,7 +120,7 @@ func aWindowTheCatchUpAlreadyAnnouncedIsNotAnnouncedByItsNotification() async {
 func aWindowAQueryRegisteredIsAnnouncedOnceByItsCreation() async {
     var harness = Harness(reader())
     // A query met the window before its creation notification was handled.
-    _ = await harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
+    _ = harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
@@ -136,14 +136,14 @@ func aWindowAQueryRegisteredIsAnnouncedOnceByItsCreation() async {
 @Test(.timeLimit(.minutes(1)))
 func aKnownWindowIsMovedResizedAndDestroyedInOrderAndForgotten() async {
     var harness = Harness(reader())
-    _ = await harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
+    _ = harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
     for notification in [kAXWindowMovedNotification, kAXWindowResizedNotification, kAXUIElementDestroyedNotification] {
         harness.translator.enqueue(event(notification, pid: 10, element: box(1010)))
     }
     #expect(await harness.next() == .windowMoved(handle(10, 1010)))
     #expect(await harness.next() == .windowResized(handle(10, 1010)))
     #expect(await harness.next() == .windowDestroyed(handle(10, 1010)))
-    #expect(await harness.registry.knownHandle(of: box(1010)) == nil)
+    #expect(harness.registry.knownHandle(of: box(1010)) == nil)
     harness.translator.closeAll()
 }
 

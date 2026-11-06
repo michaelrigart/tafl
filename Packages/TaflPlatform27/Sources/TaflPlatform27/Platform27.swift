@@ -116,13 +116,13 @@ final class Platform27: WindowPlatform {
     }
 
     func snapshot(of handle: WindowHandle) async -> Result<WindowSnapshot, PlatformFailure> {
-        guard let element = await registry.element(for: handle), let app = AppInfo27.running(pid: handle.pid) else {
+        guard let element = registry.element(for: handle), let app = AppInfo27.running(pid: handle.pid) else {
             return .failure(.noWindow)
         }
         let pid = handle.pid
         switch await axQueue.run(pid: pid, { Windows27.read(element.element, pid: pid, resolveID: false) }) {
         case .failure(let failure):
-            if failure.code == .invalidUIElement { await registry.remove(handle) }
+            if failure.code == .invalidUIElement { registry.remove(handle) }
             return .failure(Windows27.failure(for: failure.code))
         case .success(let window):
             return .success(Windows27.snapshot(handle: handle, app: app, attributes: window.attributes))
@@ -130,7 +130,7 @@ final class Platform27: WindowPlatform {
     }
 
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> {
-        guard let element = await registry.element(for: handle), let app = AppInfo27.running(pid: handle.pid) else {
+        guard let element = registry.element(for: handle), let app = AppInfo27.running(pid: handle.pid) else {
             return .failure(.noWindow)
         }
         let assistiveTechnologyOn = await MainActor.run {

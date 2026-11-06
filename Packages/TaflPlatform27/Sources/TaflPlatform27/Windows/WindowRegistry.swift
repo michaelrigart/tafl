@@ -1,3 +1,4 @@
+import Synchronization
 import TaflCore
 
 struct ResolvedWindowID: Sendable, Equatable {
@@ -9,7 +10,10 @@ struct ResolvedWindowID: Sendable, Equatable {
 /// is registered; when no window id resolves, the handle is synthetic (`isStable == false`).
 /// Whether the window's creation has been announced is kept apart from its registration: a query
 /// registers windows but never announces them.
-actor WindowRegistry {
+///
+/// Every call is one short step under a lock and makes no Accessibility call, so a read can register
+/// what it found from inside its app's queue.
+final class WindowRegistry: Sendable {
     enum Announcement: Equatable {
         case announced
         case alreadyAnnounced
@@ -30,10 +34,22 @@ actor WindowRegistry {
         var announced = false
     }
 
-    private var entries: [Entry] = []
-    private var nextSyntheticID: UInt32 = 1
+    private struct State {
+        var entries: [Entry] = []
+        var nextSyntheticID: UInt32 = 1
 
-    var count: Int { entries.count }
+        func knownHandle(of element: AXElementBox) -> WindowHandle? {
+            entries.first { $0.element == element }?.handle
+        }
+
+        func isHeld(pid: Int32, windowID: UInt32) -> Bool {
+            entries.contains { $0.handle == WindowHandle(pid: pid, windowID: windowID, isStable: true) }
+        }
+    }
+
+    private let state = Mutex(State())
+
+    var count: Int { state.withLock { $0.entries.count } }
 
     func handle(for element: AXElementBox, pid: Int32, windowID: ResolvedWindowID?) -> WindowHandle {
         register(element, pid: pid, windowID: windowID).handle
@@ -46,60 +62,63 @@ actor WindowRegistry {
     /// one. An id from the window list is a guess (a pid and a frame), so when another element already
     /// holds it the newcomer gets a synthetic handle and the holder keeps its own.
     func register(_ element: AXElementBox, pid: Int32, windowID: ResolvedWindowID?) -> Registration {
-        if let known = knownHandle(of: element) { return Registration(handle: known, isNew: false) }
-        let handle: WindowHandle
-        if let windowID, windowID.by == .privateSymbol || !isHeld(pid: pid, windowID: windowID.id) {
-            handle = WindowHandle(pid: pid, windowID: windowID.id, isStable: true)
-            entries.removeAll { $0.handle == handle }
-        } else {
-            handle = WindowHandle(pid: pid, windowID: nextSyntheticID, isStable: false)
-            nextSyntheticID += 1
+        state.withLock { state in
+            if let known = state.knownHandle(of: element) { return Registration(handle: known, isNew: false) }
+            let handle: WindowHandle
+            if let windowID, windowID.by == .privateSymbol || !state.isHeld(pid: pid, windowID: windowID.id) {
+                handle = WindowHandle(pid: pid, windowID: windowID.id, isStable: true)
+                state.entries.removeAll { $0.handle == handle }
+            } else {
+                handle = WindowHandle(pid: pid, windowID: state.nextSyntheticID, isStable: false)
+                state.nextSyntheticID += 1
+            }
+            state.entries.append(Entry(handle: handle, element: element))
+            return Registration(handle: handle, isNew: true)
         }
-        entries.append(Entry(handle: handle, element: element))
-        return Registration(handle: handle, isNew: true)
-    }
-
-    private func isHeld(pid: Int32, windowID: UInt32) -> Bool {
-        entries.contains { $0.handle == WindowHandle(pid: pid, windowID: windowID, isStable: true) }
     }
 
     func knownHandle(of element: AXElementBox) -> WindowHandle? {
-        entries.first { $0.element == element }?.handle
+        state.withLock { $0.knownHandle(of: element) }
     }
 
     /// The registered elements of one app, so a reader on its queue can skip id resolution for them.
     func elements(pid: Int32) -> [AXElementBox] {
-        entries.filter { $0.handle.pid == pid }.map(\.element)
+        state.withLock { $0.entries.filter { $0.handle.pid == pid }.map(\.element) }
     }
 
     func element(for handle: WindowHandle) -> AXElementBox? {
-        entries.first { $0.handle == handle }?.element
+        state.withLock { $0.entries.first { $0.handle == handle }?.element }
     }
 
     /// Announces a registered window's creation, once, in one step of the registry: if it is not
     /// yet announced, `publish` checks its claim and yields the event, and the window is marked
-    /// only when it did. Nothing else marks a window announced, and nothing unmarks one.
-    func announce(_ snapshot: WindowSnapshot, publish: @Sendable (PlatformEvent) -> Bool) -> Announcement {
-        guard let index = entries.firstIndex(where: { $0.handle == snapshot.handle }) else { return .unregistered }
-        guard !entries[index].announced else { return .alreadyAnnounced }
-        guard publish(.windowCreated(snapshot)) else { return .refused }
-        entries[index].announced = true
-        return .announced
+    /// only when it did. Nothing else marks a window announced, and nothing unmarks one. `publish`
+    /// runs under the registry's lock: it must not call back into the registry.
+    func announce(_ snapshot: WindowSnapshot, publish: (PlatformEvent) -> Bool) -> Announcement {
+        state.withLock { state in
+            guard let index = state.entries.firstIndex(where: { $0.handle == snapshot.handle }) else { return .unregistered }
+            guard !state.entries[index].announced else { return .alreadyAnnounced }
+            guard publish(.windowCreated(snapshot)) else { return .refused }
+            state.entries[index].announced = true
+            return .announced
+        }
     }
 
     /// Removes registrations their owner made, each only while it is still the same: the same handle
     /// for the same element.
     func withdraw(_ registrations: [(handle: WindowHandle, element: AXElementBox)]) {
-        entries.removeAll { entry in
-            registrations.contains { $0.handle == entry.handle && $0.element == entry.element }
+        state.withLock { state in
+            state.entries.removeAll { entry in
+                registrations.contains { $0.handle == entry.handle && $0.element == entry.element }
+            }
         }
     }
 
     func remove(_ handle: WindowHandle) {
-        entries.removeAll { $0.handle == handle }
+        state.withLock { $0.entries.removeAll { $0.handle == handle } }
     }
 
     func removeApp(pid: Int32) {
-        entries.removeAll { $0.handle.pid == pid }
+        state.withLock { $0.entries.removeAll { $0.handle.pid == pid } }
     }
 }
