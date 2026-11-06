@@ -5,7 +5,11 @@ import Foundation
 /// the step that judges it.
 struct WindowStates {
     struct Window {
-        /// The frame of the newest reading. Outside a request, the frame Tafl expects the window at.
+        /// The frame Tafl expects the window at. The first reading sets it (to a placed record's
+        /// achieved frame, from disk, when the window is at it), and so do an external change and a
+        /// request's own reads: Resolve's, its read-backs and readings while a write is in flight.
+        /// Any other reading judged Tafl's own leaves it, so small moves can't add up; after a
+        /// request it is the frame achieved.
         var frame: ScreenRect
         /// Moved by someone else, or the target of a user action, since Tafl first read it.
         var touched = false
@@ -48,26 +52,34 @@ struct WindowStates {
 
     // MARK: Readings
 
-    /// Judges a reading against the window's newest frame, or, while a write is in flight, against
-    /// the frame before it; then records what it implies. A first reading is never a move, but a
-    /// placed record from the memory that the window has left counts as undone by someone else.
+    /// Judges a reading against the frame Tafl expects, or, while a write is in flight, against the
+    /// frame before it; then records what it implies. An external change becomes the frame expected.
+    /// A reading in flight is checked as the write's read-back is, and like it sets the frame
+    /// expected; any other reading judged Tafl's own leaves it. A first reading is never a move, but
+    /// a placed record from the memory that the window has left counts as undone by someone else.
     mutating func read(_ window: WindowHandle, _ frame: ScreenRect, placeable: Bool, announced: Bool = false) -> ReadingVerdict {
         let verdict: ReadingVerdict
         if var state = windows[window] {
-            let isOwn = check.isOwn(frame, expected: state.frame, inFlight: state.request?.inFlight)
+            let inFlight = state.request?.inFlight
+            let isOwn = check.isOwn(frame, expected: state.frame, inFlight: inFlight)
             if !isOwn {
                 state.touched = true
                 state.request?.interrupted = true
                 memory.recordExternalChange(window)
             }
-            state.frame = frame
+            if !isOwn || inFlight != nil { state.frame = frame }
             windows[window] = state
             verdict = isOwn ? .own : .external
         } else {
-            windows[window] = Window(frame: frame, awaitsCreationPlacement: announced)
-            if memory.placed[window] != nil, !memory.isAtAchievedFrame(window, frame: frame) {
-                memory.recordExternalChange(window)
+            var expected = frame
+            if let placed = memory.placed[window] {
+                if memory.isAtAchievedFrame(window, frame: frame) {
+                    expected = placed.achieved
+                } else {
+                    memory.recordExternalChange(window)
+                }
             }
+            windows[window] = Window(frame: expected, awaitsCreationPlacement: announced)
             verdict = .first
         }
         if placeable { recordLastKnown(window, frame) }
@@ -84,11 +96,13 @@ struct WindowStates {
     // MARK: Requests
 
     /// Resolve's reading, judged as one taken before the request (a move closes the old chain but
-    /// interrupts nothing); the request starts at it. A request still under way for the window is over.
+    /// interrupts nothing); the request starts at it, and so does the frame it expects. A request
+    /// still under way for the window is over.
     mutating func beginRequest(_ snapshot: WindowSnapshot) -> RequestStart {
         let window = snapshot.handle
         windows[window]?.request = nil
         _ = read(window, snapshot.frame, placeable: snapshot.isPlaceable)
+        windows[window]?.frame = snapshot.frame
         nextRequest += 1
         windows[window]?.request = Request(number: nextRequest, start: snapshot.frame, epoch: epoch)
         return RequestStart(
@@ -137,10 +151,11 @@ struct WindowStates {
     }
 
     /// The request's own read, after its write or before its reapply: judged as any reading, and
-    /// the write it checks is no longer in flight.
+    /// the write it checks is no longer in flight. What it read is the frame the request expects.
     mutating func readBack(_ ticket: RequestTicket, _ frame: ScreenRect) -> ReadBack {
         guard current(ticket) != nil else { return .ended }
         _ = read(ticket.window, frame, placeable: true)
+        windows[ticket.window]?.frame = frame
         windows[ticket.window]?.request?.inFlight = nil
         return windows[ticket.window]?.request?.interrupted == true ? .interrupted : .own(frame)
     }

@@ -85,6 +85,82 @@ private func lastKnown(_ owner: WindowOwner, _ setup: DisplaySetup = onlyA) -> U
     #expect(owner.windowMemory.restore[handle]?.chainOpen == false)
 }
 
+// MARK: The expected frame
+
+/// The left half, moved `dx` points across.
+private func leftHalf(nudgedBy dx: Double) -> ScreenRect {
+    rect(leftHalf.x + dx, leftHalf.y, leftHalf.width, leftHalf.height)
+}
+
+@Test func twoOnePointMovesOutsideARequestAddUpToAnExternalChange() {
+    let owner = placedOwner()
+    #expect(owner.read(reading(leftHalf(nudgedBy: 1))) == .own)
+    // Judged against the frame achieved, not the newest reading.
+    #expect(owner.read(reading(leftHalf(nudgedBy: 2))) == .external)
+    #expect(owner.isTouched(handle))
+    #expect(owner.windowMemory.placed[handle] == nil)
+    #expect(owner.windowMemory.restore[handle]?.chainOpen == false)
+    // The next placement starts a new chain where the window drifted to.
+    let next = owner.beginRequest(reading(leftHalf(nudgedBy: 2)))
+    #expect(owner.willWrite(next.ticket, .position, targetVisible: v, displays: [displayA], firstWrite: FirstWrite(opensChainOn: displayA)) == .write)
+    #expect(owner.windowMemory.restore[handle]?.frame == leftHalf(nudgedBy: 2))
+}
+
+@Test func readingsWithinAPointOfTheFrameAchievedNeverBecomeExternal() {
+    let owner = placedOwner()
+    for dx in [1.0, 1, 1, -1, 1, -1, 0] {
+        #expect(owner.read(reading(leftHalf(nudgedBy: dx))) == .own, "\(dx)")
+    }
+    #expect(!owner.isTouched(handle))
+    #expect(owner.windowMemory.placed[handle] == placedLeftHalf())
+    #expect(owner.windowMemory.restore[handle]?.chainOpen == true)
+}
+
+@Test func betweenARequestsWritesSmallMovesAddUpToo() {
+    let owner = WindowOwner(adjustments: [])
+    let request = owner.beginRequest(reading(start))
+    let sized = rect(100, 100, 500, 775)
+    #expect(owner.willWrite(request.ticket, .size, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .write)
+    #expect(owner.readBack(request.ticket, sized) == .own(sized))
+    // Nothing in flight: each reading is judged against what the write achieved.
+    #expect(owner.read(reading(rect(101, 100, 500, 775))) == .own)
+    #expect(owner.read(reading(rect(102, 100, 500, 775))) == .external)
+    #expect(owner.checkpoint(request.ticket) == .interrupted)
+}
+
+@Test func aPlacedRecordFromDiskIsTheFrameExpectedWhileTheWindowIsAtIt() {
+    var saved = WindowMemory()
+    saved.openChain(handle, before: start, on: displayA)
+    saved.recordPlaced(handle, placedLeftHalf())
+    let owner = WindowOwner(adjustments: [])
+    owner.loadWindows(from: saved)
+
+    #expect(owner.read(reading(leftHalf(nudgedBy: 1))) == .first)
+    #expect(owner.read(reading(leftHalf(nudgedBy: -1))) == .own)
+    #expect(owner.read(reading(leftHalf(nudgedBy: 2))) == .external)
+    #expect(owner.windowMemory.placed[handle] == nil)
+    #expect(owner.windowMemory.restore[handle]?.chainOpen == false)
+}
+
+@Test func aRequestsOwnReadsSetTheFrameItExpects() {
+    // Resolve's reading: a request that finds the window already in place achieved that frame.
+    let unchanged = placedOwner()
+    let resolved = leftHalf(nudgedBy: 1)
+    let request = unchanged.beginRequest(reading(resolved))
+    unchanged.endRequest(request.ticket, recording: .unchanged(leftHalfRequest(for: handle), frame: resolved, display: displayA))
+    #expect(unchanged.windowMemory.placed[handle]?.achieved == resolved)
+    #expect(unchanged.read(reading(leftHalf(nudgedBy: 2))) == .own)
+
+    // A read with nothing in flight, as the reapply's first: the request goes on from what it read.
+    let reapplied = WindowOwner(adjustments: [])
+    let second = reapplied.beginRequest(reading(start))
+    #expect(reapplied.willWrite(second.ticket, .position, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .write)
+    #expect(reapplied.readBack(second.ticket, rect(0, 25, 400, 300)) == .own(rect(0, 25, 400, 300)))
+    #expect(reapplied.readBack(second.ticket, rect(1, 25, 400, 300)) == .own(rect(1, 25, 400, 300)))
+    #expect(reapplied.read(reading(rect(2, 25, 400, 300))) == .own)
+    #expect(reapplied.checkpoint(second.ticket) == .write)
+}
+
 @Test func lastKnownFramesAreRecordedForTheDisplaysCurrentAtTheReading() {
     let owner = WindowOwner(adjustments: [])
     owner.recordLastKnown(for: [displayA])
@@ -159,6 +235,18 @@ private func lastKnown(_ owner: WindowOwner, _ setup: DisplaySetup = onlyA) -> U
     owner.writeFailed(request.ticket)
     #expect(owner.read(reading(start)) == .own)
     #expect(owner.read(reading(rect(0, 25, 400, 300))) == .external)
+}
+
+@Test func aReadingInFlightIsCheckedAsTheReadBackAndSetsTheFrameExpected() {
+    let owner = WindowOwner(adjustments: [])
+    let request = owner.beginRequest(reading(start))
+    #expect(owner.willWrite(request.ticket, .position, targetVisible: v, displays: [displayA], firstWrite: FirstWrite()) == .write)
+    let written = rect(0, 25, 400, 300)
+    #expect(owner.read(reading(written)) == .own)
+    // The write's own read never came: the frame the event read is still Tafl's.
+    owner.writeFailed(request.ticket)
+    #expect(owner.read(reading(written)) == .own)
+    #expect(owner.read(reading(start)) == .external)
 }
 
 @Test func aRequestBegunBeforeAReconfigurationWritesNothing() {
