@@ -9,8 +9,8 @@
 **Goal:** Build, sign, verify, release and document Tafl with the recipe Linger, Hulder and Muninn share, give it the window-manager logo set as its icons, and publish the repository as `michaelrigart/tafl`.
 
 **Architecture:**
-- Hulder is Tafl's twin for everything here. Port its files (`~/Code/hulder`, `michaelrigart/hulder` at `d9ab8dc`) with the name changed. A port is right when `sed -e 's/hulder/tafl/g' -e 's/Hulder/Tafl/g'` of Hulder's file differs from Tafl's only where the spec's "Allowed differences" or this plan says so.
-- `design/render` is Muninn's (`~/Code/Netronix/muninn/design/render`), because it renders a menu bar image too.
+- Hulder is Tafl's twin for everything here. Port its files (`michaelrigart/hulder` at `d9ab8dc`) with the name changed. A port is right when `sed -e 's/hulder/tafl/g' -e 's/Hulder/Tafl/g'` of Hulder's file differs from Tafl's only where the spec's "Allowed differences" or this plan says so.
+- `design/render` is Muninn's (`michaelrigart/muninn`'s `design/render`), because it renders a menu bar image too.
 - The one app change: `StatusItemController` shows the `TaflMenuBar` image instead of an SF Symbol.
 
 **Tech Stack:** bash, Python 3 (`/usr/bin/python3`, standard library only), GitHub Actions, XcodeGen 2.46.0 and actionlint 1.7.12 through mise, Xcode 27 (27.2 here, 27.1 in CI), `rsvg-convert` (Homebrew `librsvg`), Homebrew cask DSL.
@@ -19,7 +19,7 @@
 
 ## Global Constraints
 
-- **Repository:** `~/Code/tafl-feat-distribution`, branch `feat/distribution`. The controller commits each task on its own, imperative mood, no agent attribution or co-author lines. Implementers never commit, push, tag, create a release or touch the tap.
+- **Repository:** this repository's `feat/distribution` checkout, branch `feat/distribution`. The controller commits each task on its own, imperative mood, no agent attribution or co-author lines. Implementers never commit, push, tag, create a release or touch the tap.
 - **Commands:** `swift test`, `xcodegen`, `xcodebuild`, `codesign` with the keychain identity, `security`, the script tests and `scripts/release --dry-run` run outside the agent sandbox, prefixed with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` (this Mac's `xcode-select` points at the Command Line Tools; never change it).
 - **Hands off the installed app:** `/Applications/Tafl.app` is v1's granted probe build for Michael's docked checks. Never install over it, launch a Tafl build (`open`), or run `tccutil`.
 - **Team ID:** `CX4MWR5579`, Michael's Personal Team, the same as the other three. It is public. Pick the identity by Team ID, never by the bare name `Apple Development`.
@@ -66,7 +66,7 @@
 - Create: `design/app-icon.svg`, `design/mark.svg`, `design/mark-on-light.svg`; `Tafl/Assets.xcassets/Contents.json`; `Tafl/Assets.xcassets/AppIcon.appiconset/` (`Contents.json` and its ten PNGs)
 - Modify: `project.yml`
 
-- [ ] **Step 1: Copy the set as delivered.** From `~/App-logos-v2/window-manager/`: the three SVGs into `design/`, and `AppIcon.appiconset/` (its `Contents.json` and the ten `icon_*.png`) into `Tafl/Assets.xcassets/`. Not the `.icns`, `app-icon.png` or `mark.png`. `Tafl/Assets.xcassets/Contents.json` is Hulder's. `cmp` each copy against its source.
+- [ ] **Step 1: Copy the set as delivered.** From the designer's window-manager logo set (delivered outside the repository): the three SVGs into `design/`, and `AppIcon.appiconset/` (its `Contents.json` and the ten `icon_*.png`) into `Tafl/Assets.xcassets/`. Not the `.icns`, `app-icon.png` or `mark.png`. `Tafl/Assets.xcassets/Contents.json` is Hulder's. `cmp` each copy against its source.
 - [ ] **Step 2: Add `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`** to `settings.base`, in Hulder's position.
 - [ ] **Step 3: Generate and build Debug and Release.** In each product: `Contents/Resources/AppIcon.icns` and `Assets.car` exist, and `PlistBuddy -c 'Print :CFBundleIconName'` on `Info.plist` prints `AppIcon`.
 - [ ] **Step 4: Commit** "Use the window-manager logo set as the app icon".
@@ -83,7 +83,7 @@ Nothing in this task goes into the repository: the drawing waits in the scratchp
 **Interfaces:**
 - Produces: `<scratch>/menubar/menubar.svg`, which Task 4 copies to `design/menubar.svg` unchanged once approved; and the absolute paths of the preview PNGs, which the controller sends to v1's driver for Michael.
 
-- [ ] **Step 1: Draw `menubar.svg` from `design/mark.svg`** (the delivered `~/App-logos-v2/window-manager/mark.svg`), as the spec's "Artwork" says:
+- [ ] **Step 1: Draw `menubar.svg` from `design/mark.svg`** (the delivered `mark.svg` of the designer's window-manager logo set), as the spec's "Artwork" says:
   - all four shapes in one fill, `#000000`, on transparent; no other colour or opacity;
   - the front window (the red rectangle) keeps its shape and position. Where it overlaps the outlined panel, a transparent gap separates them: cut an enlarged copy of the rectangle (same corner radius plus the gap) out of the panel, with a path or a mask that `rsvg-convert` honours;
   - the gap is at least 1 px wide at 18 × 18 px, so the shapes read apart at 1x;
