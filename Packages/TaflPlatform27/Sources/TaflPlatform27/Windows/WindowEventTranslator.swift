@@ -4,11 +4,14 @@ import TaflCore
 
 /// Turns the hub's Accessibility notifications into `PlatformEvent`s. Each app has a lane: its events
 /// are handled one at a time and in order, including the reads for a window the registry does not
-/// know yet, and a slow app delays only its own lane. Nothing is read on the hub thread.
+/// know yet, and a slow app delays only its own lane. Nothing is read on the hub thread. A window's
+/// announcement reaches the notices inside the read that found it, and its end on its app's queue,
+/// after the reads already there.
 final class WindowEventTranslator: Sendable {
     private let registry: WindowRegistry
     private let reader: WindowReader27
     private let events: AsyncStream<PlatformEvent>.Continuation
+    private let notices: any WindowNotices
     private struct Lanes {
         var open: [pid_t: AsyncStream<AXObserverHub.Event>.Continuation] = [:]
         /// Apps whose lane was closed: a late callback must not start a lane that nothing would end.
@@ -19,10 +22,16 @@ final class WindowEventTranslator: Sendable {
 
     var laneCount: Int { lanes.withLock { $0.open.count } }
 
-    init(registry: WindowRegistry, reader: WindowReader27, events: AsyncStream<PlatformEvent>.Continuation) {
+    init(
+        registry: WindowRegistry,
+        reader: WindowReader27,
+        events: AsyncStream<PlatformEvent>.Continuation,
+        notices: any WindowNotices
+    ) {
         self.registry = registry
         self.reader = reader
         self.events = events
+        self.notices = notices
     }
 
     /// Never blocks: it only hands the event to its app's lane.
@@ -73,15 +82,12 @@ final class WindowEventTranslator: Sendable {
         case kAXUIElementDestroyedNotification:
             guard let known else { return }
             registry.remove(known)
+            let notices = notices
+            reader.afterReads(pid) { notices.destroyed(known) }
             events.yield(.windowDestroyed(known))
         case kAXWindowCreatedNotification:
             // Announced once, whoever registered the window first: a query registers but never announces.
-            guard let entry = await learn(element, pid: pid, resolveID: known == nil) else { return }
-            let events = events
-            _ = registry.announce(entry.snapshot) { event in
-                events.yield(event)
-                return true
-            }
+            _ = await learn(element, pid: pid, resolveID: known == nil, announcing: true)
         case kAXWindowMovedNotification:
             if let handle = await handleOf(known, element, pid) { events.yield(.windowMoved(handle)) }
         case kAXWindowResizedNotification:
@@ -102,12 +108,30 @@ final class WindowEventTranslator: Sendable {
         return await learn(element, pid: pid)?.snapshot.handle
     }
 
-    /// Reads a window and registers it if the registry has not seen it. Anything that is not a
-    /// standard window or sheet, and a window whose process is gone, is never registered.
-    private func learn(_ element: AXElementBox, pid: pid_t, resolveID: Bool = true) async -> WindowCatalog27.Entry? {
-        guard let window = await reader.readTracked(element, pid, resolveID), let app = reader.app(pid) else { return nil }
-        let registration = registry.register(window.element, pid: pid, windowID: window.windowID)
-        let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: window.attributes)
-        return WindowCatalog27.Entry(snapshot: snapshot, element: window.element, isNew: registration.isNew)
+    /// Reads a window and registers it if the registry has not seen it, inside the read. Anything
+    /// that is not a standard window or sheet, and a window whose process is gone, is never
+    /// registered. `announcing` announces the window's creation in the same step, unless it was.
+    private func learn(
+        _ element: AXElementBox,
+        pid: pid_t,
+        resolveID: Bool = true,
+        announcing: Bool = false
+    ) async -> WindowCatalog27.Entry? {
+        guard let app = reader.app(pid) else { return nil }
+        let registry = registry
+        let events = events
+        let notices = notices
+        return await reader.readTracked(element, pid, resolveID) { window in
+            let registration = registry.register(window.element, pid: pid, windowID: window.windowID)
+            let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: window.attributes)
+            if announcing {
+                _ = registry.announce(snapshot) { event in
+                    notices.announced(snapshot)
+                    events.yield(event)
+                    return true
+                }
+            }
+            return WindowCatalog27.Entry(snapshot: snapshot, element: window.element, isNew: registration.isNew)
+        }
     }
 }

@@ -34,6 +34,6 @@ final class UnsupportedPlatform: WindowPlatform {
     func capabilities() async -> [CapabilityState] {
         [CapabilityState(name: "macOS version", isAvailable: false, note: Self.capabilityNote)]
     }
-    func startObserving() async -> [UnobservableApp] { [] }
+    func startObserving(notices: any WindowNotices) async -> [UnobservableApp] { [] }
     func stopObserving() async {}
 }

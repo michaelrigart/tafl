@@ -3,15 +3,14 @@ import Foundation
 extension WindowEngine {
     // MARK: Reconfigurations
 
-    func reconfigurationBegan() async {
-        // The count goes first: a request that reads it before the writer's epoch has moved
-        // is stopped by one or the other.
+    func reconfigurationBegan() {
+        // In one step of the engine: the count stops the runs, and the owner stops recording
+        // last-known frames and stops every request begun earlier from writing.
         reconfigurations.begin()
         if changeOrigin == nil { changeOrigin = knownDisplays }
-        isFrozen = true
+        owner.reconfigurationBegan()
         tracker.began(at: clock.now)
         armSettle()
-        await writer.reconfigurationBegan()
     }
 
     func reconfigurationEnded() {
@@ -79,9 +78,8 @@ extension WindowEngine {
         let old = changeOrigin ?? knownDisplays
         if DisplaySetup(old) == DisplaySetup(new), !rulesStarted {
             // A display that dropped out and came back, or a change of geometry: nothing moves.
-            knownDisplays = new
+            owner.recordLastKnown(for: new)
             changeOrigin = nil
-            isFrozen = false
             await memory.update { $0.lastDisplays = new }
         } else {
             await applyDisplayChange(from: old, to: new, since: began)
@@ -94,8 +92,9 @@ extension WindowEngine {
     /// change began and did not finish: the active layout ends; each window is handled by the
     /// first rule that applies; a layout that claims the new setup becomes active, unless a
     /// layout was applied since the rules began. Recording stays frozen until the rules have
-    /// run, and then the new setup's frames are seeded. A reconfiguration that begins meanwhile
-    /// takes over: the run stops and leaves the state to the change that follows.
+    /// run; then it resumes for the new setup, and the seed reads every window into it. A
+    /// reconfiguration that begins meanwhile takes over: the run stops and leaves the state to the
+    /// change that follows.
     func applyDisplayChange(from old: [Display], to new: [Display], since began: Int? = nil) async {
         let began = began ?? reconfigurations.current
         guard !isStopping, reconfigurations.isCurrent(began) else { return }
@@ -106,7 +105,7 @@ extension WindowEngine {
 
         await setActiveLayout(nil)
         let known = await memory.read()
-        let visible = await platform.visibleWindows(take: { $0 })
+        let visible = await platform.visibleWindows(take: owner.take)
         guard reconfigurations.isCurrent(began) else { return }
         let windows = visible.map { window in
             WindowAtChange(
@@ -123,18 +122,18 @@ extension WindowEngine {
         let count = await run(requests, since: began)
         guard !Task.isCancelled, !isStopping, reconfigurations.isCurrent(began) else { return }
 
-        let after = await platform.visibleWindows(take: { $0 })
+        // No await between the check above and this: a reconfiguration that begins from here
+        // freezes recording again.
+        owner.recordLastKnown(for: new)
+        _ = await platform.visibleWindows(take: owner.take)
         let reconfigurations = reconfigurations
-        await recordLastKnown(windows: after, displays: new, since: began)
         await memory.update { memory in
             if reconfigurations.isCurrent(began) { memory.lastDisplays = new }
         }
         // No await between this check and the state it protects. The claiming layout becomes
         // active only now, so a run that was stopped leaves none behind.
         guard reconfigurations.isCurrent(began) else { return }
-        knownDisplays = new
         changeOrigin = nil
-        isFrozen = false
         rulesStarted = false
         if let claiming, layoutApplications.isCurrent(application) { activeLayout.activate(claiming.name, in: config) }
         let layout = activeLayout.name

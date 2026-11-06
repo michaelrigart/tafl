@@ -59,14 +59,16 @@ private func waitForRequests(_ queue: WindowRequestQueue, _ count: Int) async {
         // The app sizes in steps of 20, so the first pass ends short and a reapply is pending.
         $0.sizeRule = { _, asked in ScreenSize(width: (asked.width / 20).rounded(.down) * 20, height: asked.height) }
     }
-    let writer = FrameWriter(platform: fake, clock: clock, adjustments: [], reapplyDelay: .milliseconds(25))
+    let owner = WindowOwner(adjustments: [])
+    let writer = FrameWriter(platform: fake, clock: clock, owner: owner, reapplyDelay: .milliseconds(25))
     let queue = WindowRequestQueue()
+    let start = owner.beginRequest(window(1, frame: rect(100, 100, 400, 300)))
     let job = WriteJob(
-        window: handle, appName: "Example", start: rect(100, 100, 400, 300), startReadAt: .now, target: rect(1000, 0, 1210, 900),
+        ticket: start.ticket, appName: "Example", start: rect(100, 100, 400, 300), target: rect(1000, 0, 1210, 900),
         targetVisible: displayB.visibleFrame, crossesDisplays: true, minSize: nil, displays: [displayA, displayB]
     )
 
-    let first = Task { await queue.run(handle) { await writer.write(job, beforeFirstWrite: { true }).result } }
+    let first = Task { await queue.run(handle) { await writer.write(job) } }
     await clock.waitForSleepers(1)
     let second = Task { await queue.run(handle) { 42 } }
 

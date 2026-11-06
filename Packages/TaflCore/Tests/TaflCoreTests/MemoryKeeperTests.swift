@@ -28,8 +28,15 @@ final class MemoryKeeperTests {
         try bytes.write(to: file)
     }
 
-    private func change(_ keeper: MemoryKeeper) async {
-        await keeper.recordPlacement(keeperWindow, readAt: .now) { $0.openChain(before: rect(1, 2, 3, 4), on: displayA) }
+    private func makeKeeper() -> (MemoryKeeper, WindowOwner) {
+        let owner = WindowOwner(adjustments: [])
+        return (MemoryKeeper(owner: owner, store: store), owner)
+    }
+
+    /// Changes the window's memory as a request does: a reading begins it, and its end records.
+    private func change(_ owner: WindowOwner) {
+        let start = owner.beginRequest(TaflCoreTests.window(1, frame: rect(1, 2, 3, 4)))
+        owner.endRequest(start.ticket) { _, placement in placement.openChain(before: rect(1, 2, 3, 4), on: displayA) }
     }
 
     private func isSuccess(_ result: Result<Void, any Error>) -> Bool {
@@ -38,16 +45,16 @@ final class MemoryKeeperTests {
     }
 
     @Test func saveBeforeAnyLoadWritesNothing() async {
-        let keeper = MemoryKeeper(store: store)
-        await change(keeper)
+        let (keeper, owner) = makeKeeper()
+        change(owner)
         #expect(isSuccess(await keeper.save()))
         #expect(!FileManager.default.fileExists(atPath: file.path))
     }
 
     @Test func saveAfterAFreshLoadWrites() async throws {
-        let keeper = MemoryKeeper(store: store)
+        let (keeper, owner) = makeKeeper()
         #expect(await keeper.load() == .fresh)
-        await change(keeper)
+        change(owner)
         #expect(isSuccess(await keeper.save()))
         guard case .loaded(let saved) = store.load() else { Issue.record("Nothing was written"); return }
         #expect(saved.restore[window]?.frame == rect(1, 2, 3, 4))
@@ -57,10 +64,10 @@ final class MemoryKeeperTests {
         var existing = WindowMemory()
         existing.activeLayout = "Desk"
         try store.save(existing)
-        let keeper = MemoryKeeper(store: store)
+        let (keeper, owner) = makeKeeper()
         #expect(await keeper.load() == .loaded(existing))
         #expect(await keeper.read() == existing)
-        await change(keeper)
+        change(owner)
         #expect(isSuccess(await keeper.save()))
         guard case .loaded(let saved) = store.load() else { Issue.record("Nothing was written"); return }
         #expect(saved.activeLayout == "Desk")
@@ -69,10 +76,10 @@ final class MemoryKeeperTests {
 
     @Test func saveAfterARecoveredLoadWrites() async throws {
         try writeFile(Data("{not json".utf8))
-        let keeper = MemoryKeeper(store: store)
+        let (keeper, owner) = makeKeeper()
         #expect(await keeper.load() == .recoveredFromCorrupt)
         #expect(await keeper.read() == WindowMemory())
-        await change(keeper)
+        change(owner)
         #expect(isSuccess(await keeper.save()))
         guard case .loaded(let saved) = store.load() else { Issue.record("Nothing was written"); return }
         #expect(saved.restore[window] != nil)
@@ -81,9 +88,9 @@ final class MemoryKeeperTests {
     @Test func saveAfterARefusedLoadWritesNothing() async throws {
         let original = Data(#"{"version": 2}"#.utf8)
         try writeFile(original)
-        let keeper = MemoryKeeper(store: store)
+        let (keeper, owner) = makeKeeper()
         #expect(await keeper.load() == .refused(version: 2))
-        await change(keeper)
+        change(owner)
         // A success, not the store's refusal: the keeper never asked it to write.
         #expect(isSuccess(await keeper.save()))
         #expect(try Data(contentsOf: file) == original)
@@ -95,9 +102,9 @@ final class MemoryKeeperTests {
         let manager = FileManager.default
         try manager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
         try manager.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
-        let keeper = MemoryKeeper(store: store)
+        let (keeper, owner) = makeKeeper()
         #expect(await keeper.load() == .unavailable)
-        await change(keeper)
+        change(owner)
         #expect(isSuccess(await keeper.save()))
         try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
         try manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
@@ -105,7 +112,7 @@ final class MemoryKeeperTests {
     }
 
     @Test func aFailedLoadResetsAnEarlierLoadsPermissionToWrite() async throws {
-        let keeper = MemoryKeeper(store: store)
+        let (keeper, _) = makeKeeper()
         #expect(await keeper.load() == .fresh)
         try writeFile(Data(#"{"version": 2}"#.utf8))
         #expect(await keeper.load() == .refused(version: 2))
@@ -115,7 +122,7 @@ final class MemoryKeeperTests {
     }
 
     @Test func saveReturnsTheStoresError() async throws {
-        let keeper = MemoryKeeper(store: store)
+        let (keeper, _) = makeKeeper()
         #expect(await keeper.load() == .fresh)
         try writeFile(Data(#"{"version": 2}"#.utf8))
         guard case .failure(let error) = await keeper.save() else { Issue.record("Expected the store's refusal"); return }
@@ -123,7 +130,7 @@ final class MemoryKeeperTests {
     }
 
     @Test func aSaveRecordsWhenItWasMade() async throws {
-        let keeper = MemoryKeeper(store: store)
+        let (keeper, _) = makeKeeper()
         #expect(await keeper.load() == .fresh)
         let before = Date()
         #expect(isSuccess(await keeper.save()))
@@ -133,100 +140,20 @@ final class MemoryKeeperTests {
         #expect(before <= savedAt && savedAt <= after)
     }
 
-    @Test func aGoneWindowIsNeverWrittenAgainUntilANewProcessHasItsId() async {
-        let keeper = MemoryKeeper()
-        let quitApp = WindowHandle(pid: 200, windowID: 1, isStable: true)
-        await keeper.forget(keeperWindow)
-        await keeper.forget(pid: 200)
-        for gone in [keeperWindow, quitApp] {
-            await keeper.recordPlacement(gone, readAt: .now) { $0.openChain(before: rect(1, 2, 3, 4), on: displayA) }
-            await keeper.recordLastKnown(gone, frame: rect(1, 2, 3, 4), display: displayA, setup: DisplaySetup([displayA]), readAt: .now)
-        }
-        #expect(await keeper.read() == WindowMemory())
-        await keeper.processStarted(pid: 200)
-        await keeper.recordPlacement(quitApp, readAt: .now) { $0.openChain(before: rect(1, 2, 3, 4), on: displayA) }
-        #expect(await keeper.read().restore[quitApp] != nil)
-    }
-
-    // MARK: Readings
-
-    @Test func anOlderReadingLeavesANewerLastKnownFrame() async {
-        let keeper = MemoryKeeper()
-        let setup = DisplaySetup([displayA])
-        let older = ContinuousClock.now
-        let newer = older.advanced(by: .milliseconds(1))
-        await keeper.recordLastKnown(window, frame: rect(0, 25, 500, 775), display: displayA, setup: setup, readAt: newer)
-        let recorded = await keeper.recordLastKnown(
-            window, frame: rect(100, 100, 400, 300), display: displayA, setup: setup, readAt: older
-        )
-        #expect(!recorded)
-        #expect(await keeper.read().lastKnown(window, setup: setup)?.relative == rect(0, 25, 500, 775).relative(to: v))
-    }
-
-    @Test func eachSetupKeepsItsOwnNewestLastKnownReading() async {
-        let keeper = MemoryKeeper()
-        let older = ContinuousClock.now
-        let newer = older.advanced(by: .milliseconds(1))
-        let desk = DisplaySetup([displayA, displayB])
-        await keeper.recordLastKnown(window, frame: rect(1100, 100, 400, 300), display: displayB, setup: desk, readAt: newer)
-        let recorded = await keeper.recordLastKnown(
-            window, frame: rect(100, 100, 400, 300), display: displayA, setup: DisplaySetup([displayA]), readAt: older
-        )
-        #expect(recorded)
-    }
-
-    @Test func aReadingThatIsNotRecordedHoldsNoOlderOneBack() async {
-        let keeper = MemoryKeeper()
-        let setup = DisplaySetup([displayA])
-        let older = ContinuousClock.now
-        let newer = older.advanced(by: .milliseconds(1))
-        // A reading from a context a reconfiguration has ended is not recorded.
-        let discarded = await keeper.recordLastKnown(
-            window, frame: rect(100, 100, 400, 300), display: displayA, setup: setup, readAt: newer, when: { false }
-        )
-        let recorded = await keeper.recordLastKnown(window, frame: rect(0, 25, 500, 775), display: displayA, setup: setup, readAt: older)
-        #expect(!discarded)
-        #expect(recorded)
-        #expect(await keeper.read().lastKnown(window, setup: setup)?.relative == rect(0, 25, 500, 775).relative(to: v))
-    }
-
-    @Test func aPlacementChangesOnlyFromAReadingAsNewAsTheWindowsNewest() async {
-        let readings = WindowReadings()
-        let keeper = MemoryKeeper(readings: readings)
-        let older = ContinuousClock.now
-        let newer = older.advanced(by: .milliseconds(1))
-        let placed = PlacedRecord(
-            action: .leftHalf, layout: nil, placement: .leftHalf, cycleStep: 0,
-            achieved: rect(0, 25, 500, 775), display: displayA.identity
-        )
-        _ = readings.judge(window, FrameReading(frame: rect(0, 25, 500, 775), readAt: newer))
-        let accepted: Void? = await keeper.recordPlacement(window, readAt: newer) { placement in
-            placement.openChain(before: rect(1, 2, 3, 4), on: displayA)
-            placement.recordPlaced(placed)
-        }
-        let refused: Void? = await keeper.recordPlacement(window, readAt: older) { $0.recordExternalChange() }
-        #expect(accepted != nil)
-        #expect(refused == nil)
-        #expect(await keeper.read().placement(of: window) == WindowPlacement(placed: placed, restore: RestoreRecord(
-            frame: rect(1, 2, 3, 4), display: displayA.identity, visibleFrame: v, chainOpen: true
-        )))
-    }
-
-    @Test func aNewerLastKnownFrameDoesNotHoldAnOlderPlacementBack() async {
-        let keeper = MemoryKeeper()
-        let older = ContinuousClock.now
-        let newer = older.advanced(by: .milliseconds(1))
-        await keeper.recordLastKnown(window, frame: rect(0, 25, 500, 775), display: displayA, setup: DisplaySetup([displayA]), readAt: newer)
-        let placement: Void? = await keeper.recordPlacement(window, readAt: older) {
-            $0.openChain(before: rect(1, 2, 3, 4), on: displayA)
-        }
-        #expect(placement != nil)
-        #expect(await keeper.read().restore[window] != nil)
+    @Test func aLoadHandsTheOwnerItsWindowsAndAReadAddsWhatBelongsToNoWindow() async throws {
+        var existing = WindowMemory(activeLayout: "Desk", lastDisplays: [displayA], savedAt: Date(timeIntervalSince1970: 1))
+        existing.openChain(window, before: rect(1, 2, 3, 4), on: displayA)
+        try store.save(existing)
+        let (keeper, owner) = makeKeeper()
+        #expect(await keeper.load() == .loaded(existing))
+        #expect(owner.windowMemory == WindowMemory(restore: existing.restore))
+        #expect(await keeper.read() == existing)
     }
 
     @Test func withoutAStoreSaveSucceeds() async {
-        let keeper = MemoryKeeper()
-        await change(keeper)
+        let owner = WindowOwner(adjustments: [])
+        let keeper = MemoryKeeper(owner: owner)
+        change(owner)
         #expect(isSuccess(await keeper.save()))
     }
 }

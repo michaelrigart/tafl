@@ -14,7 +14,7 @@ struct ResolvedWindowID: Sendable, Equatable {
 /// Every call is one short step under a lock and makes no Accessibility call, so a read can register
 /// what it found from inside its app's queue.
 final class WindowRegistry: Sendable {
-    enum Announcement: Equatable {
+    enum Announcement: Equatable, Sendable {
         case announced
         case alreadyAnnounced
         /// The publisher refused: its claim had ended. The window stays unannounced.

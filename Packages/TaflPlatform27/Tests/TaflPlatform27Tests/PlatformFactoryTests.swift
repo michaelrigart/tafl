@@ -12,7 +12,7 @@ import TaflCore
     #expect(await platform.launchDates(of: [1]).isEmpty)
     #expect(await platform.focusedWindow(take: { $0 }) == .failure(.noWindow))
     #expect(await platform.snapshot(of: WindowHandle(pid: 1, windowID: 1, isStable: true), take: { $0 }) == .failure(.noWindow))
-    #expect(await platform.startObserving().isEmpty)
+    #expect(await platform.startObserving(notices: RecordedNotices()).isEmpty)
     let capabilities = await platform.capabilities()
     #expect(capabilities.count == 1)
     #expect(capabilities.allSatisfy { !$0.isAvailable })

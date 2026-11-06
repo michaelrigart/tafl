@@ -78,7 +78,7 @@ actor FakePlatform: WindowPlatform {
     var displaysGate: FakeGate?
     /// Holds the next `visibleWindows()` call until the gate opens.
     var visibleWindowsGate: FakeGate?
-    /// Holds the next `startObserving()` call until the gate opens.
+    /// Holds the next `startObserving(notices:)` call until the gate opens.
     var startObservingGate: FakeGate?
     /// Reads the windows, then holds the result of the next `visibleWindows()` until the gate opens.
     var visibleWindowsLateGate: FakeGate?
@@ -96,6 +96,8 @@ actor FakePlatform: WindowPlatform {
     var waitingSessionCount: Int { waiters.values.reduce(0) { $0 + $1.count } }
     private(set) var startObservingCount = 0
     private(set) var stopObservingCount = 0
+    /// What the last `startObserving(notices:)` was given.
+    private var notices: (any WindowNotices)?
 
     nonisolated let events: AsyncStream<PlatformEvent>
     private nonisolated let eventSink: AsyncStream<PlatformEvent>.Continuation
@@ -117,7 +119,26 @@ actor FakePlatform: WindowPlatform {
         body(self)
     }
 
+    /// Emits an event as the platform does: a window's announcement, end or app's quit reaches the
+    /// notices first, in the same step.
     func emit(_ event: PlatformEvent) {
+        switch event {
+        case .windowCreated(let snapshot): notices?.announced(snapshot)
+        case .windowDestroyed(let window): notices?.destroyed(window)
+        case .appQuit(let pid): notices?.quit(pid: pid)
+        default: break
+        }
+        eventSink.yield(event)
+    }
+
+    /// Reads a window for its announcement, as a catch-up does long before its event arrives:
+    /// `deliver` sends the event later.
+    func announce(_ snapshot: WindowSnapshot) {
+        notices?.announced(snapshot)
+    }
+
+    /// Sends an event without telling the notices: the delivery of one announced earlier.
+    func deliver(_ event: PlatformEvent) {
         eventSink.yield(event)
     }
 
@@ -263,7 +284,8 @@ actor FakePlatform: WindowPlatform {
 
     func capabilities() async -> [CapabilityState] { capabilityStates }
 
-    func startObserving() async -> [UnobservableApp] {
+    func startObserving(notices: any WindowNotices) async -> [UnobservableApp] {
+        self.notices = notices
         startObservingCount += 1
         if let gate = startObservingGate {
             startObservingGate = nil

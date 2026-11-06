@@ -76,6 +76,17 @@ public struct WindowPlacement: Equatable, Sendable {
     public mutating func completeRestore() {
         restore = nil
     }
+
+    /// Where Restore puts the window: the chain's start, on its display, or mapped onto `current`
+    /// when that display is no longer connected.
+    public func restoreTarget(current: Display, displays: [Display]) -> (ScreenRect, Display)? {
+        guard let record = restore else { return nil }
+        if let home = displays.first(where: { $0.identity == record.display }) {
+            return (record.frame, home)
+        }
+        let origin = Display(identity: record.display, frame: record.visibleFrame, visibleFrame: record.visibleFrame)
+        return (DisplayTransfer.relative(record.frame, from: origin, to: current), current)
+    }
 }
 
 public struct StoredFrame: Codable, Equatable, Sendable {
@@ -156,12 +167,7 @@ public struct WindowMemory: Codable, Equatable, Sendable {
         current: Display,
         displays: [Display]
     ) -> (ScreenRect, Display)? {
-        guard let record = restore[window] else { return nil }
-        if let home = displays.first(where: { $0.identity == record.display }) {
-            return (record.frame, home)
-        }
-        let origin = Display(identity: record.display, frame: record.visibleFrame, visibleFrame: record.visibleFrame)
-        return (DisplayTransfer.relative(record.frame, from: origin, to: current), current)
+        placement(of: window).restoreTarget(current: current, displays: displays)
     }
 
     public mutating func completeRestore(_ window: WindowHandle) {

@@ -102,6 +102,11 @@ private final class Rig: Sendable {
 
     func emit(_ event: PlatformEvent) async { await fake.emit(event) }
 
+    /// Whether the window's owner counts it as touched.
+    func isTouched(_ window: WindowHandle = handle) async -> Bool {
+        await engine.owner.isTouched(window)
+    }
+
     /// Waits until the engine has dealt with `count` events in all.
     func waitForEvents(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async {
         let begun = ContinuousClock.now
@@ -386,7 +391,7 @@ private final class Rig: Sendable {
     await rig.emit(.windowCreated(announced))
     await rig.waitForEvents(1)
     #expect(await rig.frame() == leftHalfA)
-    #expect(await rig.engine.touched.contains(handle))
+    #expect(await rig.isTouched())
 }
 
 @Test func aLateAnnouncementLeavesAKnownWindowsMemoryAlone() async {
@@ -394,15 +399,33 @@ private final class Rig: Sendable {
     await rig.engine.start(config: config())
     let found = window(1, frame: start)
     await rig.fake.configure { $0.windows[found.handle] = found }
-    // A catch-up read the window at `start`; a shortcut then places it, and the old read is announced.
+    // A catch-up reads the window at `start`; a shortcut then places it, and the announcement arrives.
+    await rig.fake.announce(found)
     await rig.engine.perform(.leftHalf)
-    await rig.emit(.windowCreated(found))
+    await rig.fake.deliver(.windowCreated(found))
     await rig.waitForEvents(1)
     let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA]))
     #expect(known?.relative == leftHalfA.relative(to: v))
 }
 
-@Test(.timeLimit(.minutes(1))) func aLateAnnouncementWhileTheWindowsFrameIsJudgedDoesNothing() async {
+@Test(.timeLimit(.minutes(1))) func anAnnouncementReadAfterAnEventsReadPlacesNothing() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let found = window(1, frame: start)
+    await rig.fake.configure { $0.windows[found.handle] = found }
+    // A move event's read is the first Tafl has of the window; the announcement is read after it.
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(1)
+    await rig.emit(.windowCreated(found))
+    await rig.waitForEvents(2)
+    #expect(await rig.log.isEmpty)
+    #expect(await !rig.isTouched())
+    #expect(await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA]))?.relative == start.relative(to: v))
+}
+
+@Test(.timeLimit(.minutes(1))) func aWindowWhoseAnnouncementIsReadFirstIsPlacedThoughAMoveEventCameFirst() async {
     let desk = layout("Desk", [slot(.rightHalf)])
     let rig = await Rig(focused: nil)
     await rig.engine.start(config: config(layouts: [desk]))
@@ -410,17 +433,14 @@ private final class Rig: Sendable {
     let found = window(1, frame: start)
     let reads = FakeGate()
     await rig.fake.configure { $0.windows[found.handle] = found; $0.snapshotGate = reads }
-    // A move is being judged for the window: its read is held, so it is neither touched nor in memory yet.
+    // A move event came first, but its read waits; the announcement is read before it, at the same
+    // frame. Read order decides: the window is new, and nothing moved it.
     await rig.emit(.windowMoved(handle))
     await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
     await rig.emit(.windowCreated(found))
-    await rig.waitForEvents(1)
-    #expect(await rig.log.isEmpty)
-    #expect(await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA])) == nil)
-    #expect(await !rig.engine.touched.contains(handle))
     reads.open()
-    await rig.waitForEvents(2)
-    #expect(await rig.log.isEmpty)
+    await rig.waitForFrame(rightHalfA)
+    #expect(await !rig.isTouched())
 }
 
 @Test func aWindowTheSeedSawIsLeftAloneWhenItsCreationIsAnnounced() async {
@@ -1184,13 +1204,33 @@ private let strayA2 = rect(250, 275, 200, 150)
     await rig.fake.configure { $0.snapshotGate = reads; $0.windows[handle]?.frame = rect(200, 200, 300, 300) }
     await rig.emit(.windowMoved(handle))
     await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    // A read after the window's end finds no window.
+    await rig.fake.configure { $0.windows[handle] = nil }
     await rig.emit(.windowDestroyed(handle))
     await rig.waitForEvents(1)
     reads.open()
     await rig.waitForEvents(2)
     let after = await rig.engine.memory.read()
     #expect(after.lastKnown.values.allSatisfy { $0[handle] == nil })
-    #expect(await rig.engine.touched.isEmpty)
+    #expect(await !rig.engine.owner.knows(handle))
+}
+
+@Test(.timeLimit(.minutes(1))) func aFrameReadBeforeAWindowsEndIsForgottenWithIt() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    // The read is done and its result held when the window is destroyed.
+    let late = FakeGate()
+    await rig.fake.configure { $0.snapshotLateGate = late; $0.windows[handle]?.frame = rect(200, 200, 300, 300) }
+    await rig.emit(.windowMoved(handle))
+    await rig.fake.waitUntil { _ in late.waiterCount == 1 }
+    await rig.fake.configure { $0.windows[handle] = nil }
+    await rig.emit(.windowDestroyed(handle))
+    await rig.waitForEvents(1)
+    late.open()
+    await rig.waitForEvents(2)
+    let after = await rig.engine.memory.read()
+    #expect(after.lastKnown.values.allSatisfy { $0[handle] == nil })
+    #expect(await !rig.engine.owner.knows(handle))
 }
 
 @Test(.timeLimit(.minutes(1))) func aLateFrameForAQuitAppRecordsNothing() async {
@@ -1200,25 +1240,26 @@ private let strayA2 = rect(250, 275, 200, 150)
     await rig.fake.configure { $0.snapshotGate = reads; $0.windows[handle]?.frame = rect(200, 200, 300, 300) }
     await rig.emit(.windowMoved(handle))
     await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    // A read after the app's quit finds none of its windows.
+    await rig.fake.configure { $0.windows[handle] = nil }
     await rig.emit(.appQuit(pid: 100))
     await rig.waitForEvents(1)
     reads.open()
     await rig.waitForEvents(2)
     let after = await rig.engine.memory.read()
     #expect(after.lastKnown.isEmpty)
-    #expect(await rig.engine.touched.isEmpty)
+    #expect(await !rig.engine.owner.knows(handle))
 }
 
-@Test func aQuitAppIsForgottenByTheWriter() async {
+@Test func aQuitAppIsForgottenByTheOwner() async {
     let rig = await Rig(windows: [window(1, frame: start)])
     await rig.engine.start(config: config())
     await rig.engine.perform(.rightHalf)
+    #expect(await rig.isTouched())
     await rig.emit(.appQuit(pid: 100))
     await rig.waitForEvents(1)
-    // The same frame again: the writer no longer knows it as its own.
-    await rig.emit(.windowMoved(handle))
-    await rig.waitForEvents(2)
-    #expect(await rig.engine.touched.contains(handle))
+    #expect(await !rig.engine.owner.knows(handle))
+    #expect(await !rig.isTouched())
 }
 
 @Test func aWindowMovedWhileItWasPlacedIsNotPlacedAgainByATitleChange() async {
@@ -1235,7 +1276,7 @@ private let strayA2 = rect(250, 275, 200, 150)
     await rig.emit(.windowCreated(created))
     await rig.fake.waitUntil { $0.callLog.last == "end" }
     await rig.waitForEvents(1)
-    #expect(await rig.engine.touched.contains(handle))
+    #expect(await rig.isTouched())
 
     let dragged = await rig.frame()
     await rig.emit(.titleChanged(handle, "Docs again"))
@@ -1911,95 +1952,7 @@ private func callsOf(_ placement: @Sendable (Rig) async -> Void, config: Config)
     #expect(rig.reports.contains { if case .failure(.movedDuringPlacement, _) = $0 { true } else { false } })
 }
 
-// MARK: Readings
-
-/// Later than any reading a test makes: what it records stands for a newer reading of the window.
-private let later = ContinuousClock.now.advanced(by: .seconds(3600))
-private let newerFrame = rect(200, 200, 300, 300)
-
-/// Records `frame` as the window's last-known frame, from a reading newer than any the engine takes.
-private func recordNewerLastKnown(
-    _ rig: Rig, _ window: WindowHandle = handle, frame: ScreenRect = newerFrame, on display: Display = displayA,
-    setup: DisplaySetup = DisplaySetup([displayA])
-) async {
-    await rig.engine.memory.recordLastKnown(window, frame: frame, display: display, setup: setup, readAt: later)
-}
-
-@Test(.timeLimit(.minutes(1))) func anOlderStartSeedLeavesANewerLastKnownFrame() async {
-    let onB = window(1, frame: rect(1100, 100, 400, 300))
-    let rig = await Rig(displays: bothDisplays, windows: [onB], focused: nil)
-    let late = FakeGate()
-    await rig.fake.configure { $0.visibleWindowsLateGate = late }
-    let starting = Task { await rig.engine.start(config: config()) }
-    await rig.fake.waitUntil { _ in late.waiterCount == 1 }
-    let setup = DisplaySetup(bothDisplays)
-    let dragged = rect(1500, 600, 400, 300)
-    await recordNewerLastKnown(rig, frame: dragged, on: displayB, setup: setup)
-    late.open()
-    await starting.value
-    #expect(await rig.engine.memory.read().lastKnown(handle, setup: setup)?.relative == dragged.relative(to: displayB.visibleFrame))
-}
-
-@Test func anOlderFrameEventLeavesANewerLastKnownFrameAndPlacement() async {
-    let rig = await Rig(windows: [window(1, frame: start)])
-    await rig.engine.start(config: config())
-    let placed = PlacedRecord(
-        action: .leftHalf, layout: nil, placement: .leftHalf, cycleStep: 0, achieved: leftHalfA, display: displayA.identity
-    )
-    await recordNewerLastKnown(rig)
-    _ = await rig.engine.writer.observe(handle, frame: start, readAt: later)
-    await rig.engine.memory.recordPlacement(handle, readAt: later) { placement in
-        placement.openChain(before: start, on: displayA)
-        placement.recordPlaced(placed)
-    }
-    await rig.fake.configure { $0.windows[handle]?.frame = rect(300, 300, 400, 300) }
-    await rig.emit(.windowMoved(handle))
-    await rig.waitForEvents(1)
-    let memory = await rig.engine.memory.read()
-    #expect(memory.lastKnown(handle, setup: DisplaySetup([displayA]))?.relative == newerFrame.relative(to: v))
-    #expect(memory.placed[handle] == placed)
-    #expect(memory.restore[handle]?.chainOpen == true)
-}
-
-@Test func anOlderActionLeavesANewerLastKnownFrame() async {
-    let rig = await Rig(windows: [window(1, frame: start)])
-    await rig.engine.start(config: config())
-    await recordNewerLastKnown(rig)
-    await rig.engine.perform(.leftHalf)
-    #expect(await rig.frame() == leftHalfA)
-    let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA]))
-    #expect(known?.relative == newerFrame.relative(to: v))
-}
-
-@Test func anOlderLayoutRunLeavesANewerLastKnownFrame() async {
-    let desk = layout("Desk", [slot(.rightHalf)])
-    let rig = await Rig(windows: [window(1, frame: start)])
-    await rig.engine.start(config: config(layouts: [desk]))
-    await recordNewerLastKnown(rig)
-    await rig.engine.applyLayout(named: "Desk")
-    #expect(await rig.frame() == rightHalfA)
-    let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA]))
-    #expect(known?.relative == newerFrame.relative(to: v))
-}
-
-@Test func anOlderRulesSeedLeavesANewerLastKnownFrame() async {
-    let other = window(2, frame: rect(1100, 600, 400, 300))
-    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: leftHalfB), other])
-    await rig.engine.start(config: config())
-    // Newer than the seed that follows the rules, for the setup the change leads to.
-    await recordNewerLastKnown(rig)
-    // The window can't be moved, so the rules leave it where macOS put it for the seed to read.
-    await rig.fake.configure {
-        $0.windows[handle]?.frame = rect(0, 25, 600, 500)
-        $0.windows[handle]?.canMove = false
-        $0.windows[other.handle]?.frame = rect(100, 100, 400, 300)
-    }
-    await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
-    await rig.waitForChanges(1)
-    let memory = await rig.engine.memory.read()
-    #expect(memory.lastKnown(handle, setup: DisplaySetup([displayA]))?.relative == newerFrame.relative(to: v))
-    #expect(memory.lastKnown(other.handle, setup: DisplaySetup([displayA])) != nil)
-}
+// MARK: Readings in read order
 
 @Test(.timeLimit(.minutes(1))) func aFrameFromBeforeAChangeThatIsNotRecordedLeavesTheSeedsFrame() async {
     let rig = await Rig(displays: bothDisplays, windows: [strayB1], focused: nil)
@@ -2060,7 +2013,7 @@ private func recordNewerLastKnown(
     #expect(await pollUntilLastKnown(rig, handle, setup) { $0 == leftHalfA.relative(to: v) })
     late.open()
     await rig.waitForEvents(2)
-    #expect(await !rig.engine.touched.contains(handle))
+    #expect(await !rig.isTouched())
     #expect(await rig.engine.memory.read().lastKnown(handle, setup: setup)?.relative == leftHalfA.relative(to: v))
 
     // The title that matches comes within the second, and the user has not touched the window.
@@ -2093,7 +2046,7 @@ private func recordNewerLastKnown(
     await rig.fake.waitUntil { _ in resolving.waiterCount == 1 }
     late.open()
     await rig.waitForEvents(1)
-    #expect(await !rig.engine.touched.contains(handle))
+    #expect(await !rig.isTouched())
     resolving.open()
     await rig.waitForFrame(rightHalfA)
 }
@@ -2113,7 +2066,8 @@ private func recordNewerLastKnown(
     resolving.open()
     await acting.value
     #expect(await rig.frame() == dragged)
-    #expect(await rig.log == ["begin", "end"])
+    // Interrupted before Apply began: no session was opened.
+    #expect(await rig.log == [])
     await rig.waitForReport { $0 == .failure(.movedDuringPlacement, display: displayA.identity) }
     #expect(await rig.engine.memory.read().restore[handle]?.chainOpen != true)
 }
@@ -2141,5 +2095,143 @@ private func recordNewerLastKnown(
     await rig.waitForEvents(2)
     #expect(await rig.frame() == dragged)
     #expect(await rig.log == ["begin", "end"])
-    #expect(await rig.engine.touched.contains(handle))
+    #expect(await rig.isTouched())
+}
+
+// MARK: One owner per window: cases 1-6
+
+private let dragged = rect(300, 300, 400, 300)
+
+/// The user drags a window Tafl placed, then an action runs; Resolve reads the dragged frame. With
+/// `eventReadFirst`, the drag's own notification reads the window after the action's reads and its
+/// result is held until Resolve has its reading; otherwise it reads while Resolve waits for the
+/// displays.
+private func dragThenAct(eventReadFirst: Bool) async -> (Rig, RestoreRecord?) {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    await rig.engine.perform(.leftHalf)
+    await rig.fake.configure { $0.windows[handle]?.frame = dragged }
+    let acting: Task<Void, Never>
+    if eventReadFirst {
+        // The action reads the focused window first; Resolve's read is the call after it.
+        let next = await rig.fake.snapshotCount
+        let resolveRead = await rig.fake.pauseSnapshot(at: next + 1)
+        acting = Task { await rig.engine.perform(.rightHalf) }
+        await rig.fake.waitUntil { _ in resolveRead.waiterCount == 1 }
+        let late = FakeGate()
+        await rig.fake.configure { $0.snapshotLateGate = late }
+        resolveRead.open()
+        await rig.fake.waitUntil { _ in late.waiterCount == 1 }
+        await rig.emit(.windowMoved(handle))
+        await rig.waitForEvents(1)
+        late.open()
+    } else {
+        let resolving = FakeGate()
+        await rig.fake.configure { $0.displaysGate = resolving }
+        acting = Task { await rig.engine.perform(.rightHalf) }
+        await rig.fake.waitUntil { _ in resolving.waiterCount == 1 }
+        await rig.emit(.windowMoved(handle))
+        await rig.waitForEvents(1)
+        resolving.open()
+    }
+    await acting.value
+    return (rig, await rig.engine.memory.read().restore[handle])
+}
+
+@Test(.timeLimit(.minutes(1)), arguments: [false, true])
+func anActionAfterADragStartsANewChainAtTheDraggedFrame(eventReadFirst: Bool) async {
+    let (rig, restore) = await dragThenAct(eventReadFirst: eventReadFirst)
+    #expect(await rig.frame() == rightHalfA)
+    #expect(restore?.frame == dragged)
+    #expect(restore?.chainOpen == true)
+    await rig.engine.perform(.restore)
+    #expect(await rig.frame() == dragged)
+}
+
+/// A new window the user moves while its placement waits to read it. With `eventReadFirst`, the
+/// move's read is done before the placement reads; otherwise its result is held until then.
+@Test(.timeLimit(.minutes(1)), arguments: [false, true])
+func aNewWindowMovedBeforeItsPlacementReadsItKeepsTheMovedFrame(eventReadFirst: Bool) async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = window(1, frame: start)
+    let placing = FakeGate()
+    await rig.fake.configure { $0.windows[created.handle] = created; $0.snapshotGate = placing }
+    await rig.emit(.windowCreated(created))
+    await rig.fake.waitUntil { _ in placing.waiterCount == 1 }
+    if eventReadFirst {
+        await rig.fake.configure { $0.windows[handle]?.frame = dragged }
+        await rig.emit(.windowMoved(handle))
+        await rig.waitForEvents(1)
+        placing.open()
+        await rig.waitForEvents(2)
+    } else {
+        let late = FakeGate()
+        await rig.fake.configure { $0.windows[handle]?.frame = dragged; $0.snapshotLateGate = late }
+        await rig.emit(.windowMoved(handle))
+        await rig.fake.waitUntil { _ in late.waiterCount == 1 }
+        placing.open()
+        await rig.waitForEvents(1)
+        late.open()
+        await rig.waitForEvents(2)
+    }
+    #expect(await rig.frame() == dragged)
+    #expect(await rig.isTouched())
+    let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA]))
+    #expect(known?.relative == dragged.relative(to: v))
+}
+
+@Test(.timeLimit(.minutes(1))) func aDragAfterAWriteFailedMidwayIsAnExternalChange() async {
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    // Across displays the size goes first: begin 0, size 1, read 2, position 3, end 4. The position fails.
+    await rig.fake.configure { $0.beforeCall = [3: { $0.canMove = false }] }
+    await rig.engine.perform(.displayRight)
+    #expect(await rig.log == ["begin", "size 800x600", "read", "position 1200,150", "end"])
+    #expect(await rig.engine.memory.read().restore[handle]?.chainOpen == true)
+    await rig.fake.configure { $0.windows[handle]?.frame = dragged }
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(1)
+    #expect(await rig.engine.memory.read().restore[handle]?.chainOpen == false)
+    #expect(await rig.isTouched())
+}
+
+@Test(.timeLimit(.minutes(1))) func aNewWindowWithADestroyedWindowsIDStartsFresh() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    await rig.engine.perform(.leftHalf)
+    await rig.fake.configure { $0.windows[handle] = nil }
+    await rig.emit(.windowDestroyed(handle))
+    await rig.waitForEvents(1)
+    #expect(await rig.engine.memory.read().placed[handle] == nil)
+    // A new window gets the destroyed one's id.
+    await rig.fake.configure { $0.windows[handle] = window(1, frame: start) }
+    await rig.engine.perform(.rightHalf)
+    #expect(await rig.frame() == rightHalfA)
+    let memory = await rig.engine.memory.read()
+    #expect(memory.placed[handle]?.action == .rightHalf)
+    #expect(memory.restore[handle]?.frame == start)
+    #expect(memory.lastKnown(handle, setup: DisplaySetup([displayA]))?.relative == rightHalfA.relative(to: v))
+}
+
+@Test(.timeLimit(.minutes(1))) func aFirstNotificationAtTheSeededFrameKeepsAPlacedRecordFromDisk() async throws {
+    var saved = WindowMemory(lastDisplays: bothDisplays, savedAt: saveDate)
+    saved.openChain(handle, before: start, on: displayA)
+    saved.recordPlaced(handle, PlacedRecord(
+        action: .leftHalf, layout: nil, placement: .leftHalf, cycleStep: 0, achieved: leftHalfA, display: displayA.identity
+    ))
+    let (store, directory) = try storeHolding(saved)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: leftHalfA)], store: store) {
+        $0.launched = [100: saveDate.addingTimeInterval(-60)]
+    }
+    await rig.engine.start(config: config())
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(1)
+    #expect(await rig.engine.memory.read().placed[handle]?.achieved == leftHalfA)
+    // Still placed by left-half, so pressing it again is a repeat: the right half of the other display.
+    await rig.engine.perform(.leftHalf)
+    #expect(await rig.frame() == rect(2000, 0, 1000, 1550))
 }

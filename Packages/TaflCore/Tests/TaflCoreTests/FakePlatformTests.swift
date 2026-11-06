@@ -199,10 +199,25 @@ private final class Taken: Sendable {
     #expect(failure == .noWindow)
 }
 
+@Test func anAnnouncementAndAnEndReachTheNoticesAsTheirEventsAreEmitted() async {
+    let w = window(1, frame: rect(0, 0, 100, 100))
+    let (fake, _) = await makeFake(w)
+    let owner = WindowOwner(adjustments: [])
+    _ = await fake.startObserving(notices: owner)
+    await fake.emit(.windowCreated(w))
+    #expect(owner.knows(w.handle))
+    await fake.emit(.windowDestroyed(w.handle))
+    #expect(!owner.knows(w.handle))
+    await fake.announce(w)
+    #expect(owner.knows(w.handle))
+    await fake.emit(.appQuit(pid: w.handle.pid))
+    #expect(!owner.knows(w.handle))
+}
+
 @Test func eventsObservationAndUnobservedApps() async {
     let w = window(1, frame: rect(0, 0, 100, 100))
     let (fake, _) = await makeFake(w)
-    _ = await fake.startObserving()
+    _ = await fake.startObserving(notices: WindowOwner(adjustments: []))
     await fake.stopObserving()
     #expect(await fake.startObservingCount == 1)
     #expect(await fake.stopObservingCount == 1)

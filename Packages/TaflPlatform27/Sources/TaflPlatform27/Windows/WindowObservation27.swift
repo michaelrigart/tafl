@@ -18,8 +18,11 @@ final class WindowObservation27: Sendable {
         var isLaunching: @Sendable (Int32) -> Bool
         var untilFinishedLaunching: @Sendable (Int32) async -> Void
         var register: @Sendable (AXObserverHub, Int32, String?, @escaping AXObserverHub.Handler) -> [String: AXError]
-        /// The app's windows, registered.
-        var windows: @Sendable (AppInfo27) async -> [WindowCatalog27.Entry]
+        /// The app's windows, registered, each handed to `announce` inside the read that found it.
+        var windows: @Sendable (
+            AppInfo27,
+            _ announce: @escaping @Sendable (WindowCatalog27.Entry) -> WindowRegistry.Announcement
+        ) async -> [Found]
 
         static func live(catalog: WindowCatalog27) -> Environment {
             Environment(
@@ -30,8 +33,16 @@ final class WindowObservation27: Sendable {
                 isLaunching: { LaunchWait.isLaunching(pid: $0) },
                 untilFinishedLaunching: { await LaunchWait.untilFinished(pid: $0) },
                 register: { hub, pid, bundleID, handler in hub.observe(pid: pid, bundleID: bundleID, handler: handler) },
-                windows: { app in await catalog.windows(of: app) { $0 } })
+                windows: { app, announce in
+                    await catalog.windows(of: app) { Found(entry: $0, announcement: announce($0)) }
+                })
         }
+    }
+
+    /// A window a catch-up found, and what announcing it came to.
+    struct Found: Sendable {
+        var entry: WindowCatalog27.Entry
+        var announcement: WindowRegistry.Announcement
     }
 
     enum Outcome {
@@ -62,19 +73,24 @@ final class WindowObservation27: Sendable {
     private let registry: WindowRegistry
     private let translator: WindowEventTranslator
     private let events: AsyncStream<PlatformEvent>.Continuation
+    private let notices: any WindowNotices
     private let environment: Environment
     private let state = Mutex(State())
 
     init(
         axQueue: AXQueue, registry: WindowRegistry, catalog: WindowCatalog27,
         events: AsyncStream<PlatformEvent>.Continuation,
+        notices: any WindowNotices,
         environment: Environment? = nil
     ) {
         self.axQueue = axQueue
         self.registry = registry
         self.events = events
+        self.notices = notices
         self.environment = environment ?? .live(catalog: catalog)
-        translator = WindowEventTranslator(registry: registry, reader: .live(axQueue: axQueue), events: events)
+        translator = WindowEventTranslator(
+            registry: registry, reader: .live(axQueue: axQueue), events: events, notices: notices
+        )
     }
 
     deinit {
@@ -158,7 +174,8 @@ final class WindowObservation27: Sendable {
         }
     }
 
-    /// Ends the app's claim, so nothing still in flight for it reports or registers, and frees what it held.
+    /// Ends the app's claim, so nothing still in flight for it reports or registers, and frees what it
+    /// held. The notices hear of the quit on the app's queue, after the reads already there.
     func appQuit(pid: Int32) async {
         // Under the lock `publish` takes: nothing found under the claim arrives after the quit.
         let wasClaimed = state.withLock { state in
@@ -166,9 +183,11 @@ final class WindowObservation27: Sendable {
             state.owed.remove(pid)
             return state.claims.removeValue(forKey: pid) != nil
         }
-        if wasClaimed {
-            let hub = hub
-            await axQueue.run(pid: pid) { hub.stopObserving(pid: pid) }
+        let hub = hub
+        let notices = notices
+        await axQueue.run(pid: pid) {
+            if wasClaimed { hub.stopObserving(pid: pid) }
+            notices.quit(pid: pid)
         }
         translator.closeLane(pid: pid)
         registry.removeApp(pid: pid)
@@ -272,21 +291,19 @@ final class WindowObservation27: Sendable {
     }
 
     /// Announces the windows the app has, which no notification will: each one not yet announced,
-    /// whoever registered it, in the registry's one announcing step under this claim. Only a catch-up
-    /// whose every step ran under its current claim pays the launch's debt. A step under an ended
-    /// claim (the app quit, or observing restarted) announces nothing and marks nothing. The
-    /// catch-up's registrations stay while the app runs, for whoever adopts them; once the app is gone
-    /// it withdraws those it made itself.
+    /// whoever registered it, in the registry's one announcing step under this claim, inside the read
+    /// that found it. Only a catch-up whose every step ran under its current claim pays the launch's
+    /// debt. A step under an ended claim (the app quit, or observing restarted) announces nothing and
+    /// marks nothing. The catch-up's registrations stay while the app runs, for whoever adopts them;
+    /// once the app is gone it withdraws those it made itself.
     private func catchUp(_ app: AppInfo27, claim: Int) async {
-        let found = await environment.windows(app)
-        var refused = false
-        for entry in found {
-            let step = registry.announce(entry.snapshot) { event in self.publish([event], pid: app.pid, claim: claim) }
-            if step == .refused { refused = true }
+        let registry = registry
+        let found = await environment.windows(app) { entry in
+            registry.announce(entry.snapshot) { event in self.publish([event], pid: app.pid, claim: claim) }
         }
-        if !refused { payDebt(of: app.pid, claim: claim) }
+        if !found.contains(where: { $0.announcement == .refused }) { payDebt(of: app.pid, claim: claim) }
         if !isCurrent(pid: app.pid, claim: claim), !environment.isRunning(app.pid) {
-            registry.withdraw(found.filter(\.isNew).map { ($0.snapshot.handle, $0.element) })
+            registry.withdraw(found.map(\.entry).filter(\.isNew).map { ($0.snapshot.handle, $0.element) })
         }
     }
 
@@ -304,11 +321,15 @@ final class WindowObservation27: Sendable {
     }
 
     /// Publishes what was found under a claim, only while the claim holds. It takes the lock `appQuit`
-    /// and `end` take, so nothing an ended claim found arrives after the app's quit or a restart.
+    /// and `end` take, so nothing an ended claim found arrives after the app's quit or a restart. An
+    /// announcement reaches the notices before its event.
     private func publish(_ found: [PlatformEvent], pid: Int32, claim: Int) -> Bool {
         state.withLock { state in
             guard state.isActive, state.claims[pid]?.id == claim else { return false }
-            for event in found { events.yield(event) }
+            for event in found {
+                if case .windowCreated(let snapshot) = event { notices.announced(snapshot) }
+                events.yield(event)
+            }
             return true
         }
     }

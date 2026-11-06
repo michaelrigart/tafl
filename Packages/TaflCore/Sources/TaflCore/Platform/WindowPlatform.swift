@@ -84,9 +84,10 @@ public protocol WindowPlatform: Sendable {
     func isAccessibilityGranted() async -> Bool
     func capabilities() async -> [CapabilityState]
     var events: AsyncStream<PlatformEvent> { get }
-    /// Starts observing every running app. The apps whose events could not be observed are the
-    /// result; one that fails later arrives as a `.unobservable` event.
-    func startObserving() async -> [UnobservableApp]
+    /// Starts observing every running app, telling `notices` of each window's announcement and end,
+    /// and of each app's quit, in the app's order. The apps whose events could not be observed are
+    /// the result; one that fails later arrives as a `.unobservable` event.
+    func startObserving(notices: any WindowNotices) async -> [UnobservableApp]
     /// Stops observing. `events` stays open: the engine keeps consuming it across a restart.
     func stopObserving() async
 }

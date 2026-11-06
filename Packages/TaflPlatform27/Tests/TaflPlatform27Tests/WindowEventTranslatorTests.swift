@@ -19,19 +19,20 @@ private func attributes(subrole: String = "AXStandardWindow") -> WindowAttribute
 }
 
 /// A reader for elements named by the pid they were made from; `untracked` and `gone` shape what it answers,
-/// and `gate` holds back every read for one app until the test opens it.
+/// and `gate` holds back every read for one app until the test opens it. Work for an app's queue runs at once.
 private func reader(
     untracked: Set<pid_t> = [], gone: Set<pid_t> = [], gatedApp: pid_t? = nil, gate: AsyncStream<Void>? = nil
 ) -> WindowReader27 {
     WindowReader27(
-        readTracked: { element, pid, _ in
+        readTracked: { element, pid, _, then in
             if pid == gatedApp, let gate { for await _ in gate { break } }
             let elementPID = AXWindowAccess.pid(element.element) ?? 0
             guard !untracked.contains(elementPID) else { return nil }
-            return ElementRead(element: element, attributes: attributes(), windowID: ResolvedWindowID(id: UInt32(elementPID), by: .privateSymbol))
+            return then(ElementRead(element: element, attributes: attributes(), windowID: ResolvedWindowID(id: UInt32(elementPID), by: .privateSymbol)))
         },
         title: { _, _ in "Fresh" },
-        app: { pid in gone.contains(pid) ? nil : AppInfo27(pid: pid, bundleID: nil, name: "App", isHidden: false) })
+        app: { pid in gone.contains(pid) ? nil : AppInfo27(pid: pid, bundleID: nil, name: "App", isHidden: false) },
+        afterReads: { _, work in work() })
 }
 
 private func handle(_ pid: pid_t, _ windowID: pid_t) -> WindowHandle {
@@ -41,11 +42,12 @@ private func handle(_ pid: pid_t, _ windowID: pid_t) -> WindowHandle {
 private struct Harness {
     let translator: WindowEventTranslator
     let registry = WindowRegistry()
+    let notices = RecordedNotices()
     var iterator: AsyncStream<PlatformEvent>.Iterator
 
     init(_ reader: WindowReader27) {
         let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
-        translator = WindowEventTranslator(registry: registry, reader: reader, events: continuation)
+        translator = WindowEventTranslator(registry: registry, reader: reader, events: continuation, notices: notices)
         iterator = stream.makeAsyncIterator()
     }
 
@@ -99,6 +101,8 @@ func aCreatedWindowIsAnnouncedOnceAndItsTitleIsReadFresh() async {
     #expect(snapshot.handle == handle(10, 1010))
     #expect(snapshot.title == "Doc")
     #expect(await harness.next() == .titleChanged(handle(10, 1010), "Fresh"))
+    // The read that found the window handed its announcement to the notices, once.
+    #expect(harness.notices.all == [.announced(handle(10, 1010))])
     harness.translator.closeAll()
 }
 
@@ -113,6 +117,7 @@ func aWindowTheCatchUpAlreadyAnnouncedIsNotAnnouncedByItsNotification() async {
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
     #expect(await harness.next() == .windowMoved(handle(10, 1010)))
+    #expect(harness.notices.all.isEmpty)
     harness.translator.closeAll()
 }
 
@@ -144,6 +149,8 @@ func aKnownWindowIsMovedResizedAndDestroyedInOrderAndForgotten() async {
     #expect(await harness.next() == .windowResized(handle(10, 1010)))
     #expect(await harness.next() == .windowDestroyed(handle(10, 1010)))
     #expect(harness.registry.knownHandle(of: box(1010)) == nil)
+    // Moves and resizes are no announcements; the end reaches the notices through the app's queue.
+    #expect(harness.notices.all == [.destroyed(handle(10, 1010))])
     harness.translator.closeAll()
 }
 

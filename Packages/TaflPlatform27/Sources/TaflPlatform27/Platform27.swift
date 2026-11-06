@@ -11,6 +11,7 @@ final class Platform27: WindowPlatform {
     private let axQueue = AXQueue()
     private let registry = WindowRegistry()
     private let leases = WriteLeases()
+    private let notices = NoticeRelay()
     private let catalog: WindowCatalog27
     private let observation: WindowObservation27
     private let watcher = Mutex<WorkspaceWatcher27?>(nil)
@@ -22,7 +23,9 @@ final class Platform27: WindowPlatform {
         events = stream
         eventContinuation = continuation
         catalog = WindowCatalog27(registry: registry, axQueue: axQueue)
-        observation = WindowObservation27(axQueue: axQueue, registry: registry, catalog: catalog, events: continuation)
+        observation = WindowObservation27(
+            axQueue: axQueue, registry: registry, catalog: catalog, events: continuation, notices: notices
+        )
         reconfiguration = ReconfigurationMonitor27 { phase, _ in
             continuation.yield(phase == .began ? .reconfigurationBegan : .reconfigurationEnded)
         }
@@ -145,7 +148,8 @@ final class Platform27: WindowPlatform {
 
     // MARK: Observing
 
-    func startObserving() async -> [UnobservableApp] {
+    func startObserving(notices: any WindowNotices) async -> [UnobservableApp] {
+        self.notices.relay(to: notices)
         observation.end()
         observation.begin()
         let observation = observation

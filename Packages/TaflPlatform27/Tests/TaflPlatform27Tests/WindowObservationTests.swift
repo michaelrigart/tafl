@@ -96,6 +96,7 @@ private struct ObservationHarness {
     let isRunning = Flag(true)
     /// How many catch-ups have started.
     let announcements = Counter()
+    let notices = RecordedNotices()
 
     /// `outcomes` answers each registration in turn and then repeats its last answer. A catch-up
     /// registers the windows `found` names, once `catchUpGate` releases it when there is one.
@@ -112,6 +113,7 @@ private struct ObservationHarness {
         observation = WindowObservation27(
             axQueue: axQueue, registry: registry, catalog: WindowCatalog27(registry: registry, axQueue: axQueue),
             events: continuation,
+            notices: notices,
             environment: .init(
                 isRunning: { _ in isRunning.isSet },
                 isLaunching: { _ in isLaunching },
@@ -120,17 +122,18 @@ private struct ObservationHarness {
                     let index = registrations.increment()
                     return outcomes[min(index, outcomes.count - 1)]
                 },
-                windows: { app in
+                windows: { app, announce in
                     _ = announcements.increment()
                     if let catchUpGate { await catchUpGate.wait() }
-                    var entries: [WindowCatalog27.Entry] = []
+                    var steps: [WindowObservation27.Found] = []
                     for id in found {
                         let registration = registry.register(
                             windowBox(id), pid: app.pid, windowID: ResolvedWindowID(id: id, by: .privateSymbol))
                         let snapshot = Windows27.snapshot(handle: registration.handle, app: app, attributes: catchUpAttributes)
-                        entries.append(WindowCatalog27.Entry(snapshot: snapshot, element: windowBox(id), isNew: registration.isNew))
+                        let entry = WindowCatalog27.Entry(snapshot: snapshot, element: windowBox(id), isNew: registration.isNew)
+                        steps.append(WindowObservation27.Found(entry: entry, announcement: announce(entry)))
                     }
-                    return entries
+                    return steps
                 }))
         self.continuation = continuation
         self.registrations = registrations
@@ -273,6 +276,7 @@ func aQueryThatMetAnAppBeforeItQuitRegistersAndReportsNothing() async {
         axQueue: AXQueue(), registry: WindowRegistry(),
         catalog: WindowCatalog27(registry: WindowRegistry(), axQueue: AXQueue()),
         events: AsyncStream<PlatformEvent>.makeStream().continuation,
+        notices: RecordedNotices(),
         environment: .init(
             isRunning: { _ in flag.isSet },
             isLaunching: { _ in false },
@@ -281,7 +285,7 @@ func aQueryThatMetAnAppBeforeItQuitRegistersAndReportsNothing() async {
                 flag.isSet = false
                 return timeout
             },
-            windows: { _ in [] }))
+            windows: { _, _ in [] }))
     observation.begin()
     guard case .observed = await observation.attempt(launching) else {
         Issue.record("a quit app must not be reported")
@@ -307,6 +311,7 @@ func aLaunchMissingOnlyTitleChangesStillAnnouncesItsWindows() async {
     #expect(snapshot.handle == foundWindow)
     #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.titleChanged]))
     #expect(await harness.next() == .reconfigurationEnded)
+    #expect(harness.notices.all == [.announced(foundWindow)])
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -340,6 +345,8 @@ func aCatchUpForAnAppThatQuitMeanwhilePublishesAndKeepsNothing() async {
     #expect(await harness.next() == .appQuit(pid: 4242))
     #expect(await harness.next() == .reconfigurationEnded)
     #expect(harness.registry.knownHandle(of: windowBox(5001)) == nil)
+    // Nothing found under the ended claim was announced; the quit reached the notices.
+    #expect(harness.notices.all == [.quit(4242)])
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -389,12 +396,13 @@ func aLaunchAQueryMetFirstStillAnnouncesItsWindows() async {
 
 /// Reads any element as a standard window whose id is the pid the element was made from.
 private let echoReader = WindowReader27(
-    readTracked: { element, _, _ in
+    readTracked: { element, _, _, then in
         let id = UInt32(AXWindowAccess.pid(element.element) ?? 0)
-        return ElementRead(element: element, attributes: catchUpAttributes, windowID: ResolvedWindowID(id: id, by: .privateSymbol))
+        return then(ElementRead(element: element, attributes: catchUpAttributes, windowID: ResolvedWindowID(id: id, by: .privateSymbol)))
     },
     title: { _, _ in "Doc" },
-    app: { pid in AppInfo27(pid: pid, bundleID: "com.example.Slow", name: "Slow", isHidden: false) })
+    app: { pid in AppInfo27(pid: pid, bundleID: "com.example.Slow", name: "Slow", isHidden: false) },
+    afterReads: { _, work in work() })
 
 private func createdEvent(_ id: UInt32) -> AXObserverHub.Event {
     AXObserverHub.Event(pid: 4242, bundleID: nil, notification: kAXWindowCreatedNotification, element: windowBox(id).element)
@@ -408,7 +416,7 @@ private func movedEvent(_ id: UInt32) -> AXObserverHub.Event {
 func aWindowTheCatchUpAnnouncedFirstIsNotAnnouncedAgainByItsCreation() async {
     var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
     let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
-    let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation)
+    let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation, notices: harness.notices)
     var translated = stream.makeAsyncIterator()
     await harness.observation.appLaunched(launching)
     translator.enqueue(createdEvent(5001))
@@ -426,7 +434,7 @@ func aWindowTheCatchUpAnnouncedFirstIsNotAnnouncedAgainByItsCreation() async {
 func aWindowItsCreationAnnouncedFirstIsNotAnnouncedAgainByTheCatchUp() async {
     var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
     let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
-    let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation)
+    let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation, notices: harness.notices)
     var translated = stream.makeAsyncIterator()
     translator.enqueue(createdEvent(5001))
     guard case .windowCreated? = await translated.next() else {
@@ -468,7 +476,7 @@ func aCatchUpOvertakenByARestartAfterItsEnumerationLeavesExactlyOneAnnouncement(
     #expect(await harness.next() == .reconfigurationEnded)
     // The mark stays: the window's own creation notification announces nothing more.
     let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
-    let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation)
+    let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation, notices: harness.notices)
     var translated = stream.makeAsyncIterator()
     translator.enqueue(createdEvent(5001))
     translator.enqueue(movedEvent(5001))
@@ -495,4 +503,5 @@ func twoCatchUpsRacingOnOneWindowAnnounceItOnce() async {
         if case .windowCreated = event { created += 1 }
     }
     #expect(created == 1)
+    #expect(harness.notices.all == [.announced(foundWindow)])
 }

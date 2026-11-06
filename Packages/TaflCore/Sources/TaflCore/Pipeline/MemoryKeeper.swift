@@ -1,65 +1,26 @@
 import Foundation
 
-/// Windows that were destroyed, and processes that quit: their memory is never written again.
-struct GoneWindows: Sendable {
-    private var windows: Set<WindowHandle> = []
-    private var processes: Set<Int32> = []
-
-    func contains(_ window: WindowHandle) -> Bool {
-        windows.contains(window) || processes.contains(window.pid)
-    }
-
-    mutating func destroyed(_ window: WindowHandle) {
-        windows.insert(window)
-    }
-
-    /// The process covers its windows from now on.
-    mutating func quit(_ pid: Int32) {
-        processes.insert(pid)
-        windows = windows.filter { $0.pid != pid }
-    }
-
-    /// A new process has the id of one that quit.
-    mutating func started(_ pid: Int32) {
-        processes.remove(pid)
-    }
-}
-
-/// Names a window's last-known frame for one display setup.
-struct LastKnownKey: Hashable, Sendable {
-    var window: WindowHandle
-    var setup: DisplaySetup
-}
-
-/// What the memory holds that belongs to no window, so it changes without a reading.
+/// What the memory holds that belongs to no window.
 public struct GeneralMemory: Sendable {
     public var activeLayout: String?
     /// The displays, with their geometry, when Tafl last ran or last settled a change.
     public var lastDisplays: [Display]
 }
 
-/// Owns the window memory and its store. It writes only after a load that left the file
-/// replaceable, so a file written by another version, or one that can't be read, is never
-/// overwritten. It also keeps which windows are gone, so no path writes their memory again. A
-/// window's memory changes only from a reading of it that no newer one has overtaken: its
-/// placement against the window's newest reading, which the writer shares, and each last-known
-/// frame against the newest recorded for that setup.
+/// Keeps the window memory's store. It writes only after a load that left the file replaceable,
+/// so a file written by another version, or one that can't be read, is never overwritten. The
+/// memory of each window lives in the window owner, which alone changes it; the keeper loads it
+/// there and saves it from there, with what belongs to no window.
 public actor MemoryKeeper {
-    private var memory: WindowMemory
+    private let owner: WindowOwner
     private let store: MemoryStore?
     private var mayWrite = false
-    private var gone = GoneWindows()
-    private let readings: WindowReadings
-    private var lastKnownReadings = ReadingGate<LastKnownKey>()
+    private var general = GeneralMemory(activeLayout: nil, lastDisplays: [])
+    private var savedAt: Date?
 
-    public init(memory: WindowMemory = WindowMemory(), store: MemoryStore? = nil) {
-        self.init(memory: memory, store: store, readings: WindowReadings())
-    }
-
-    init(memory: WindowMemory = WindowMemory(), store: MemoryStore? = nil, readings: WindowReadings) {
-        self.memory = memory
+    public init(owner: WindowOwner, store: MemoryStore? = nil) {
+        self.owner = owner
         self.store = store
-        self.readings = readings
     }
 
     /// Loads from the store. A loaded memory replaces the current one; every other result leaves
@@ -72,94 +33,36 @@ public actor MemoryKeeper {
         let result = store.load()
         switch result {
         case .loaded(let loaded):
-            memory = loaded
+            adopt(loaded)
             mayWrite = true
         case .fresh, .recoveredFromCorrupt:
-            memory = WindowMemory()
+            adopt(WindowMemory())
             mayWrite = true
         case .refused, .unavailable:
-            memory = WindowMemory()
+            adopt(WindowMemory())
             mayWrite = false
         }
         return result
     }
 
+    private func adopt(_ memory: WindowMemory) {
+        owner.loadWindows(from: memory)
+        general = GeneralMemory(activeLayout: memory.activeLayout, lastDisplays: memory.lastDisplays)
+        savedAt = memory.savedAt
+    }
+
+    /// The whole memory as it stands.
     public func read() -> WindowMemory {
-        memory
-    }
-
-    /// Changes where Tafl placed a window, and its restore chain, from a reading of it taken at
-    /// `readAt`: only when no newer reading of the window has been accepted, and only for a window
-    /// that is not gone. The change reaches only that window's entries. Returns its result, or nil
-    /// when the reading was refused; the newer state stands.
-    @discardableResult
-    public func recordPlacement<T>(
-        _ window: WindowHandle,
-        readAt: ContinuousClock.Instant,
-        _ change: (inout WindowPlacement) -> T
-    ) -> T? {
-        guard !gone.contains(window), readings.accepts(window, readAt: readAt) else { return nil }
-        var placement = memory.placement(of: window)
-        let result = change(&placement)
-        memory.setPlacement(placement, of: window)
-        return result
-    }
-
-    /// Records a window's last-known frame for a setup from a reading of it taken at `readAt`,
-    /// when `applies` holds, no newer reading of the window for that setup has been recorded, and
-    /// the window is not gone. A reading that is not recorded leaves the next one free to be.
-    /// Returns whether the frame was recorded.
-    @discardableResult
-    public func recordLastKnown(
-        _ window: WindowHandle,
-        frame: ScreenRect,
-        display: Display,
-        setup: DisplaySetup,
-        readAt: ContinuousClock.Instant,
-        when applies: @Sendable () -> Bool = { true }
-    ) -> Bool {
-        let key = LastKnownKey(window: window, setup: setup)
-        guard !gone.contains(window), applies(), lastKnownReadings.admit(key, readAt: readAt) else { return false }
-        memory.recordLastKnown(window, frame: frame, display: display, setup: setup)
-        return true
+        var memory = owner.windowMemory
+        memory.activeLayout = general.activeLayout
+        memory.lastDisplays = general.lastDisplays
+        memory.savedAt = savedAt
+        return memory
     }
 
     /// Changes what belongs to no window: the active layout and the displays.
     public func update<T>(_ change: (inout GeneralMemory) -> T) -> T {
-        var general = GeneralMemory(activeLayout: memory.activeLayout, lastDisplays: memory.lastDisplays)
-        let result = change(&general)
-        memory.activeLayout = general.activeLayout
-        memory.lastDisplays = general.lastDisplays
-        return result
-    }
-
-    /// Drops what a loaded memory holds for these processes' windows. The processes are not marked
-    /// gone: a process running now may have one of their ids.
-    public func forgetEntries(of pids: Set<Int32>) {
-        memory.forget(pids: pids)
-    }
-
-    /// The window was destroyed: its memory goes, for good.
-    public func forget(_ window: WindowHandle) {
-        gone.destroyed(window)
-        memory.forget(window)
-        lastKnownReadings.forget { $0.window == window }
-    }
-
-    /// The app quit: the memory of its windows goes, for good.
-    public func forget(pid: Int32) {
-        gone.quit(pid)
-        memory.forget(pid: pid)
-        lastKnownReadings.forget { $0.window.pid == pid }
-    }
-
-    public func knows(_ window: WindowHandle) -> Bool {
-        memory.holdsWindow { $0 == window }
-    }
-
-    /// A process started with this id, so a quit process that had it stands in its way no longer.
-    public func processStarted(pid: Int32) {
-        gone.started(pid)
+        change(&general)
     }
 
     /// Saves nothing when the last load must not be written over, or there is no store. The
@@ -167,7 +70,8 @@ public actor MemoryKeeper {
     /// was made.
     public func save() -> Result<Void, any Error> {
         guard let store, mayWrite else { return .success(()) }
-        memory.savedAt = Date()
+        savedAt = Date()
+        let memory = read()
         return Result { try store.save(memory) }
     }
 }

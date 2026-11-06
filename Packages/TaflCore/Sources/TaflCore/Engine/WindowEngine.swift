@@ -51,12 +51,6 @@ struct RunFailure: Sendable {
     var kind: FailureKind
 }
 
-struct KnownFrame: Sendable {
-    var handle: WindowHandle
-    var frame: ScreenRect
-    var readAt: ContinuousClock.Instant
-}
-
 /// What events said about apps while observation restarted. It is newer than a restart's answer,
 /// so it is laid over it: an app learned meanwhile adds what it is missing, and an app that quit
 /// meanwhile is gone whatever the answer says.
@@ -81,15 +75,9 @@ struct RestartJournal {
     }
 }
 
-/// The latest frame judgement for a window. The token names the window while it lives: a
-/// judgement that finds the token gone belongs to a window that was destroyed or whose app quit.
-struct FrameWork {
-    var token: Int
-    var task: Task<Void, Never>
-}
-
 /// Ties the core together: it turns shortcuts, layouts, platform events, display changes and
-/// config reloads into requests for the pipeline, and keeps the window memory in step.
+/// config reloads into requests for the pipeline. Every reading of a window goes to the window
+/// owner, which keeps each window's state and memory.
 ///
 /// An engine starts once and stops once; make a new one to start again. The state lives here;
 /// the event handling is in `EngineEvents.swift` and the display change handling in
@@ -98,6 +86,7 @@ public actor WindowEngine {
     let platform: any WindowPlatform
     let clock: any TaflClock
     let timing: EngineTiming
+    let owner: WindowOwner
     let writer: FrameWriter
     let queue: WindowRequestQueue
     let memory: MemoryKeeper
@@ -115,36 +104,28 @@ public actor WindowEngine {
     var activeLayout = ActiveLayout()
     var titleCheck = TitleCheck()
     var tracker: SettleTracker
-    /// The displays as of the last settled change, or the last time the engine read them.
-    var knownDisplays: [Display] = []
     /// The displays before the change in progress; nil when no change is in progress.
     var changeOrigin: [Display]?
-    /// True from the start of a change until its rules have run: no last-known frame is recorded.
-    var isFrozen = false
     /// True once the rules have started for the change in progress: the next settle runs them
     /// again even when the setup is back to where it began, since windows may be half way.
     var rulesStarted = false
-    /// Apps whose events macOS would not deliver, and which events those are.
-    var unobservable: [Int32: Set<ObservedEvent>] = [:]
+    /// Apps whose events macOS would not deliver, and which events those are. The owner records no
+    /// last-known frame for an app whose moves or resizes are among them.
+    var unobservable: [Int32: Set<ObservedEvent>] = [:] {
+        didSet { owner.leaveOut(pids: Set(unobservable.keys.filter(isLeftOutOfRules))) }
+    }
     /// The apps already reported, so each is reported once however often it is learned again.
     var reportedUnobservable: Set<Int32> = []
-    /// The windows of each run in progress that are still alive, so a run records nothing for a
-    /// window that was destroyed, or whose app quit, meanwhile.
-    var runWindows: [Int: Set<WindowHandle>] = [:]
-    var nextRunID = 0
     /// While a restart is pending: what events said since the first pending one was asked for.
     var restartJournal: RestartJournal?
     /// The latest restart; the next one waits for it.
     var restartTask: Task<Void, Never>?
-    /// Windows touched since Tafl first saw them: moved by someone else, or the target of a user
-    /// action. Their creation placement and title check leave them where they are.
-    var touched: Set<WindowHandle> = []
     var eventTask: Task<Void, Never>?
     /// The wait for the quiet period. An input replaces it; the rules run is not part of it.
     var settleTask: Task<Void, Never>?
     var rulesTask: Task<Void, Never>?
-    var frameTasks: [WindowHandle: FrameWork] = [:]
-    var nextFrameToken = 0
+    /// Each window's latest frame read after an event: the next waits for it, and so does a title check.
+    var frameReads: [WindowHandle: Task<Void, Never>] = [:]
     var background: [Int: Task<Void, Never>] = [:]
     var nextBackgroundID = 0
     /// How many platform events have been dealt with, for tests to wait on.
@@ -165,20 +146,23 @@ public actor WindowEngine {
         self.platform = platform
         self.clock = clock
         self.timing = timing
-        // The writer and the memory share each window's newest reading.
-        let readings = WindowReadings()
-        writer = FrameWriter(
-            platform: platform, clock: clock, adjustments: adjustments, reapplyDelay: timing.reapplyDelay,
-            readings: readings
-        )
+        owner = WindowOwner(adjustments: adjustments)
+        writer = FrameWriter(platform: platform, clock: clock, owner: owner, reapplyDelay: timing.reapplyDelay)
         queue = WindowRequestQueue()
-        memory = MemoryKeeper(store: store, readings: readings)
-        pipeline = Pipeline(platform: platform, writer: writer, queue: queue, memory: memory, steps: steps)
+        memory = MemoryKeeper(owner: owner, store: store)
+        pipeline = Pipeline(platform: platform, writer: writer, queue: queue, owner: owner, steps: steps)
         tracker = SettleTracker(quietPeriod: timing.quietPeriod)
         (reports, reportSink) = AsyncStream.makeStream(of: EngineReport.self)
     }
 
     public var activeLayoutName: String? { activeLayout.name }
+
+    /// The displays as of the last settled change, or the last time the engine read them: the owner
+    /// records last-known frames for them.
+    var knownDisplays: [Display] { owner.recordingDisplays }
+
+    /// True from the start of a change until its rules have run: no last-known frame is recorded.
+    var isFrozen: Bool { owner.isFrozen }
 
     /// How many running apps Tafl cannot observe fully; an app that quits is no longer counted.
     public var unobservableAppCount: Int { unobservable.values.filter { !$0.isEmpty }.count }
@@ -199,20 +183,19 @@ public actor WindowEngine {
         await memory.update { $0.activeLayout = layout }
 
         // Apps that failed to register are known before any rule or seed looks at a window.
-        learn(await platform.startObserving())
+        learn(await platform.startObserving(notices: owner))
         let current = await platform.displays()
         if let lastSetup = remembered.lastSetup, lastSetup != DisplaySetup(current) {
-            knownDisplays = remembered.lastDisplays
+            owner.freezeLastKnown(on: remembered.lastDisplays)
             changeOrigin = remembered.lastDisplays
-            isFrozen = true
             // From here a reconfiguration freezes and stops the run below.
             listen()
             await applyDisplayChange(from: remembered.lastDisplays, to: current)
         } else {
-            knownDisplays = current
+            owner.recordLastKnown(for: current)
             listen()
-            let since = reconfigurations.current
-            await recordLastKnown(windows: await platform.visibleWindows(take: { $0 }), displays: current, since: since)
+            // The seed: every window's first reading, recorded for the current setup.
+            _ = await platform.visibleWindows(take: owner.take)
             await memory.update { $0.lastDisplays = current }
         }
     }
@@ -223,7 +206,7 @@ public actor WindowEngine {
     private func forgetGoneProcesses() async {
         let saved = await memory.read()
         let gone = saved.goneProcesses(launched: await platform.launchDates(of: saved.windowPids))
-        await memory.forgetEntries(of: gone)
+        owner.forgetEntries(of: gone)
     }
 
     /// A layout application still running finishes against the config in force then: a layout the
@@ -257,7 +240,7 @@ public actor WindowEngine {
         settleTask = nil
         rulesTask = nil
         background = [:]
-        frameTasks = [:]
+        frameReads = [:]
         await queue.stop()
         await platform.stopObserving()
         await writeMemory()
@@ -283,7 +266,7 @@ public actor WindowEngine {
         // A newer restart is waiting and registers the observers itself.
         guard restarts.isCurrent(generation) else { return }
         await platform.stopObserving()
-        let apps = await platform.startObserving()
+        let apps = await platform.startObserving(notices: owner)
         guard restarts.isCurrent(generation), let journal = restartJournal else { return }
         var answer: [Int32: Set<ObservedEvent>] = [:]
         for app in apps { answer[app.pid, default: []].formUnion(app.missing) }
@@ -323,13 +306,12 @@ public actor WindowEngine {
 
     public func perform(_ action: Action) async {
         guard !isStopping else { return }
-        let since = reconfigurations.current
         guard await platform.isAccessibilityGranted() else {
             report(.failure(.permissionMissing, display: nil))
             return
         }
         let focused: WindowSnapshot
-        switch await platform.focusedWindow(take: { $0 }) {
+        switch await platform.focusedWindow(take: owner.take) {
         case .failure(.notResponding):
             report(.failure(.notResponding(app: "The app"), display: nil))
             return
@@ -339,7 +321,7 @@ public actor WindowEngine {
         case .success(let snapshot):
             focused = snapshot
         }
-        touched.insert(focused.handle)
+        owner.touch(focused.handle)
         let pointer = await platform.pointerDisplay()
         let config = config
         let outcome = await pipeline.run(focused.handle, config: config, unplaceable: .explained, plan: { resolved in
@@ -366,11 +348,6 @@ public actor WindowEngine {
             case .nothing: return .nothing
             case .fail(let kind): return .fail(kind)
             }
-        }, landed: { outcome, readAt in
-            if case .placed(let frame) = outcome, let readAt {
-                let known = KnownFrame(handle: focused.handle, frame: frame, readAt: readAt)
-                await self.recordLastKnownLive([known], since: since)
-            }
         })
         if case .failed(let kind) = outcome {
             report(.failure(kind, display: await displayIdentity(of: focused, after: kind)))
@@ -380,7 +357,7 @@ public actor WindowEngine {
     /// The display a failed window is on now. An app that did not answer is not asked again.
     private func displayIdentity(of window: WindowSnapshot, after kind: FailureKind) async -> DisplayIdentity? {
         var frame = window.frame
-        if case .notResponding = kind {} else if case .success(let current) = await platform.snapshot(of: window.handle, take: { $0 }) {
+        if case .notResponding = kind {} else if case .success(let current) = await platform.snapshot(of: window.handle, take: owner.take) {
             frame = current.frame
         }
         return DisplayLocator.display(containing: frame, in: await platform.displays())?.identity
@@ -401,10 +378,10 @@ public actor WindowEngine {
         // Taken before anything is read: a reconfiguration that begins during the reads stops the run.
         let since = reconfigurations.current
         let displays = await platform.displays()
-        let windows = await platform.visibleWindows(take: { $0 })
+        let windows = await platform.visibleWindows(take: owner.take)
         guard reconfigurations.isCurrent(since) else { return }
         let requests = LayoutPlanner.requests(definition, windows: windows, displays: displays, source: .layout(name))
-        touched.formUnion(requests.map(\.window))
+        for request in requests { owner.touch(request.window) }
         let count = await run(requests, since: since, application: application)
         guard !isStopping, reconfigurations.isCurrent(since) else { return }
         if layoutApplications.isCurrent(application) { await setActiveLayout(name) }
@@ -430,8 +407,8 @@ public actor WindowEngine {
     /// Runs the requests: apps side by side, each app's windows in order, so an app that does
     /// not answer holds up only its own windows. A reconfiguration that has begun since `since`
     /// stops the run. A layout application's run (`application`) also stops once a newer one has
-    /// begun: it sends no further request, and counts only what it sent. Each request's result is
-    /// recorded as it lands (see `landed`).
+    /// begun: it sends no further request, and counts only what it sent. Each request records its
+    /// result in the window's owner as it ends.
     func run(_ requests: [MoveRequest], since: Int, application: Int? = nil) async -> RunCount {
         var order: [Int32] = []
         var byApp: [Int32: [MoveRequest]] = [:]
@@ -445,9 +422,6 @@ public actor WindowEngine {
         let reconfigurations = reconfigurations
         let layoutApplications = layoutApplications
         let isOvertaken: @Sendable () -> Bool = { application.map { !layoutApplications.isCurrent($0) } ?? false }
-        let runID = nextRunID
-        nextRunID += 1
-        runWindows[runID] = Set(requests.map(\.window))
         let total = await withTaskGroup(of: RunCount.self) { group in
             for pid in order {
                 let batch = byApp[pid] ?? []
@@ -455,23 +429,15 @@ public actor WindowEngine {
                     var count = RunCount()
                     for request in batch {
                         if Task.isCancelled || !reconfigurations.isCurrent(since) || isOvertaken() { break }
-                        // The checks inside the plan close the gap before the pipeline reads its epoch.
-                        let window = request.window
+                        // The checks inside the plan close the gap before Resolve's reading begins the request.
                         let refused = Mutex(false)
-                        let outcome = await pipeline.run(window, config: config, plan: { _ in
+                        let outcome = await pipeline.run(request.window, config: config) { _ in
                             guard reconfigurations.isCurrent(since), !isOvertaken() else {
                                 refused.withLock { $0 = true }
                                 return .nothing
                             }
                             return .request(request)
-                        }, eligible: {
-                            guard request.source.yieldsToTouch else { return true }
-                            return await self.isUntouched(window)
-                        }, moved: {
-                            await self.moved(window, run: runID)
-                        }, landed: { outcome, readAt in
-                            await self.landed(outcome, readAt: readAt, of: request.window, run: runID, since: since)
-                        })
+                        }
                         if !reconfigurations.isCurrent(since) || refused.withLock({ $0 }) { break }
                         switch outcome {
                         case .placed: count.moved += 1
@@ -488,38 +454,7 @@ public actor WindowEngine {
             for await count in group { total.add(count) }
             return total
         }
-        runWindows[runID] = nil
         return total
-    }
-
-    private func isUntouched(_ window: WindowHandle) -> Bool {
-        !touched.contains(window)
-    }
-
-    /// Someone moved a window of a run: a placement Tafl makes on its own leaves it alone from now.
-    private func moved(_ window: WindowHandle, run runID: Int) {
-        if runWindows[runID]?.contains(window) == true { touched.insert(window) }
-    }
-
-    /// What one request of a run did, recorded inside the window's request: where it put the
-    /// window, as last known unless a change is in progress, or that someone moved the window
-    /// meanwhile, so a title check does not place it again. A window destroyed, or whose app quit,
-    /// during the run gets nothing.
-    private func landed(
-        _ outcome: PlacementOutcome,
-        readAt: ContinuousClock.Instant?,
-        of window: WindowHandle,
-        run runID: Int,
-        since: Int
-    ) async {
-        guard runWindows[runID]?.contains(window) == true else { return }
-        switch outcome {
-        case .placed(let frame):
-            guard let readAt else { return }
-            await recordLastKnownLive([KnownFrame(handle: window, frame: frame, readAt: readAt)], since: since)
-        case .failed(.movedDuringPlacement): touched.insert(window)
-        case .unchanged, .failed, .superseded, .skipped: break
-        }
     }
 
     // MARK: Helpers

@@ -61,9 +61,8 @@ private func chain(_ frame: ScreenRect, open: Bool = true) -> RestoreRecord {
 private struct Rig {
     let clock = ManualClock()
     let fake: FakePlatform
-    let readings = WindowReadings()
+    let owner = WindowOwner(adjustments: MacOSAdjustment.measured27)
     let writer: FrameWriter
-    let memory: MemoryKeeper
     let pipeline: Pipeline
 
     init(
@@ -78,11 +77,9 @@ private struct Rig {
             fake.windows[handle] = window(1, frame: start, appName: "Terminal")
             configure(fake)
         }
-        writer = FrameWriter(
-            platform: fake, clock: clock, adjustments: MacOSAdjustment.measured27, reapplyDelay: nil, readings: readings
-        )
-        memory = MemoryKeeper(memory: initial, readings: readings)
-        pipeline = Pipeline(platform: fake, writer: writer, queue: WindowRequestQueue(), memory: memory, steps: steps)
+        writer = FrameWriter(platform: fake, clock: clock, owner: owner, reapplyDelay: nil)
+        pipeline = Pipeline(platform: fake, writer: writer, queue: WindowRequestQueue(), owner: owner, steps: steps)
+        owner.loadWindows(from: initial)
     }
 
     func run(_ request: MoveRequest, gap: Double = 0) async -> PlacementOutcome {
@@ -95,7 +92,7 @@ private struct Rig {
 
     var log: [String] { get async { await fake.callLog } }
     var frame: ScreenRect { get async { await fake.windows[handle]!.frame } }
-    var stored: WindowMemory { get async { await memory.read() } }
+    var stored: WindowMemory { owner.windowMemory }
 }
 
 /// Moves the window as something else would, during the call this hook is set for.
@@ -153,7 +150,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let outcome = await rig.run(request(.named(.rightHalf), source: .action(.rightHalf)))
     #expect(outcome == .failed(.noWindow))
     #expect(await rig.log == [])
-    #expect(await rig.stored.restore[handle] == nil)
+    #expect(rig.stored.restore[handle] == nil)
 }
 
 @Test func focusedSheetCannotMove() async {
@@ -251,12 +248,12 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     }
     #expect(seen.withLock { $0 }?.placed == nil)
     #expect(seen.withLock { $0 }?.isAtAchieved == false)
-    #expect(await rig.stored.restore[handle]?.chainOpen == false)
+    #expect(rig.stored.restore[handle]?.chainOpen == false)
 
     let outcome = await rig.run(request(.named(.rightHalf), source: .action(.rightHalf)))
     #expect(outcome == .placed(rightHalf))
-    #expect(await rig.stored.restore[handle]?.frame == moved)
-    #expect(await rig.stored.restore[handle]?.chainOpen == true)
+    #expect(rig.stored.restore[handle]?.frame == moved)
+    #expect(rig.stored.restore[handle]?.chainOpen == true)
 }
 
 // MARK: Apply
@@ -266,15 +263,15 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let outcome = await rig.run(request(.named(.leftHalf), placement: .leftHalf, source: .action(.leftHalf)))
     #expect(outcome == .unchanged)
     #expect(await rig.log == [])
-    #expect(await rig.stored.placed[handle] == placed(leftHalf))
-    #expect(await rig.stored.restore[handle] == chain(leftHalf))
+    #expect(rig.stored.placed[handle] == placed(leftHalf))
+    #expect(rig.stored.restore[handle] == chain(leftHalf))
 }
 
 @Test func unchangedKeepsAChainThatIsAlreadyOpen() async {
     let memory = WindowMemory(restore: [handle: chain(rect(10, 40, 300, 200))])
     let rig = await Rig(start: leftHalf, memory: memory)
     _ = await rig.run(request(.named(.leftHalf), placement: .leftHalf, source: .action(.leftHalf)))
-    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200)))
+    #expect(rig.stored.restore[handle] == chain(rect(10, 40, 300, 200)))
 }
 
 @Test func theNextPlanSeesAWindowAlreadyPlacedAsPlaced() async {
@@ -293,7 +290,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let rig = await Rig(start: leftHalf)
     let outcome = await rig.run(request(.named(.leftHalf), placement: .leftHalf, source: .displayChange))
     #expect(outcome == .unchanged)
-    #expect(await rig.stored == WindowMemory())
+    #expect(rig.stored == WindowMemory())
 }
 
 @Test func withinAPointOfTheTargetIsUnchanged() async {
@@ -309,34 +306,34 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let rig = await Rig(start: rect(100, 100, 400, 300))
     let outcome = await rig.run(request(.named(.leftHalf), placement: .leftHalf, source: .action(.leftHalf)))
     #expect(outcome == .placed(leftHalf))
-    #expect(await rig.stored.placed[handle] == PlacedRecord(
+    #expect(rig.stored.placed[handle] == PlacedRecord(
         action: .leftHalf, layout: nil, placement: .leftHalf, cycleStep: 0, achieved: leftHalf, display: displayA.identity
     ))
-    #expect(await rig.stored.restore[handle] == chain(rect(100, 100, 400, 300)))
+    #expect(rig.stored.restore[handle] == chain(rect(100, 100, 400, 300)))
 }
 
 @Test func aLayoutRecordsItsNameAndNoAction() async {
     let rig = await Rig(start: rect(100, 100, 400, 300))
     _ = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .layout("work")))
-    let record = await rig.stored.placed[handle]
+    let record = rig.stored.placed[handle]
     #expect(record?.action == nil)
     #expect(record?.layout == "work")
     #expect(record?.placement == .rightHalf)
-    #expect(await rig.stored.restore[handle]?.chainOpen == true)
+    #expect(rig.stored.restore[handle]?.chainOpen == true)
 }
 
 @Test func aNewWindowRecordsTheLayoutAndOpensAChain() async {
     let rig = await Rig(start: rect(100, 100, 400, 300))
     _ = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .newWindow(layout: "work")))
-    #expect(await rig.stored.placed[handle]?.layout == "work")
-    #expect(await rig.stored.restore[handle]?.chainOpen == true)
+    #expect(rig.stored.placed[handle]?.layout == "work")
+    #expect(rig.stored.restore[handle]?.chainOpen == true)
 }
 
 @Test func aSizeCycleRecordsItsStep() async {
     let rig = await Rig(start: rect(100, 100, 400, 300))
     let twoThirds = GridCell(columns: 3, rows: 1, column: 0, row: 0, columnSpan: 2, rowSpan: 1)
     _ = await rig.run(request(.cell(twoThirds), cycleStep: 1, source: .action(.leftHalf)))
-    let record = await rig.stored.placed[handle]
+    let record = rig.stored.placed[handle]
     #expect(record?.cycleStep == 1)
     #expect(record?.placement == nil)
     #expect(record?.achieved == rect(0, 25, 667, 775))
@@ -348,20 +345,20 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
         .named(.leftHalf), on: displayB, placement: .leftHalf, source: .action(.displayRight)
     ))
     #expect(outcome == .placed(rect(1000, 0, 1000, 1550)))
-    let record = await rig.stored.placed[handle]
+    let record = rig.stored.placed[handle]
     #expect(record?.action == .displayRight)
     #expect(record?.placement == .leftHalf)
     #expect(record?.display == displayB.identity)
-    #expect(await rig.stored.restore[handle]?.display == displayA.identity)
+    #expect(rig.stored.restore[handle]?.display == displayA.identity)
 }
 
 @Test func displayChangeDoesNotOpenAChain() async {
     let rig = await Rig(start: leftHalf, displays: [displayA, displayB])
     let outcome = await rig.run(request(.named(.leftHalf), on: displayB, placement: .leftHalf, source: .displayChange))
     #expect(outcome == .placed(rect(1000, 0, 1000, 1550)))
-    #expect(await rig.stored.restore[handle] == nil)
-    #expect(await rig.stored.placed[handle]?.action == nil)
-    #expect(await rig.stored.placed[handle]?.layout == nil)
+    #expect(rig.stored.restore[handle] == nil)
+    #expect(rig.stored.placed[handle]?.action == nil)
+    #expect(rig.stored.placed[handle]?.layout == nil)
 }
 
 @Test func refusedSizeStillRecords() async {
@@ -372,8 +369,8 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(outcome == .failed(.sizeRefused(app: "Terminal")))
     let frame = await rig.frame
     #expect(frame.size == ScreenSize(width: 400, height: 300))
-    #expect(await rig.stored.restore[handle] == chain(rect(100, 100, 400, 300)))
-    let record = await rig.stored.placed[handle]
+    #expect(rig.stored.restore[handle] == chain(rect(100, 100, 400, 300)))
+    let record = rig.stored.placed[handle]
     #expect(record?.achieved == frame)
     #expect(record?.action == .leftHalf)
 }
@@ -386,8 +383,8 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let outcome = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
     #expect(outcome == .failed(.cannotMove))
     let frame = await rig.frame
-    #expect(await rig.stored.placed[handle]?.achieved == frame)
-    #expect(await rig.stored.restore[handle]?.chainOpen == true)
+    #expect(rig.stored.placed[handle]?.achieved == frame)
+    #expect(rig.stored.restore[handle]?.chainOpen == true)
 }
 
 @Test func interruptedRecordsExternalChange() async {
@@ -395,9 +392,25 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let rig = await Rig(start: leftHalf, memory: memory) { $0.beforeCall = [2: dragged] }
     let outcome = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
     #expect(outcome == .failed(.movedDuringPlacement))
-    #expect(await rig.stored.placed[handle] == nil)
-    #expect(await rig.stored.restore[handle]?.chainOpen == false)
-    #expect(await rig.stored.restore[handle]?.frame == rect(10, 40, 300, 200))
+    #expect(rig.stored.placed[handle] == nil)
+    #expect(rig.stored.restore[handle]?.chainOpen == false)
+    #expect(rig.stored.restore[handle]?.frame == rect(10, 40, 300, 200))
+}
+
+@Test func aMoveTheWriterNeverSawStillKeepsItsPlacementOutOfTheMemory() async throws {
+    let rig = await Rig(start: rect(100, 100, 400, 300))
+    // Two writes, each read back, then the session's end (call 5), held while the user drags the window
+    // and something reads it.
+    let ending = await rig.fake.pause(beforeCall: 5)
+    let task = rig.start(request(.named(.leftHalf), placement: .leftHalf, source: .action(.leftHalf)))
+    #expect(await pollUntil { ending.waiterCount == 1 })
+    await rig.fake.configure { $0.windows[handle]?.frame = rect(300, 300, 400, 300) }
+    let owner = rig.owner
+    #expect(try await rig.fake.snapshot(of: handle) { owner.read($0) }.get() == .external)
+    ending.open()
+    #expect(await task.value == .failed(.movedDuringPlacement))
+    #expect(rig.stored.placed[handle] == nil)
+    #expect(rig.stored.restore[handle]?.chainOpen == false)
 }
 
 @Test func noWriteNoChain() async {
@@ -410,8 +423,8 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     gate.open()
     #expect(await task.value == .failed(.noWindow))
     #expect(await rig.log == ["begin"])
-    #expect(await rig.stored.restore[handle] == nil)
-    #expect(await rig.stored.placed[handle] == nil)
+    #expect(rig.stored.restore[handle] == nil)
+    #expect(rig.stored.placed[handle] == nil)
 }
 
 @Test func aReconfigurationBeforeTheWriteCancelsItWithoutAChain() async {
@@ -419,12 +432,12 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let gate = await rig.fake.pause(beforeCall: 0)
     let task = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
     #expect(await pollUntil { gate.waiterCount == 1 })
-    await rig.writer.reconfigurationBegan()
+    rig.owner.reconfigurationBegan()
     gate.open()
     #expect(await task.value == .superseded)
     #expect(await rig.log.contains { $0.hasPrefix("size") || $0.hasPrefix("position") } == false)
-    #expect(await rig.stored.restore[handle] == nil)
-    #expect(await rig.stored.placed[handle] == nil)
+    #expect(rig.stored.restore[handle] == nil)
+    #expect(rig.stored.placed[handle] == nil)
 }
 
 @Test func cancelledRequestKeepsItsRestoreFrame() async {
@@ -439,8 +452,8 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
 
     #expect(await first.value == .superseded)
     #expect(await second.value == .placed(rightHalf))
-    #expect(await rig.stored.restore[handle] == chain(start))
-    #expect(await rig.stored.placed[handle]?.action == .rightHalf)
+    #expect(rig.stored.restore[handle] == chain(start))
+    #expect(rig.stored.placed[handle]?.action == .rightHalf)
 }
 
 @Test func partialWriteCountsAsTafls() async {
@@ -449,14 +462,14 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let gate = await rig.fake.pause(beforeCall: 2)
     let task = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
     #expect(await pollUntil { gate.waiterCount == 1 })
-    await rig.writer.reconfigurationBegan()
+    rig.owner.reconfigurationBegan()
     gate.open()
 
     #expect(await task.value == .superseded)
     let frame = await rig.frame
     #expect(frame != start)
     #expect(frame != leftHalf)
-    let stored = await rig.stored
+    let stored = rig.stored
     #expect(stored.isAtAchievedFrame(handle, frame: frame))
     #expect(stored.placed[handle]?.achieved == frame)
     #expect(stored.placed[handle]?.action == nil)
@@ -472,7 +485,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(outcome == .failed(.cannotMove))
     let frame = await rig.frame
     #expect(frame == rect(0, 25, 500, 775))
-    #expect(await rig.stored.restore[handle] == chain(rect(0, 25, 400, 300)))
+    #expect(rig.stored.restore[handle] == chain(rect(0, 25, 400, 300)))
 }
 
 @Test func failureAfterAWriteKeepsTheChainForTheNextRequest() async {
@@ -484,13 +497,13 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let failed = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
     #expect(failed == .failed(.cannotMove))
     #expect(await rig.frame == rect(0, 25, 500, 775))
-    #expect(await rig.stored.placed[handle] == nil)
-    #expect(await rig.stored.restore[handle] == chain(f0))
+    #expect(rig.stored.placed[handle] == nil)
+    #expect(rig.stored.restore[handle] == chain(f0))
 
     await rig.fake.configure { $0.windows[handle]?.canMove = true }
     let next = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
     #expect(next == .placed(rightHalf))
-    #expect(await rig.stored.restore[handle]?.frame == f0)
+    #expect(rig.stored.restore[handle]?.frame == f0)
 }
 
 @Test func failureBeforeAnyWriteKeepsThePlacedRecord() async {
@@ -503,7 +516,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     await rig.fake.configure { $0.windows[handle] = nil }
     gate.open()
     #expect(await task.value == .failed(.noWindow))
-    #expect(await rig.stored.placed[handle] == placed(start))
+    #expect(rig.stored.placed[handle] == placed(start))
 }
 
 // MARK: Restore
@@ -516,8 +529,8 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
         return .request(request(.frame(target.frame), on: target.display, source: .action(.restore)))
     }
     #expect(outcome == .placed(rect(100, 100, 400, 300)))
-    #expect(await rig.stored.restore[handle] == nil)
-    #expect(await rig.stored.placed[handle]?.action == .restore)
+    #expect(rig.stored.restore[handle] == nil)
+    #expect(rig.stored.placed[handle]?.action == .restore)
 }
 
 @Test func restoreAlreadyThereCompletes() async {
@@ -525,14 +538,14 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let rig = await Rig(start: leftHalf, memory: memory)
     let outcome = await rig.run(request(.frame(leftHalf), source: .action(.restore)))
     #expect(outcome == .unchanged)
-    #expect(await rig.stored.restore[handle] == nil)
-    #expect(await rig.stored.placed[handle]?.action == .restore)
+    #expect(rig.stored.restore[handle] == nil)
+    #expect(rig.stored.placed[handle]?.action == .restore)
 }
 
 @Test func restoreDoesNotOpenAChain() async {
     let rig = await Rig(start: leftHalf)
     _ = await rig.run(request(.frame(rect(100, 100, 400, 300)), source: .action(.restore)))
-    #expect(await rig.stored.restore[handle] == nil)
+    #expect(rig.stored.restore[handle] == nil)
 }
 
 @Test func aRestoreThatEndsSizeRefusedKeepsItsTarget() async {
@@ -543,7 +556,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     }
     let outcome = await rig.run(request(.frame(target), source: .action(.restore)))
     #expect(outcome == .failed(.sizeRefused(app: "Terminal")))
-    #expect(await rig.stored.restore[handle] == chain(target))
+    #expect(rig.stored.restore[handle] == chain(target))
 }
 
 @Test func failedRestoreKeepsItsTarget() async {
@@ -557,94 +570,10 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     }
     let failed = await rig.pipeline.run(handle, config: config(), plan: restore)
     #expect(failed == .failed(.cannotMove))
-    #expect(await rig.stored.restore[handle]?.frame == target)
+    #expect(rig.stored.restore[handle]?.frame == target)
 
     await rig.fake.configure { $0.windows[handle]?.canMove = true }
     let retried = await rig.pipeline.run(handle, config: config(), plan: restore)
     #expect(retried == .placed(target))
-    #expect(await rig.stored.restore[handle] == nil)
-}
-
-// MARK: Readings
-
-/// Later than any reading a test makes: what it records stands for a newer reading of the window.
-private let later = ContinuousClock.now.advanced(by: .seconds(3600))
-
-/// Records the window's placement memory from a reading newer than any the request takes, of the
-/// window where the request finds it, so the request still writes.
-private func recordNewer(_ rig: Rig, placed record: PlacedRecord?, restore: RestoreRecord?) async {
-    let frame = await rig.frame
-    _ = rig.readings.judge(handle, FrameReading(frame: frame, readAt: later))
-    await rig.memory.recordPlacement(handle, readAt: later) { placement in
-        placement.placed = record
-        placement.restore = restore
-    }
-}
-
-@Test func anOlderResolveLeavesANewerPlacement() async {
-    let rig = await Rig(start: rect(300, 300, 400, 300))
-    await recordNewer(rig, placed: placed(leftHalf), restore: chain(rect(10, 40, 300, 200)))
-    _ = await rig.pipeline.run(handle, config: config()) { _ in .nothing }
-    #expect(await rig.stored.placed[handle] == placed(leftHalf))
-    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200)))
-}
-
-@Test func anOlderPlacementLeavesANewerExternalChange() async {
-    let rig = await Rig(start: rect(100, 100, 400, 300))
-    await recordNewer(rig, placed: nil, restore: chain(rect(10, 40, 300, 200), open: false))
-    let outcome = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
-    #expect(outcome == .placed(rightHalf))
-    #expect(await rig.stored.placed[handle] == nil)
-    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200), open: false))
-}
-
-@Test func anOlderUnchangedPlacementLeavesANewerExternalChange() async {
-    let rig = await Rig(start: leftHalf)
-    await recordNewer(rig, placed: nil, restore: chain(rect(10, 40, 300, 200), open: false))
-    let outcome = await rig.run(request(.named(.leftHalf), placement: .leftHalf, source: .action(.leftHalf)))
-    #expect(outcome == .unchanged)
-    #expect(await rig.stored.placed[handle] == nil)
-    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200), open: false))
-}
-
-@Test func anOlderInterruptionLeavesANewerPlacement() async {
-    let rig = await Rig(start: leftHalf) { $0.beforeCall = [2: dragged] }
-    await recordNewer(rig, placed: placed(leftHalf), restore: chain(rect(10, 40, 300, 200)))
-    let outcome = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
-    #expect(outcome == .failed(.movedDuringPlacement))
-    #expect(await rig.stored.placed[handle] == placed(leftHalf))
-    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200)))
-}
-
-@Test func anOlderPartialWriteLeavesANewerExternalChange() async {
-    let rig = await Rig(start: rect(100, 100, 400, 300))
-    await recordNewer(rig, placed: nil, restore: chain(rect(10, 40, 300, 200), open: false))
-    let gate = await rig.fake.pause(beforeCall: 2)
-    let task = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
-    #expect(await pollUntil { gate.waiterCount == 1 })
-    await rig.writer.reconfigurationBegan()
-    gate.open()
-    #expect(await task.value == .superseded)
-    #expect(await rig.stored.placed[handle] == nil)
-    #expect(await rig.stored.restore[handle] == chain(rect(10, 40, 300, 200), open: false))
-}
-
-@Test func anOlderFailedWriteLeavesANewerPlacement() async {
-    let start = rect(0, 25, 400, 300)
-    // Size first, then the position write fails, with nothing verified since the write.
-    let rig = await Rig(start: start) { $0.beforeCall = [2: { $0.canMove = false }] }
-    await recordNewer(rig, placed: placed(start), restore: chain(rect(10, 40, 300, 200)))
-    let outcome = await rig.run(request(.named(.rightHalf), placement: .rightHalf, source: .action(.rightHalf)))
-    #expect(outcome == .failed(.cannotMove))
-    #expect(await rig.stored.placed[handle] == placed(start))
-}
-
-@Test func anOlderRestoreLeavesANewerChain() async {
-    let target = rect(100, 100, 400, 300)
-    let rig = await Rig(start: leftHalf)
-    await recordNewer(rig, placed: nil, restore: chain(target))
-    let outcome = await rig.run(request(.frame(target), source: .action(.restore)))
-    #expect(outcome == .placed(target))
-    #expect(await rig.stored.restore[handle] == chain(target))
-    #expect(await rig.stored.placed[handle] == nil)
+    #expect(rig.stored.restore[handle] == nil)
 }
