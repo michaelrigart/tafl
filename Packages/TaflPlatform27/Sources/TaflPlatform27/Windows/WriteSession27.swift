@@ -37,10 +37,13 @@ final class WriteSession27: WriteSession {
         return WriteSession27(pid: pid, element: element, axQueue: axQueue, leases: leases, restoresEnhancedUI: restores)
     }
 
-    func readFrame() async -> Result<ScreenRect, PlatformFailure> {
+    /// Stamped on the app's queue as the frame is read.
+    func readFrame() async -> Result<FrameReading, PlatformFailure> {
         let element = element
-        let result = await axQueue.run(pid: pid) { AXWindowAccess.frame(element.element) }
-        return result.map(Windows27.screenRect).mapError { Windows27.failure(for: $0.code) }
+        let result = await axQueue.run(pid: pid) {
+            AXWindowAccess.frame(element.element).map { FrameReading(frame: Windows27.screenRect($0), readAt: .now) }
+        }
+        return result.mapError { Windows27.failure(for: $0.code) }
     }
 
     func setSize(_ size: ScreenSize) async -> Result<Void, PlatformFailure> {

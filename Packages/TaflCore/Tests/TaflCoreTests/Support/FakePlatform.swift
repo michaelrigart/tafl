@@ -36,7 +36,9 @@ final class FakeGate: Sendable {
     }
 }
 
-/// A scripted platform. Every write-session call is logged as `"begin"`, `"size <w>x<h>"`,
+/// A scripted platform. Every read is stamped with `ContinuousClock.now` as it is made, so a
+/// snapshot or read-back carries when it was read, whatever `windows` holds. Every write-session
+/// call is logged as `"begin"`, `"size <w>x<h>"`,
 /// `"position <x>,<y>"`, `"read"` or `"end"`. Call indices count those calls from 0, in the
 /// order they start (a `beginWriting` that waits for its app's session slot starts once it has
 /// the slot). A call keeps its index while it is held: a gated call is logged only when its gate
@@ -163,7 +165,9 @@ actor FakePlatform: WindowPlatform {
             visibleWindowsGate = nil
             await gate.wait()
         }
-        let read = windows.values.sorted { ($0.handle.pid, $0.handle.windowID) < ($1.handle.pid, $1.handle.windowID) }
+        let read = windows.values
+            .sorted { ($0.handle.pid, $0.handle.windowID) < ($1.handle.pid, $1.handle.windowID) }
+            .map(stamped)
         if let late = visibleWindowsLateGate {
             visibleWindowsLateGate = nil
             await late.wait()
@@ -184,7 +188,7 @@ actor FakePlatform: WindowPlatform {
             return .failure(.notResponding)
         }
         guard let window = windows[handle] else { return .failure(.noWindow) }
-        return .success(window)
+        return .success(stamped(window))
     }
 
     func appName(pid: Int32) async -> String? {
@@ -237,10 +241,10 @@ actor FakePlatform: WindowPlatform {
 
     // MARK: Session calls
 
-    fileprivate func read(_ handle: WindowHandle) async -> Result<ScreenRect, PlatformFailure> {
+    fileprivate func read(_ handle: WindowHandle) async -> Result<FrameReading, PlatformFailure> {
         if await enter(handle, "read") { return .failure(.notResponding) }
         guard let window = windows[handle] else { return .failure(.noWindow) }
-        return .success(window.frame)
+        return .success(FrameReading(frame: window.frame, readAt: .now))
     }
 
     fileprivate func writeSize(_ handle: WindowHandle, _ size: ScreenSize) async -> Result<Void, PlatformFailure> {
@@ -272,6 +276,12 @@ actor FakePlatform: WindowPlatform {
     }
 
     // MARK: Mechanics
+
+    private func stamped(_ window: WindowSnapshot) -> WindowSnapshot {
+        var read = window
+        read.readAt = .now
+        return read
+    }
 
     /// Claims the next call index, waits for its gate, logs the call, runs its hook and, for a
     /// hung app, waits 0.5 s on the clock. Returns true when the app is hung.
@@ -328,7 +338,7 @@ private final class FakeSession: WriteSession {
         self.handle = handle
     }
 
-    func readFrame() async -> Result<ScreenRect, PlatformFailure> {
+    func readFrame() async -> Result<FrameReading, PlatformFailure> {
         if usedAfterEnd() { return .failure(.cannotMove) }
         return await platform.read(handle)
     }

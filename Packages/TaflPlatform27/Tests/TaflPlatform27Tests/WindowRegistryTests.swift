@@ -104,10 +104,13 @@ private func guess(_ id: UInt32) -> ResolvedWindowID { ResolvedWindowID(id: id, 
     #expect(await registry.count == 0)
 }
 
+private let readAt = ContinuousClock.now
+
 private func snapshot(_ handle: WindowHandle) -> WindowSnapshot {
     WindowSnapshot(
         handle: handle, bundleID: nil, appName: "App", title: "Doc", frame: ScreenRect(x: 0, y: 0, width: 100, height: 100),
-        canMove: true, canResize: true, minSize: nil, isFullscreen: false, isSheet: false, isMinimized: false, isAppHidden: false)
+        canMove: true, canResize: true, minSize: nil, isFullscreen: false, isSheet: false, isMinimized: false, isAppHidden: false,
+        readAt: readAt)
 }
 
 /// Collects what an announcing step publishes, accepting or refusing as told.

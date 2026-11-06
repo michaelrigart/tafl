@@ -261,7 +261,7 @@ public actor FrameWriter {
         let request = context.request
         if Task.isCancelled || epoch != request.startEpoch { return earlier }
         guard case .success(let read) = await context.session.readFrame() else { return earlier }
-        if differs(read, request.expected) { return .interrupted }
+        if differs(read.frame, request.expected) { return .interrupted }
         let result = await sequence(context, beforeFirstWrite)
         return result == .cancelled(lastVerified: nil) ? earlier : result
     }
@@ -330,7 +330,7 @@ public actor FrameWriter {
         if case .failure(let failure) = written { throw Stop(result: .failed(failure, lastVerified: request.lastVerified)) }
         switch await context.session.readFrame() {
         case .failure(let failure): throw Stop(result: .failed(failure, lastVerified: request.lastVerified))
-        case .success(let frame): if !commit(request, write.part, frame) { throw Stop(result: .interrupted) }
+        case .success(let read): if !commit(request, write.part, read.frame) { throw Stop(result: .interrupted) }
         }
     }
 

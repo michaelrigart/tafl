@@ -15,7 +15,7 @@ private func event(_ notification: String, pid: pid_t, element: AXElementBox) ->
 private func attributes(subrole: String = "AXStandardWindow") -> WindowAttributes27 {
     WindowAttributes27(
         role: "AXWindow", subrole: subrole, title: "Doc", frame: CGRect(x: 0, y: 0, width: 100, height: 100),
-        canMove: true, canResize: true, minSize: nil, isFullscreen: false, isMinimized: false)
+        canMove: true, canResize: true, minSize: nil, isFullscreen: false, isMinimized: false, readAt: .now)
 }
 
 /// A reader for elements named by the pid they were made from; `untracked` and `gone` shape what it answers,
@@ -108,7 +108,7 @@ func aWindowTheCatchUpAlreadyAnnouncedIsNotAnnouncedByItsNotification() async {
     let registered = await harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
     let found = WindowSnapshot(
         handle: registered.handle, bundleID: nil, appName: "App", title: "Doc", frame: ScreenRect(x: 0, y: 0, width: 100, height: 100),
-        canMove: true, canResize: true, minSize: nil, isFullscreen: false, isSheet: false, isMinimized: false, isAppHidden: false)
+        canMove: true, canResize: true, minSize: nil, isFullscreen: false, isSheet: false, isMinimized: false, isAppHidden: false, readAt: .now)
     _ = await harness.registry.announce(found) { _ in true }
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))

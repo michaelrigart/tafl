@@ -21,15 +21,29 @@ private func session(_ fake: FakePlatform, _ handle: WindowHandle) async throws 
     let s = try await session(fake, w.handle)
     try await s.setSize(ScreenSize(width: 500, height: 775)).get()
     try await s.setPosition(ScreenPoint(x: 0, y: 25)).get()
-    #expect(try await s.readFrame().get() == rect(0, 25, 500, 775))
+    #expect(try await s.readFrame().get().frame == rect(0, 25, 500, 775))
     #expect(await fake.callLog == ["begin", "size 500x775", "position 0,25", "read"])
 
     await fake.configure { $0.sizeRule = { _, asked in ScreenSize(width: min(asked.width, 600), height: asked.height) } }
     try await s.setSize(ScreenSize(width: 800, height: 775)).get()
-    #expect(try await s.readFrame().get().width == 600)
+    #expect(try await s.readFrame().get().frame.width == 600)
 
     await s.end()
     #expect(await fake.callLog.last == "end")
+}
+
+@Test func everyReadIsStampedWhenItIsMade() async throws {
+    let w = window(1, frame: rect(10, 10, 400, 300))
+    let (fake, _) = await makeFake(w)
+    let before = ContinuousClock.now
+    let snapshot = try await fake.snapshot(of: w.handle).get()
+    let listed = try #require(await fake.visibleWindows().first)
+    let s = try await session(fake, w.handle)
+    let readBack = try await s.readFrame().get()
+    #expect(before <= snapshot.readAt)
+    #expect(snapshot.readAt <= listed.readAt)
+    #expect(listed.readAt <= readBack.readAt)
+    #expect(readBack.frame == w.frame)
 }
 
 @Test func fakeLogsFractionalNumbersWithTheirDecimals() async throws {
@@ -83,7 +97,7 @@ private func session(_ fake: FakePlatform, _ handle: WindowHandle) async throws 
     await fake.configure { $0.beforeCall[1] = { $0.frame.origin = ScreenPoint(x: 300, y: 300) } }
     let s = try await session(fake, w.handle)
     try await s.setSize(ScreenSize(width: 500, height: 400)).get()
-    #expect(try await s.readFrame().get() == rect(300, 300, 500, 400))
+    #expect(try await s.readFrame().get().frame == rect(300, 300, 500, 400))
 }
 
 @Test func pauseHoldsTheCallUntilTheGateOpens() async throws {
@@ -261,7 +275,7 @@ private func session(_ fake: FakePlatform, _ handle: WindowHandle) async throws 
     let (fake, _) = await makeFake(w)
     let s = try await session(fake, w.handle)
     await s.end()
-    var result: Result<ScreenRect, PlatformFailure>?
+    var result: Result<FrameReading, PlatformFailure>?
     await withKnownIssue {
         result = await s.readFrame()
     }

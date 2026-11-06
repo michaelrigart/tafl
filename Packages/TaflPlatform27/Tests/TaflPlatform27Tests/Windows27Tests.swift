@@ -6,6 +6,7 @@ import TaflCore
 
 private let handle = WindowHandle(pid: 10, windowID: 7, isStable: true)
 private let app = AppInfo27(pid: 10, bundleID: "com.example.App", name: "Example", isHidden: false)
+private let readAt = ContinuousClock.now
 
 private func attributes(
     role: String? = "AXWindow",
@@ -16,16 +17,17 @@ private func attributes(
     WindowAttributes27(
         role: role, subrole: subrole, title: "Doc", frame: CGRect(x: 10, y: 20, width: 300, height: 200),
         canMove: true, canResize: false, minSize: CGSize(width: 100, height: 50),
-        isFullscreen: isFullscreen, isMinimized: isMinimized)
+        isFullscreen: isFullscreen, isMinimized: isMinimized, readAt: readAt)
 }
 
+// The snapshot carries when its frame was read, not when it was made.
 @Test func aStandardWindowBecomesASnapshotWithEveryField() {
     let snapshot = Windows27.trackedSnapshot(handle: handle, app: app, attributes: attributes())
     #expect(snapshot == WindowSnapshot(
         handle: handle, bundleID: "com.example.App", appName: "Example", title: "Doc",
         frame: ScreenRect(x: 10, y: 20, width: 300, height: 200),
         canMove: true, canResize: false, minSize: ScreenSize(width: 100, height: 50),
-        isFullscreen: false, isSheet: false, isMinimized: false, isAppHidden: false))
+        isFullscreen: false, isSheet: false, isMinimized: false, isAppHidden: false, readAt: readAt))
 }
 
 @Test func aSheetIsKeptAndFlagged() {
