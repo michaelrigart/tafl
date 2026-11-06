@@ -132,7 +132,7 @@ public actor WindowEngine {
     var nextBackgroundID = 0
     /// How many platform events have been dealt with, for tests to wait on.
     var eventsHandled = 0
-    /// Set once `stop` begins: no new request starts, and nothing but `stop` saves.
+    /// Set once `stopPlacing` begins: no new request starts, and nothing but `stop` saves.
     var isStopping = false
 
     public nonisolated let reports: AsyncStream<EngineReport>

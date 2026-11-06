@@ -17,7 +17,7 @@ public actor WindowRequestQueue {
     public init() {}
 
     /// Returns nil when a newer request for the window cancelled this one, even if the body had
-    /// finished by then, and straight away after `stop`.
+    /// finished by then, and straight away after `halt`.
     public func run<T: Sendable>(_ window: WindowHandle, _ body: @Sendable @escaping () async -> T) async -> T? {
         guard !isStopped else { return nil }
         let id = requestCount
