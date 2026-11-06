@@ -2542,6 +2542,35 @@ func aNewWindowMovedBeforeItsPlacementReadsItKeepsTheMovedFrame(eventReadFirst: 
     #expect(memory.lastKnown(handle, setup: DisplaySetup([displayA]))?.relative == rightHalfA.relative(to: v))
 }
 
+/// A window a read finds gone ends through the same notice and event as its destruction: the
+/// platform delivers the end from whichever path takes the window out of its registry. The owner
+/// and the engine forget it, so a new window that gets its id is placed at creation.
+@Test(.timeLimit(.minutes(1))) func aWindowAReadFindsGoneIsForgottenAndANewWindowWithItsIDIsPlacedAtCreation() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(windows: [window(1, frame: start)], focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    #expect(await rig.engine.memory.read().placed[handle] != nil)
+    // The window is gone: a frame read finds no window, and the platform delivers its end.
+    await rig.fake.configure { $0.windows[handle] = nil }
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(1)
+    await rig.emit(.windowDestroyed(handle))
+    await rig.waitForEvents(2)
+    #expect(await !rig.engine.owner.knows(handle))
+    #expect(await rig.engine.frameReads[handle] == nil)
+    let memory = await rig.engine.memory.read()
+    #expect(memory.placed[handle] == nil)
+    #expect(memory.restore[handle] == nil)
+    #expect(memory.lastKnown.values.allSatisfy { $0[handle] == nil })
+    // A new window gets the id.
+    let created = window(1, frame: start)
+    await rig.fake.configure { $0.windows[handle] = created }
+    await rig.emit(.windowCreated(created))
+    await rig.waitForFrame(rightHalfA)
+    #expect(await !rig.isTouched())
+}
+
 @Test(.timeLimit(.minutes(1))) func aFirstNotificationAtTheSeededFrameKeepsAPlacedRecordFromDisk() async throws {
     var saved = WindowMemory(lastDisplays: bothDisplays, savedAt: saveDate)
     saved.openChain(handle, before: start, on: displayA)

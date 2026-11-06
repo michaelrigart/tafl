@@ -105,12 +105,18 @@ final class WindowRegistry: Sendable {
     }
 
     /// Removes registrations their owner made, each only while it is still the same: the same handle
-    /// for the same element.
-    func withdraw(_ registrations: [(handle: WindowHandle, element: AXElementBox)]) {
+    /// for the same element. Returns the handles it removed, so the caller that removed a
+    /// registration is the one that acts on it: one already removed, or replaced by another element
+    /// for its handle, is not among them.
+    func withdraw(_ registrations: [(handle: WindowHandle, element: AXElementBox)]) -> [WindowHandle] {
         state.withLock { state in
+            var removed: [WindowHandle] = []
             state.entries.removeAll { entry in
-                registrations.contains { $0.handle == entry.handle && $0.element == entry.element }
+                let isWithdrawn = registrations.contains { $0.handle == entry.handle && $0.element == entry.element }
+                if isWithdrawn { removed.append(entry.handle) }
+                return isWithdrawn
             }
+            return removed
         }
     }
 

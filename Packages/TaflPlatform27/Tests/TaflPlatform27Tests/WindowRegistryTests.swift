@@ -94,8 +94,10 @@ private func guess(_ id: UInt32) -> ResolvedWindowID { ResolvedWindowID(id: id, 
     let registry = WindowRegistry()
     let gone = registry.handle(for: box(10), pid: 10, windowID: exact(7))
     let kept = registry.handle(for: box(11), pid: 11, windowID: exact(8))
-    registry.withdraw([(gone, box(10))])
+    #expect(registry.withdraw([(gone, box(10))]) == [gone])
     #expect(registry.element(for: gone) == nil)
+    // Withdrawn already: nothing more is removed.
+    #expect(registry.withdraw([(gone, box(10))]).isEmpty)
     #expect(registry.element(for: kept) != nil)
 
     _ = registry.handle(for: AXElementBox(AXUIElementCreateSystemWide()), pid: 11, windowID: exact(9))
@@ -162,7 +164,8 @@ private final class Publisher: Sendable {
     // Another element took the handle since: it is not the registration the owner made.
     let replaced = registry.handle(for: box(11), pid: 10, windowID: exact(8))
     _ = registry.handle(for: box(12), pid: 10, windowID: exact(8))
-    registry.withdraw([(mine, box(10)), (replaced, box(11))])
+    // Only what was removed is reported: the replaced registration is not.
+    #expect(registry.withdraw([(mine, box(10)), (replaced, box(11))]) == [mine])
     #expect(registry.knownHandle(of: box(10)) == nil)
     #expect(registry.knownHandle(of: box(12)) == replaced)
 }

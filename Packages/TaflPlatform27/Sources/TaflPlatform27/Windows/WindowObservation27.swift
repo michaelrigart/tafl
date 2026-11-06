@@ -303,7 +303,9 @@ final class WindowObservation27: Sendable {
         }
         if !found.contains(where: { $0.announcement == .refused }) { payDebt(of: app.pid, claim: claim) }
         if !isCurrent(pid: app.pid, claim: claim), !environment.isRunning(app.pid) {
-            registry.withdraw(found.map(\.entry).filter(\.isNew).map { ($0.snapshot.handle, $0.element) })
+            // The app is gone, and its quit makes the core forget every window it had: what this
+            // removes needs no end of its own.
+            _ = registry.withdraw(found.map(\.entry).filter(\.isNew).map { ($0.snapshot.handle, $0.element) })
         }
     }
 

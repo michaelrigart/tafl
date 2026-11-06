@@ -6,12 +6,14 @@ import TaflCore
 /// are handled one at a time and in order, including the reads for a window the registry does not
 /// know yet, and a slow app delays only its own lane. Nothing is read on the hub thread. A window's
 /// announcement reaches the notices inside the read that found it, and its end on its app's queue,
-/// after the reads already there.
+/// after the reads already there, through `WindowEnds`; a snapshot that finds the window gone first
+/// delivers the end instead.
 final class WindowEventTranslator: Sendable {
     private let registry: WindowRegistry
     private let reader: WindowReader27
     private let events: AsyncStream<PlatformEvent>.Continuation
     private let notices: any WindowNotices
+    private let ends: WindowEnds
     private struct Lanes {
         var open: [pid_t: AsyncStream<AXObserverHub.Event>.Continuation] = [:]
         /// Apps whose lane was closed: a late callback must not start a lane that nothing would end.
@@ -32,6 +34,7 @@ final class WindowEventTranslator: Sendable {
         self.reader = reader
         self.events = events
         self.notices = notices
+        ends = WindowEnds(registry: registry, events: events, notices: notices, afterReads: reader.afterReads)
     }
 
     /// Never blocks: it only hands the event to its app's lane.
@@ -81,10 +84,7 @@ final class WindowEventTranslator: Sendable {
         switch event.notification {
         case kAXUIElementDestroyedNotification:
             guard let known else { return }
-            registry.withdraw([(known, element)])
-            let notices = notices
-            reader.afterReads(pid) { notices.destroyed(known) }
-            events.yield(.windowDestroyed(known))
+            ends.end(known, element)
         case kAXWindowCreatedNotification:
             // Announced once, whoever registered the window first: a query registers but never announces.
             _ = await learn(element, pid: pid, resolveID: known == nil, announcing: true)
