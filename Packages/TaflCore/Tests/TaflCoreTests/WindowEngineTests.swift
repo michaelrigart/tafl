@@ -1543,6 +1543,49 @@ private func pollUntilLastKnown(
     #expect(saved.activeLayout == "Second")
 }
 
+@Test(.timeLimit(.minutes(1))) func anOvertakenLayoutRunSendsNoMoreRequests() async {
+    let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
+    let slowNext = window(4, frame: start, pid: 50, bundleID: "com.c")
+    let other = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let first = layout("First", [slot(.topHalf, app: "com.c")])
+    let second = layout("Second", [slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [slow, slowNext, other], focused: nil) { $0.hung = [50] }
+    await rig.engine.start(config: config(layouts: [first, second]))
+    let applyingFirst = Task { await rig.engine.applyLayout(named: "First") }
+    // First's run waits on the hung app's first window while Second is applied.
+    await rig.clock.waitForSleepers(1)
+    await rig.engine.applyLayout(named: "Second")
+    #expect(await rig.frame(of: other.handle) == rightHalfA)
+    // The app answers again: First's request in flight ends, and First sends none for the next window.
+    await rig.fake.configure { $0.hung = [] }
+    await rig.clock.advance(by: .milliseconds(500))
+    await applyingFirst.value
+    let queue = await rig.engine.queue
+    #expect(await queue.requestCount == 2)
+    #expect(await rig.frame(of: slowNext.handle) == start)
+    // First still reports what it did, and leaves the active layout to Second.
+    await rig.waitForReport { $0 == .layoutApplied(name: "First", placed: 0, failed: 1) }
+    #expect(await rig.engine.activeLayoutName == "Second")
+}
+
+@Test(.timeLimit(.minutes(1))) func aLayoutRunOvertakenWhileItReadsAWindowLeavesItAlone() async {
+    let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
+    let other = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let first = layout("First", [slot(.topHalf, app: "com.c")])
+    let second = layout("Second", [slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [slow, other], focused: nil)
+    await rig.engine.start(config: config(layouts: [first, second]))
+    // First's request has passed its check before the pipeline and is reading the window.
+    let reading = await rig.fake.pauseSnapshot(at: 0)
+    let applyingFirst = Task { await rig.engine.applyLayout(named: "First") }
+    await rig.fake.waitUntil { _ in reading.waiterCount == 1 }
+    await rig.engine.applyLayout(named: "Second")
+    reading.open()
+    await applyingFirst.value
+    #expect(await rig.frame(of: slow.handle) == start)
+    await rig.waitForReport { $0 == .layoutApplied(name: "First", placed: 0, failed: 0) }
+}
+
 @Test(.timeLimit(.minutes(1))) func aReloadThatRemovesARunningLayoutKeepsItInactiveAndUnsaved() async {
     let (store, directory) = temporaryStore()
     defer { try? FileManager.default.removeItem(at: directory) }

@@ -411,7 +411,7 @@ public actor WindowEngine {
         guard reconfigurations.isCurrent(since) else { return }
         let requests = LayoutPlanner.requests(definition, windows: windows, displays: displays, source: .layout(name))
         touched.formUnion(requests.map(\.window))
-        let count = await run(requests, since: since)
+        let count = await run(requests, since: since, application: application)
         guard !isStopping, reconfigurations.isCurrent(since) else { return }
         if layoutApplications.isCurrent(application) { await setActiveLayout(name) }
         report(.layoutApplied(name: name, placed: count.moved + count.unchanged, failed: count.failed))
@@ -435,8 +435,10 @@ public actor WindowEngine {
 
     /// Runs the requests: apps side by side, each app's windows in order, so an app that does
     /// not answer holds up only its own windows. A reconfiguration that has begun since `since`
-    /// stops the run. Each request's result is recorded as it lands (see `landed`).
-    func run(_ requests: [MoveRequest], since: Int) async -> RunCount {
+    /// stops the run. A layout application's run (`application`) also stops once a newer one has
+    /// begun: it sends no further request, and counts only what it sent. Each request's result is
+    /// recorded as it lands (see `landed`).
+    func run(_ requests: [MoveRequest], since: Int, application: Int? = nil) async -> RunCount {
         var order: [Int32] = []
         var byApp: [Int32: [MoveRequest]] = [:]
         for request in requests {
@@ -447,6 +449,8 @@ public actor WindowEngine {
         let pipeline = pipeline
         let config = config
         let reconfigurations = reconfigurations
+        let layoutApplications = layoutApplications
+        let isOvertaken: @Sendable () -> Bool = { application.map { !layoutApplications.isCurrent($0) } ?? false }
         let runID = nextRunID
         nextRunID += 1
         runWindows[runID] = Set(requests.map(\.window))
@@ -456,18 +460,23 @@ public actor WindowEngine {
                 group.addTask {
                     var count = RunCount()
                     for request in batch {
-                        if Task.isCancelled || !reconfigurations.isCurrent(since) { break }
-                        // The check inside the plan closes the gap before the pipeline reads its epoch.
+                        if Task.isCancelled || !reconfigurations.isCurrent(since) || isOvertaken() { break }
+                        // The checks inside the plan close the gap before the pipeline reads its epoch.
                         let window = request.window
+                        let refused = Mutex(false)
                         let outcome = await pipeline.run(window, config: config, plan: { _ in
-                            reconfigurations.isCurrent(since) ? .request(request) : .nothing
+                            guard reconfigurations.isCurrent(since), !isOvertaken() else {
+                                refused.withLock { $0 = true }
+                                return .nothing
+                            }
+                            return .request(request)
                         }, eligible: {
                             guard request.source.yieldsToTouch else { return true }
                             return await self.isUntouched(window)
                         }, landed: { outcome, readAt in
                             await self.landed(outcome, readAt: readAt, of: request.window, run: runID, since: since)
                         })
-                        if !reconfigurations.isCurrent(since) { break }
+                        if !reconfigurations.isCurrent(since) || refused.withLock({ $0 }) { break }
                         switch outcome {
                         case .placed: count.moved += 1
                         case .unchanged: count.unchanged += 1
