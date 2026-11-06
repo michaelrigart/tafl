@@ -137,9 +137,8 @@ private struct Scan {
             if byte == Self.doubleQuote || byte == Self.singleQuote {
                 position += 1
                 while let next = current, next != byte, next != Self.newline {
-                    if byte == Self.doubleQuote, next == Self.backslash, let escaped = peek(1) {
-                        segment.append(escaped)
-                        position += 2
+                    if byte == Self.doubleQuote, next == Self.backslash, peek(1) != nil {
+                        segment.append(contentsOf: escape())
                     } else {
                         segment.append(next)
                         position += 1
@@ -160,6 +159,30 @@ private struct Scan {
             if current == Self.dot { position += 1 } else { break }
         }
         return segments
+    }
+
+    /// The bytes of the TOML basic-string escape at the position, which moves past it: `\b \t \n \f
+    /// \r \" \\`, `\uXXXX` and `\UXXXXXXXX`. Anything else (TOMLDecoder rejects it) keeps its character.
+    private mutating func escape() -> [UInt8] {
+        let escaped = bytes[position + 1]
+        let simple: [UInt8: UInt8] = [
+            UInt8(ascii: "b"): 0x08, UInt8(ascii: "t"): 0x09, UInt8(ascii: "n"): 0x0A,
+            UInt8(ascii: "f"): 0x0C, UInt8(ascii: "r"): 0x0D, Self.doubleQuote: Self.doubleQuote,
+            Self.backslash: Self.backslash,
+        ]
+        if let byte = simple[escaped] {
+            position += 2
+            return [byte]
+        }
+        let digits = escaped == UInt8(ascii: "u") ? 4 : escaped == UInt8(ascii: "U") ? 8 : 0
+        guard digits > 0, position + 2 + digits <= bytes.count,
+              let code = UInt32(String(decoding: bytes[(position + 2)..<(position + 2 + digits)], as: UTF8.self), radix: 16),
+              let scalar = Unicode.Scalar(code) else {
+            position += 2
+            return [escaped]
+        }
+        position += 2 + digits
+        return Array(String(Character(scalar)).utf8)
     }
 
     /// Skips one value, which may span lines when it is an array, an inline table or a multi-line string.

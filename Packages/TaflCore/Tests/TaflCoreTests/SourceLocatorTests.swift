@@ -64,6 +64,25 @@ struct SourceLocatorTests {
         #expect(locator.line(of: [.key("other"), .key("deep"), .key("a"), .key("b")]) == 6)
     }
 
+    @Test("A basic-string key is found by the key it decodes to, a literal one by its raw text")
+    func escapedKeys() {
+        let text = """
+        "\\u0067ap" = 1
+        "st\\U00000065p" = 2
+        "tab\\tbell\\b\\f\\r\\n\\"quote\\\\" = 3
+        'raw\\u0067' = 4
+        ["t\\u0061ble"]
+        k = 5
+        """
+        let locator = SourceLocator(text)
+        #expect(locator.line(of: [.key("gap")]) == 1)
+        #expect(locator.line(of: [.key("step")]) == 2)
+        #expect(locator.line(of: [.key("tab\tbell\u{8}\u{C}\r\n\"quote\\")]) == 3)
+        #expect(locator.line(of: [.key("raw\\u0067")]) == 4)
+        #expect(locator.line(of: [.key("raw\u{67}")]) == nil)
+        #expect(locator.line(of: [.key("table"), .key("k")]) == 6)
+    }
+
     @Test("A header with spaces and a quoted part is still found")
     func spacedHeaders() {
         let locator = SourceLocator("[ a . \"b c\" ]\nk = 1")

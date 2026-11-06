@@ -117,6 +117,12 @@ struct ConfigParserTests {
                line: 7, "unknown key \"size\"")
     }
 
+    @Test("The first error in the file is reported when a key is written with an escape")
+    func escapedKeyErrors() {
+        expect("\"\\u0067ap\" = -1\nstep = 0", line: 1, "gap must be between 0 and 100")
+        expect("\"\\u0067ap\" = -1", line: 1, "gap must be between 0 and 100")
+    }
+
     @Test("A value of the wrong type names the key and the type it needs")
     func wrongTypes() {
         expect("repeat = 3", line: 1, "\"repeat\" must be a string")
