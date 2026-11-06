@@ -194,11 +194,14 @@ public actor WindowEngine {
             listen()
             await applyDisplayChange(from: remembered.lastDisplays, to: current)
         } else {
+            // Taken in the step that resumes recording, before any event is handled: a change that
+            // begins from here stores its own setup.
+            let began = reconfigurations.current
             owner.recordLastKnown(for: current)
             listen()
             // The seed: every window's first reading, recorded for the current setup.
             _ = await platform.visibleWindows(take: owner.take)
-            await memory.update { $0.lastDisplays = current }
+            await rememberDisplays(current, since: began)
         }
     }
 

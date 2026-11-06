@@ -722,6 +722,23 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
     #expect(await rig.engine.memory.read().lastDisplays == [displayA])
 }
 
+/// A change that settles while startup's seed reads the windows stores its own setup. Startup does
+/// not put the setup it read back, or the next launch would run the rules again for a change
+/// already handled.
+@Test(.timeLimit(.minutes(1))) func aChangeSettledDuringTheStartSeedKeepsItsSetupStored() async {
+    let rig = await Rig(windows: [window(1, frame: start)], focused: nil)
+    let seed = FakeGate()
+    await rig.fake.configure { $0.visibleWindowsGate = seed }
+    let starting = Task { await rig.engine.start(config: config()) }
+    await rig.fake.waitUntil { _ in seed.waiterCount == 1 }
+    await rig.changeDisplays(to: bothDisplays, eventsHandledAfter: 2)
+    await rig.waitForChanges(1)
+    #expect(await rig.engine.memory.read().lastDisplays == bothDisplays)
+    seed.open()
+    await starting.value
+    #expect(await rig.engine.memory.read().lastDisplays == bothDisplays)
+}
+
 @Test func windowMovesPushTheSettleDeadline() async {
     let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: rect(1100, 100, 400, 300))])
     await rig.engine.start(config: config())
@@ -1600,6 +1617,8 @@ private func pollUntilLastKnown(
     #expect(await rig.engine.activeLayoutName == nil)
     #expect(await rig.engine.isFrozen)
     #expect(rig.reports.allSatisfy { if case .displayChangeHandled = $0 { false } else { true } })
+    // The stopped run leaves the stored setup to the change that follows.
+    #expect(await rig.engine.memory.read().lastDisplays == [displayA])
 
     // The change ends at the same two displays: the rules run again and the layout holds.
     await rig.emit(.reconfigurationEnded)

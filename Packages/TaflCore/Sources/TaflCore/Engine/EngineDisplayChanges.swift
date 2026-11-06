@@ -83,8 +83,7 @@ extension WindowEngine {
             // read starts from the geometry being recorded.
             changeOrigin = nil
             await resumeRecording(for: new)
-            guard reconfigurations.isCurrent(began) else { return }
-            await memory.update { $0.lastDisplays = new }
+            await rememberDisplays(new, since: began)
         } else {
             await applyDisplayChange(from: old, to: new, since: began)
         }
@@ -97,6 +96,17 @@ extension WindowEngine {
     private func resumeRecording(for displays: [Display]) async {
         owner.recordLastKnown(for: displays)
         _ = await platform.visibleWindows(take: owner.take)
+    }
+
+    /// Stores the displays startup or a settled change recorded last-known frames for, unless a
+    /// reconfiguration has begun since `began`. That change stores its own setup when it settles, so
+    /// a write that landed after it began would put a replaced setup back. Every write of the
+    /// stored displays comes here; the count is checked in the memory's step that writes.
+    func rememberDisplays(_ displays: [Display], since began: Int) async {
+        let reconfigurations = reconfigurations
+        await memory.update { memory in
+            if reconfigurations.isCurrent(began) { memory.lastDisplays = displays }
+        }
     }
 
     // MARK: The rules
@@ -139,10 +149,7 @@ extension WindowEngine {
         // No await between the check above and this: a reconfiguration that begins from here
         // freezes recording again.
         await resumeRecording(for: new)
-        let reconfigurations = reconfigurations
-        await memory.update { memory in
-            if reconfigurations.isCurrent(began) { memory.lastDisplays = new }
-        }
+        await rememberDisplays(new, since: began)
         // No await between this check and the state it protects. The claiming layout becomes
         // active only now, so a run that was stopped leaves none behind.
         guard reconfigurations.isCurrent(began) else { return }
