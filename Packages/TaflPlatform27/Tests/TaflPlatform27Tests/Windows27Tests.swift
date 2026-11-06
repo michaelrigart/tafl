@@ -256,16 +256,20 @@ private struct AnsweringWindow {
         Windows27.attributes(of: "w", asking: queries)
     }
 
-    /// Reads "w", noting each query as it is asked: `"<kind> <element>.<attribute>"`.
-    func read(noting asked: QueryLog) -> Result<WindowAttributes27, AXFailure> {
+    /// The same queries, each noted as it is asked: `"<kind> <element>.<attribute>"`.
+    func queries(noting asked: QueryLog) -> WindowQueries27<String> {
         let answer = queries
-        return Windows27.attributes(of: "w", asking: WindowQueries27(
+        return WindowQueries27(
             frame: { asked.note("frame \($0)"); return answer.frame($0) },
             string: { asked.note("string \($0).\($1)"); return answer.string($0, $1) },
             element: { asked.note("element \($0).\($1)"); return answer.element($0, $1) },
             bool: { asked.note("bool \($0).\($1)"); return answer.bool($0, $1) },
             size: { asked.note("size \($0).\($1)"); return answer.size($0, $1) },
-            settable: { asked.note("settable \($0).\($1)"); return answer.settable($0, $1) }))
+            settable: { asked.note("settable \($0).\($1)"); return answer.settable($0, $1) })
+    }
+
+    func read(noting asked: QueryLog) -> Result<WindowAttributes27, AXFailure> {
+        Windows27.attributes(of: "w", asking: queries(noting: asked))
     }
 }
 
@@ -388,6 +392,43 @@ private func anOptionalQueryTakesItsDefaultHoweverItFails(_ asked: Asked) {
     let asked = QueryLog()
     #expect(window.read(noting: asked) == .failure(AXFailure(.cannotComplete)))
     #expect(asked.entries == ["frame w", "settable w.AXPosition", "settable w.AXSize"])
+}
+
+// MARK: The system-wide lookup
+
+/// The app asked about is pid 10, whose window is "w" and text field "t"; "x" belongs to another
+/// app, pid 20.
+private func systemWideLookUp(
+    focusing focused: String,
+    in window: AnsweringWindow,
+    noting asked: QueryLog
+) -> Result<String?, AXFailure> {
+    var window = window
+    window.elements[Query("system", "AXFocusedUIElement")] = .success(focused)
+    let pids: [String: pid_t] = ["w": 10, "t": 10, "x": 20]
+    return AXWindowAccess.systemWideFocusedWindow(
+        of: 10, systemWide: "system", pidOf: { pids[$0] }, asking: window.queries(noting: asked))
+}
+
+@Test func theSystemWideLookupAsksNothingOfAnotherAppsElement() {
+    // The other app does not answer: its silence is not the target app's.
+    var window = AnsweringWindow()
+    window.strings[Query("x", "AXRole")] = .failure(AXFailure(.cannotComplete))
+    window.elements[Query("x", "AXWindow")] = .failure(AXFailure(.cannotComplete))
+    let asked = QueryLog()
+    #expect(systemWideLookUp(focusing: "x", in: window, noting: asked) == .success(nil))
+    #expect(asked.entries == ["element system.AXFocusedUIElement"])
+}
+
+@Test func theSystemWideLookupFindsTheWindowOfTheAppsFocusedElement() {
+    var window = AnsweringWindow()
+    window.strings[Query("t", "AXRole")] = .success("AXTextField")
+    window.elements[Query("t", "AXWindow")] = .success("w")
+    #expect(systemWideLookUp(focusing: "w", in: window, noting: QueryLog()) == .success("w"))
+    #expect(systemWideLookUp(focusing: "t", in: window, noting: QueryLog()) == .success("w"))
+    // The target app's own silence still stops the lookup.
+    window.strings[Query("t", "AXRole")] = .failure(AXFailure(.cannotComplete))
+    #expect(systemWideLookUp(focusing: "t", in: window, noting: QueryLog()) == .failure(AXFailure(.cannotComplete)))
 }
 
 /// What a refused position write asks before it says "full screen" or "can't move".

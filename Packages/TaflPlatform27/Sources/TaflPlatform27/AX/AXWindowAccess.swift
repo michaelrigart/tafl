@@ -18,7 +18,10 @@ public enum AXWindowAccess {
         lookUpFocusedWindow(
             focused: { elementResult(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute) },
             first: { windowsResult(of: pid).map(\.first) },
-            systemWide: { systemWideFocusedWindow(pid: pid) })
+            systemWide: {
+                systemWideFocusedWindow(
+                    of: pid, systemWide: AXUIElementCreateSystemWide(), pidOf: Self.pid, asking: .live)
+            })
     }
 
     static func lookUpFocusedWindow<Element>(
@@ -162,15 +165,20 @@ public enum AXWindowAccess {
     }
 
     /// The last resort in Rectangle's front-window lookup: the system-wide focused element,
-    /// or its window. Kept only when it belongs to the app asked about.
-    private static func systemWideFocusedWindow(pid: pid_t) -> Result<AXUIElement?, AXFailure> {
-        let ask = WindowQueries27.live
-        return Result { () throws(AXFailure) -> AXUIElement? in
-            guard let focused = try ask.element(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute).answer(),
-                  let window = try ask.windowElement(of: focused),
-                  Self.pid(window) == pid
+    /// or its window. Kept only when it belongs to the app asked about, which is checked before
+    /// anything is asked of it: another app that does not answer is never taken for this one. An
+    /// element's window belongs to its app.
+    static func systemWideFocusedWindow<Element>(
+        of pid: pid_t,
+        systemWide: Element,
+        pidOf: (Element) -> pid_t?,
+        asking ask: WindowQueries27<Element>
+    ) -> Result<Element?, AXFailure> {
+        Result { () throws(AXFailure) -> Element? in
+            guard let focused = try ask.element(systemWide, kAXFocusedUIElementAttribute).answer(),
+                  pidOf(focused) == pid
             else { return nil }
-            return window
+            return try ask.windowElement(of: focused)
         }
     }
 
