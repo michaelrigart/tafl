@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+assets="$root/Tafl/Assets.xcassets"
+contents="$assets/AppIcon.appiconset/Contents.json"
+out="${1:-$assets/AppIcon.appiconset}"
+menubar="${2:-$assets/TaflMenuBar.imageset}"
+
+command -v rsvg-convert >/dev/null || { echo "needs rsvg-convert (Homebrew librsvg)" >&2; exit 1; }
+
+mkdir -p "$out" "$menubar"
+
+/usr/bin/python3 - "$contents" <<'PY' | while read -r file px; do
+import json, sys
+for image in json.load(open(sys.argv[1]))["images"]:
+    base = int(image["size"].split("x")[0])
+    print(image["filename"], base * int(image["scale"].rstrip("x")))
+PY
+  rsvg-convert -w "$px" -h "$px" "$root/design/app-icon.svg" -o "$out/$file"
+done
+
+rsvg-convert -w 18 -h 18 "$root/design/menubar.svg" -o "$menubar/TaflMenuBar@1x.png"
+rsvg-convert -w 36 -h 36 "$root/design/menubar.svg" -o "$menubar/TaflMenuBar@2x.png"
