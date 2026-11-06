@@ -51,10 +51,22 @@ private func tilingReading(_ values: [String: Any]) -> Tiling27 {
     #expect(Tiling27(defaults: nil).read() == .init(edgeDrag: nil, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: nil))
 }
 
+/// A defaults object that answers from a dictionary: it registers nothing process-wide and touches no disk.
+private final class StubDefaults: UserDefaults {
+    private let values: [String: Any]
+
+    init?(_ values: [String: Any]) {
+        self.values = values
+        super.init(suiteName: nil)
+    }
+
+    override func object(forKey defaultName: String) -> Any? {
+        values[defaultName]
+    }
+}
+
 @Test func everySettingIsReadFromTheOneDefaultsObjectGiven() throws {
-    // Registered values live in memory only: nothing is written to disk.
-    let defaults = try #require(UserDefaults(suiteName: "com.michaelrigart.tafl.tests.\(UUID().uuidString)"))
-    defaults.register(defaults: ["EnableTilingByEdgeDrag": 0, "EnableTiledWindowMargins": true])
+    let defaults = try #require(StubDefaults(["EnableTilingByEdgeDrag": 0, "EnableTiledWindowMargins": true]))
     let settings = Tiling27(defaults: defaults).read()
     #expect(settings == .init(edgeDrag: false, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: true))
 }
