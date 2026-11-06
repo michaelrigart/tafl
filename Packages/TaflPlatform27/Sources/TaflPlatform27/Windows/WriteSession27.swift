@@ -37,11 +37,11 @@ final class WriteSession27: WriteSession {
         return WriteSession27(pid: pid, element: element, axQueue: axQueue, leases: leases, restoresEnhancedUI: restores)
     }
 
-    /// Stamped and handed to `take` on the app's queue as the frame is read.
-    func readFrame<T: Sendable>(take: @escaping @Sendable (FrameReading) -> T) async -> Result<T, PlatformFailure> {
+    /// Handed to `take` on the app's queue as the frame is read.
+    func readFrame<T: Sendable>(take: @escaping @Sendable (ScreenRect) -> T) async -> Result<T, PlatformFailure> {
         let element = element
         let result = await axQueue.run(pid: pid) {
-            AXWindowAccess.frame(element.element).map { take(FrameReading(frame: Windows27.screenRect($0), readAt: .now)) }
+            AXWindowAccess.frame(element.element).map { take(Windows27.screenRect($0)) }
         }
         return result.mapError { Windows27.failure(for: $0.code) }
     }

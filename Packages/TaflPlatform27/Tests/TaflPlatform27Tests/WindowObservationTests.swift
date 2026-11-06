@@ -85,7 +85,7 @@ private func windowBox(_ id: UInt32) -> AXElementBox { AXElementBox(AXUIElementC
 
 private let catchUpAttributes = WindowAttributes27(
     role: "AXWindow", subrole: "AXStandardWindow", title: "Doc", frame: CGRect(x: 0, y: 0, width: 100, height: 100),
-    canMove: true, canResize: true, minSize: nil, isFullscreen: false, isMinimized: false, readAt: .now)
+    canMove: true, canResize: true, minSize: nil, isFullscreen: false, isMinimized: false)
 
 private struct ObservationHarness {
     let observation: WindowObservation27

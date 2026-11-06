@@ -180,7 +180,7 @@ public struct FrameWriter: Sendable {
         }
         let owner = owner
         let ticket = context.job.ticket
-        switch await context.session.readFrame(take: { owner.readBack(ticket, $0.frame) }) {
+        switch await context.session.readFrame(take: { owner.readBack(ticket, $0) }) {
         case .failure, .success(.ended): return earlier
         case .success(.interrupted): return .interrupted
         case .success(.own(let frame)): context.progress.expected = frame
@@ -253,7 +253,7 @@ public struct FrameWriter: Sendable {
         }
         let owner = owner
         let ticket = job.ticket
-        switch await context.session.readFrame(take: { owner.readBack(ticket, $0.frame) }) {
+        switch await context.session.readFrame(take: { owner.readBack(ticket, $0) }) {
         case .failure(let failure):
             owner.writeFailed(ticket)
             throw Stop(result: .failed(failure, lastVerified: progress.lastVerified))

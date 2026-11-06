@@ -13,8 +13,6 @@ struct WindowAttributes27: Sendable, Equatable {
     var minSize: CGSize?
     var isFullscreen: Bool
     var isMinimized: Bool
-    /// Taken as the frame is read.
-    var readAt: ContinuousClock.Instant
 }
 
 struct ElementRead: Sendable {
@@ -39,7 +37,6 @@ enum Windows27 {
         case .failure(let failure):
             return .failure(failure)
         case .success(let frame):
-            let readAt = ContinuousClock.now
             let role = AXWindowAccess.role(element)
             let subrole = AXWindowAccess.subrole(element)
             let window = AXWindowAccess.windowElement(for: element, role: role, subrole: { subrole })
@@ -53,8 +50,7 @@ enum Windows27 {
                 minSize: AXWindowAccess.minimumSize(element),
                 isFullscreen: window.flatMap(AXWindowAccess.isFullscreen(window:))
                     ?? AXWindowAccess.fullScreenAttribute(element) ?? false,
-                isMinimized: window.flatMap(AXWindowAccess.isMinimized(window:)) ?? false,
-                readAt: readAt)
+                isMinimized: window.flatMap(AXWindowAccess.isMinimized(window:)) ?? false)
             let id = resolveID
                 ? WindowIDResolver.windowID(element, pid: pid, frame: frame).map { ResolvedWindowID(id: $0.0, by: $0.1) }
                 : nil
@@ -90,8 +86,7 @@ enum Windows27 {
             isFullscreen: attributes.isFullscreen,
             isSheet: isSheet(attributes),
             isMinimized: attributes.isMinimized,
-            isAppHidden: app.isHidden,
-            readAt: attributes.readAt)
+            isAppHidden: app.isHidden)
     }
 
     /// The snapshot of a standard window or sheet, nil for anything else.

@@ -36,9 +36,9 @@ public struct CapabilityState: Equatable, Sendable {
 /// begins and restores it at `end()`. Enhanced UI is per app, so at most one session per app
 /// exists at a time, whoever asked for it.
 public protocol WriteSession: Sendable {
-    /// Reads the frame, stamped when it was read, and hands it to `take` inside the read (see
-    /// `WindowPlatform`). The result is what `take` returned.
-    func readFrame<T: Sendable>(take: @escaping @Sendable (FrameReading) -> T) async -> Result<T, PlatformFailure>
+    /// Reads the frame and hands it to `take` inside the read (see `WindowPlatform`). The result is
+    /// what `take` returned.
+    func readFrame<T: Sendable>(take: @escaping @Sendable (ScreenRect) -> T) async -> Result<T, PlatformFailure>
     func setSize(_ size: ScreenSize) async -> Result<Void, PlatformFailure>
     func setPosition(_ point: ScreenPoint) async -> Result<Void, PlatformFailure>
     func end() async

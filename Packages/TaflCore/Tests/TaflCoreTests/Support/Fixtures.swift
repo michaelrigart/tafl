@@ -55,7 +55,6 @@ func window(
         isFullscreen: false,
         isSheet: false,
         isMinimized: false,
-        isAppHidden: false,
-        readAt: .now
+        isAppHidden: false
     )
 }

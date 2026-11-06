@@ -27,8 +27,6 @@ public struct WindowSnapshot: Equatable, Sendable {
     public var isSheet: Bool
     public var isMinimized: Bool
     public var isAppHidden: Bool
-    /// When the platform read the window's frame.
-    public var readAt: ContinuousClock.Instant
 
     public init(
         handle: WindowHandle,
@@ -42,8 +40,7 @@ public struct WindowSnapshot: Equatable, Sendable {
         isFullscreen: Bool,
         isSheet: Bool,
         isMinimized: Bool,
-        isAppHidden: Bool,
-        readAt: ContinuousClock.Instant
+        isAppHidden: Bool
     ) {
         self.handle = handle
         self.bundleID = bundleID
@@ -57,18 +54,6 @@ public struct WindowSnapshot: Equatable, Sendable {
         self.isSheet = isSheet
         self.isMinimized = isMinimized
         self.isAppHidden = isAppHidden
-        self.readAt = readAt
-    }
-}
-
-/// A window's frame, and when the platform read it.
-public struct FrameReading: Equatable, Sendable {
-    public var frame: ScreenRect
-    public var readAt: ContinuousClock.Instant
-
-    public init(frame: ScreenRect, readAt: ContinuousClock.Instant) {
-        self.frame = frame
-        self.readAt = readAt
     }
 }
 
