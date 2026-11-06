@@ -111,6 +111,8 @@ final class WindowEventTranslator: Sendable {
     /// Reads a window and registers it if the registry has not seen it, inside the read. Anything
     /// that is not a standard window or sheet, and a window whose process is gone, is never
     /// registered. `announcing` announces the window's creation in the same step, unless it was.
+    /// The owner hears of this read only through that announcement: a move or resize of an unregistered
+    /// element, and an announcement already made or refused, never reach it.
     private func learn(
         _ element: AXElementBox,
         pid: pid_t,

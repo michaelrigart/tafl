@@ -73,6 +73,12 @@ public struct RequestEnding: Equatable, Sendable {
 /// request runs through it too, from Resolve's reading to its end, which records its outcome in the
 /// same step. Nothing else writes a window's state or its memory.
 ///
+/// Not every read reaches it. Settings' Capture records nothing, and the platform's own reads of a
+/// window it is registering skip it: one for an element seen to move or resize before it was read,
+/// and an announcing read whose announcement was not published (already made, or refused). That has
+/// no effect on behaviour: the owner sees fewer readings, still in the order they were read, and the
+/// engine reads the window again when it handles the event.
+///
 /// Every step is short and makes no call out, so the platform can take it on an app's queue.
 public final class WindowOwner: WindowNotices {
     private let state: Mutex<WindowStates>
