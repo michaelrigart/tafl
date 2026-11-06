@@ -193,3 +193,133 @@ private func lookUp(
     #expect(Set([direct.note, fallback.note, none.note]).count == 3)
     #expect(direct.name == fallback.name && fallback.name == none.name)
 }
+
+// MARK: A window's attributes
+
+/// One query: of which element, for which attribute.
+private struct Query: Hashable {
+    var element: String
+    var attribute: String
+
+    init(_ element: String, _ attribute: String) {
+        self.element = element
+        self.attribute = attribute
+    }
+}
+
+/// A standard window "w", whose full-screen button is "b", in an app that answers every query a read
+/// makes. A query it has no answer for fails as unsupported, as a missing attribute does.
+private struct AnsweringWindow {
+    var frame: Result<CGRect, AXFailure> = .success(CGRect(x: 10, y: 20, width: 300, height: 200))
+    var strings: [Query: Result<String, AXFailure>] = [
+        Query("w", "AXRole"): .success("AXWindow"),
+        Query("w", "AXSubrole"): .success("AXStandardWindow"),
+        Query("w", "AXTitle"): .success("Doc"),
+        Query("b", "AXSubrole"): .success("AXFullScreenButton"),
+    ]
+    var elements: [Query: Result<String, AXFailure>] = [Query("w", "AXFullScreenButton"): .success("b")]
+    var bools: [Query: Result<Bool, AXFailure>] = [
+        Query("w", "AXMinimized"): .success(false),
+        Query("w", "AXFullScreen"): .success(false),
+    ]
+    var sizes: [Query: Result<CGSize, AXFailure>] = [Query("w", "AXMinSize"): .success(CGSize(width: 100, height: 50))]
+    var settable: [Query: Result<Bool, AXFailure>] = [
+        Query("w", "AXPosition"): .success(true),
+        Query("w", "AXSize"): .success(true),
+    ]
+
+    func read() -> Result<WindowAttributes27, AXFailure> {
+        let missing = AXFailure(.attributeUnsupported)
+        let queries = WindowQueries27<String>(
+            frame: { _ in frame },
+            string: { strings[Query($0, $1)] ?? .failure(missing) },
+            element: { elements[Query($0, $1)] ?? .failure(missing) },
+            bool: { bools[Query($0, $1)] ?? .failure(missing) },
+            size: { sizes[Query($0, $1)] ?? .failure(missing) },
+            settable: { settable[Query($0, $1)] ?? .failure(missing) })
+        return Windows27.attributes(of: "w", asking: queries)
+    }
+}
+
+/// Each query a read of "w" makes after its frame, with the window set up so the read asks it.
+private enum Asked: CaseIterable {
+    case role, subrole, containingWindow, title, positionSettable, sizeSettable
+    case minSize, minimumSize, fullScreenButton, buttonSubrole, fullScreenAttribute, minimized
+
+    func window(failingWith code: AXError) -> AnsweringWindow {
+        var window = AnsweringWindow()
+        let failure = AXFailure(code)
+        switch self {
+        case .role: window.strings[Query("w", "AXRole")] = .failure(failure)
+        case .subrole: window.strings[Query("w", "AXSubrole")] = .failure(failure)
+        case .containingWindow:
+            // Asked only of an element that is not itself a window.
+            window.strings[Query("w", "AXRole")] = .success("AXTextField")
+            window.elements[Query("w", "AXWindow")] = .failure(failure)
+        case .title: window.strings[Query("w", "AXTitle")] = .failure(failure)
+        case .positionSettable: window.settable[Query("w", "AXPosition")] = .failure(failure)
+        case .sizeSettable: window.settable[Query("w", "AXSize")] = .failure(failure)
+        case .minSize: window.sizes[Query("w", "AXMinSize")] = .failure(failure)
+        case .minimumSize:
+            // Asked only when the window has no AXMinSize.
+            window.sizes[Query("w", "AXMinSize")] = nil
+            window.sizes[Query("w", "AXMinimumSize")] = .failure(failure)
+        case .fullScreenButton: window.elements[Query("w", "AXFullScreenButton")] = .failure(failure)
+        case .buttonSubrole: window.strings[Query("b", "AXSubrole")] = .failure(failure)
+        case .fullScreenAttribute:
+            // Asked only when the button test can't tell.
+            window.elements[Query("w", "AXFullScreenButton")] = nil
+            window.bools[Query("w", "AXFullScreen")] = .failure(failure)
+        case .minimized: window.bools[Query("w", "AXMinimized")] = .failure(failure)
+        }
+        return window
+    }
+}
+
+@Test func aReadKeepsEveryAnswer() {
+    #expect(AnsweringWindow().read() == .success(WindowAttributes27(
+        role: "AXWindow", subrole: "AXStandardWindow", title: "Doc", frame: CGRect(x: 10, y: 20, width: 300, height: 200),
+        canMove: true, canResize: true, minSize: CGSize(width: 100, height: 50), isFullscreen: false, isMinimized: false)))
+
+    var zoomed = AnsweringWindow()
+    zoomed.strings[Query("b", "AXSubrole")] = .success("AXZoomButton")
+    #expect((try? zoomed.read().get())?.isFullscreen == true)
+    var flagged = AnsweringWindow()
+    flagged.elements[Query("w", "AXFullScreenButton")] = nil
+    flagged.bools[Query("w", "AXFullScreen")] = .success(true)
+    #expect((try? flagged.read().get())?.isFullscreen == true)
+}
+
+@Test func aSettabilityTimeoutAfterTheFrameIsReadIsNotRespondingNotCannotMove() {
+    var window = AnsweringWindow()
+    window.settable[Query("w", "AXPosition")] = .failure(AXFailure(.cannotComplete))
+    let read = window.read()
+    #expect(read == .failure(AXFailure(.cannotComplete)))
+    #expect(read.mapError { Windows27.failure(for: $0.code) } == .failure(.notResponding))
+}
+
+@Test func aWindowWhoseAppSaysItCannotBeMovedIsReadAsSuch() {
+    for answer in [Result<Bool, AXFailure>.success(false), .failure(AXFailure(.attributeUnsupported)), .failure(AXFailure(.failure))] {
+        var window = AnsweringWindow()
+        window.settable[Query("w", "AXPosition")] = answer
+        #expect((try? window.read().get())?.canMove == false, "\(answer)")
+    }
+}
+
+@Test func anAttributeTheWindowLacksTakesItsDefault() {
+    let bare = AnsweringWindow(strings: [:], elements: [:], bools: [:], sizes: [:], settable: [:])
+    #expect(bare.read() == .success(WindowAttributes27(
+        role: nil, subrole: nil, title: "", frame: CGRect(x: 10, y: 20, width: 300, height: 200),
+        canMove: false, canResize: false, minSize: nil, isFullscreen: false, isMinimized: false)))
+}
+
+/// A timeout arrives as `cannotComplete`; a window closed during the read gives `invalidUIElement`.
+@Test(arguments: Asked.allCases)
+private func everyQueryTheAppDoesNotAnswerFailsTheReadAsItsFrameWould(_ asked: Asked) {
+    let timedOut = asked.window(failingWith: .cannotComplete).read()
+    #expect(timedOut.mapError { Windows27.failure(for: $0.code) } == .failure(.notResponding))
+    let gone = asked.window(failingWith: .invalidUIElement).read()
+    #expect(gone.mapError { Windows27.failure(for: $0.code) } == .failure(.noWindow))
+    // Any other failure is the attribute's absence.
+    #expect((try? asked.window(failingWith: .attributeUnsupported).read().get()) != nil)
+}

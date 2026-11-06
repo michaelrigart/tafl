@@ -29,32 +29,41 @@ enum Windows27 {
         isTracked(role: AXWindowAccess.role(element), subrole: AXWindowAccess.subrole(element))
     }
 
-    /// Blocks on Accessibility: call it only on the app's `AXQueue`. A window's frame is the one
-    /// attribute it must read; a window that does not give one is a failure. The role and subrole
-    /// are read once, and the window element is resolved once for the minimized and full-screen tests.
+    /// Blocks on Accessibility: call it only on the app's `AXQueue`.
     static func read(_ element: AXUIElement, pid: pid_t, resolveID: Bool) -> Result<ElementRead, AXFailure> {
-        switch AXWindowAccess.frame(element) {
-        case .failure(let failure):
-            return .failure(failure)
-        case .success(let frame):
-            let role = AXWindowAccess.role(element)
-            let subrole = AXWindowAccess.subrole(element)
-            let window = AXWindowAccess.windowElement(for: element, role: role, subrole: { subrole })
-            let attributes = WindowAttributes27(
-                role: role,
-                subrole: subrole,
-                title: AXWindowAccess.title(element) ?? "",
-                frame: frame,
-                canMove: AXWindowAccess.isSettable(element, attribute: kAXPositionAttribute),
-                canResize: AXWindowAccess.isSettable(element, attribute: kAXSizeAttribute),
-                minSize: AXWindowAccess.minimumSize(element),
-                isFullscreen: window.flatMap(AXWindowAccess.isFullscreen(window:))
-                    ?? AXWindowAccess.fullScreenAttribute(element) ?? false,
-                isMinimized: window.flatMap(AXWindowAccess.isMinimized(window:)) ?? false)
+        attributes(of: element, asking: .live).map { attributes in
             let id = resolveID
-                ? WindowIDResolver.windowID(element, pid: pid, frame: frame).map { ResolvedWindowID(id: $0.0, by: $0.1) }
+                ? WindowIDResolver.windowID(element, pid: pid, frame: attributes.frame).map { ResolvedWindowID(id: $0.0, by: $0.1) }
                 : nil
-            return .success(ElementRead(element: AXElementBox(element), attributes: attributes, windowID: id))
+            return ElementRead(element: AXElementBox(element), attributes: attributes, windowID: id)
+        }
+    }
+
+    /// A window's frame is the one attribute it must give. Any other it lacks takes its default (no
+    /// role, no title, not settable, no minimum size, not full screen, not minimized), but a query
+    /// the app did not answer, or one that found the window gone, fails the read as a frame query
+    /// would, at the first: a timeout is never a "no". The role and subrole are read once, and the
+    /// window element is resolved once for the full-screen and minimized tests.
+    static func attributes<Element>(
+        of element: Element,
+        asking ask: WindowQueries27<Element>
+    ) -> Result<WindowAttributes27, AXFailure> {
+        Result { () throws(AXFailure) -> WindowAttributes27 in
+            let frame = try ask.frame(element).get()
+            let role = try ask.string(element, kAXRoleAttribute).answer()
+            let subrole = try ask.string(element, kAXSubroleAttribute).answer()
+            let window = try ask.windowElement(of: element, role: role, subrole: { subrole })
+            let title = try ask.string(element, kAXTitleAttribute).answer() ?? ""
+            let canMove = try ask.settable(element, kAXPositionAttribute).answer() ?? false
+            let canResize = try ask.settable(element, kAXSizeAttribute).answer() ?? false
+            var minSize = try ask.size(element, "AXMinSize").answer()
+            if minSize == nil { minSize = try ask.size(element, "AXMinimumSize").answer() }
+            let isFullscreen = try ask.isFullscreen(element, window: window)
+            var isMinimized = false
+            if let window { isMinimized = try ask.bool(window, kAXMinimizedAttribute).answer() ?? false }
+            return WindowAttributes27(
+                role: role, subrole: subrole, title: title, frame: frame, canMove: canMove, canResize: canResize,
+                minSize: minSize, isFullscreen: isFullscreen, isMinimized: isMinimized)
         }
     }
 

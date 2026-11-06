@@ -1,0 +1,65 @@
+import ApplicationServices
+import CoreGraphics
+
+/// The Accessibility queries a window read makes, by attribute, as a seam: the live ones ask the
+/// element (on its app's `AXQueue`), a test answers its own. Each gives the value, or the error
+/// the query failed with.
+struct WindowQueries27<Element> {
+    var frame: (Element) -> Result<CGRect, AXFailure>
+    var string: (Element, String) -> Result<String, AXFailure>
+    var element: (Element, String) -> Result<Element, AXFailure>
+    var bool: (Element, String) -> Result<Bool, AXFailure>
+    var size: (Element, String) -> Result<CGSize, AXFailure>
+    var settable: (Element, String) -> Result<Bool, AXFailure>
+}
+
+extension WindowQueries27<AXUIElement> {
+    static var live: Self {
+        Self(
+            frame: AXWindowAccess.frame,
+            string: AXWindowAccess.stringResult,
+            element: AXWindowAccess.elementResult,
+            bool: AXWindowAccess.boolResult,
+            size: AXWindowAccess.sizeValue,
+            settable: { AXWindowAccess.settability($0, attribute: $1) })
+    }
+}
+
+extension WindowQueries27 {
+    /// Rectangle's `windowElement` (see `AXWindowAccess.resolveWindowElement`), from a role already read.
+    func windowElement(
+        of element: Element,
+        role: String?,
+        subrole: () throws(AXFailure) -> String?
+    ) throws(AXFailure) -> Element? {
+        try AXWindowAccess.resolveWindowElement(
+            element,
+            isWindow: role.map { $0 == kAXWindowRole },
+            containingWindow: { () throws(AXFailure) in try self.element(element, kAXWindowAttribute).answer() },
+            subrole: subrole)
+    }
+
+    /// Rectangle's test (a full-screen window's AXFullScreenButton has the zoom subrole), then the
+    /// undocumented `AXFullScreen` attribute when that test can't tell.
+    func isFullscreen(_ element: Element, window: Element?) throws(AXFailure) -> Bool {
+        if let window,
+           let button = try self.element(window, kAXFullScreenButtonAttribute).answer(),
+           let subrole = try string(button, kAXSubroleAttribute).answer() {
+            return subrole == kAXZoomButtonSubrole
+        }
+        return try bool(element, "AXFullScreen").answer() ?? false
+    }
+}
+
+extension Result where Failure == AXFailure {
+    /// The attribute's value, or nil when the element has none. A query the app did not answer (a
+    /// timeout arrives as `cannotComplete`), or one that found the element gone, says nothing about
+    /// the attribute: it throws.
+    func answer() throws(AXFailure) -> Success? {
+        switch self {
+        case .success(let value): return value
+        case .failure(let failure) where failure.code == .cannotComplete || failure.code == .invalidUIElement: throw failure
+        case .failure: return nil
+        }
+    }
+}

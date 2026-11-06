@@ -140,27 +140,22 @@ public enum AXWindowAccess {
     /// Rectangle's `windowElement`: a window is itself; otherwise its containing window;
     /// otherwise an element with the AXStandardWindow subrole is itself (Emacs 28 exposes
     /// its window as an AXTextField without an AXWindow attribute).
-    static func resolveWindowElement<Element>(
+    static func resolveWindowElement<Element, Failure: Error>(
         _ element: Element, isWindow: Bool?,
-        containingWindow: () -> Element?,
-        subrole: () -> String?
-    ) -> Element? {
+        containingWindow: () throws(Failure) -> Element?,
+        subrole: () throws(Failure) -> String?
+    ) throws(Failure) -> Element? {
         if isWindow == true { return element }
-        if let window = containingWindow() { return window }
-        return subrole() == kAXStandardWindowSubrole ? element : nil
+        if let window = try containingWindow() { return window }
+        return try subrole() == kAXStandardWindowSubrole ? element : nil
     }
 
     private static func windowElement(for element: AXUIElement) -> AXUIElement? {
-        windowElement(for: element, role: role(element), subrole: { subrole(element) })
-    }
-
-    /// `windowElement` from a role already read, so a caller that has it asks once.
-    public static func windowElement(for element: AXUIElement, role: String?, subrole: () -> String?) -> AXUIElement? {
         resolveWindowElement(
             element,
-            isWindow: role.map { $0 == kAXWindowRole },
+            isWindow: role(element).map { $0 == kAXWindowRole },
             containingWindow: { elementValue(element, kAXWindowAttribute) },
-            subrole: subrole)
+            subrole: { subrole(element) })
     }
 
     /// The last resort in Rectangle's front-window lookup: the system-wide focused element,
@@ -185,7 +180,16 @@ public enum AXWindowAccess {
         try? copyResult(element, attribute).get()
     }
 
-    private static func elementResult(_ element: AXUIElement, _ attribute: String) -> Result<AXUIElement, AXFailure> {
+    /// A value of another type than asked for is `illegalArgument`, as for a point or a size.
+    static func stringResult(_ element: AXUIElement, _ attribute: String) -> Result<String, AXFailure> {
+        copyResult(element, attribute).flatMap { ($0 as? String).map { .success($0) } ?? .failure(AXFailure(.illegalArgument)) }
+    }
+
+    static func boolResult(_ element: AXUIElement, _ attribute: String) -> Result<Bool, AXFailure> {
+        copyResult(element, attribute).flatMap { ($0 as? Bool).map { .success($0) } ?? .failure(AXFailure(.illegalArgument)) }
+    }
+
+    static func elementResult(_ element: AXUIElement, _ attribute: String) -> Result<AXUIElement, AXFailure> {
         copyResult(element, attribute).flatMap { value in
             CFGetTypeID(value) == AXUIElementGetTypeID() ? .success(value as! AXUIElement) : .failure(AXFailure(.illegalArgument))
         }
@@ -202,7 +206,7 @@ public enum AXWindowAccess {
         }
     }
 
-    private static func sizeValue(_ element: AXUIElement, _ attribute: String) -> Result<CGSize, AXFailure> {
+    static func sizeValue(_ element: AXUIElement, _ attribute: String) -> Result<CGSize, AXFailure> {
         axValue(element, attribute, type: .cgSize).flatMap { value in
             var size = CGSize.zero
             return AXValueGetValue(value, .cgSize, &size) ? .success(size) : .failure(AXFailure(.illegalArgument))
