@@ -1,11 +1,14 @@
 import Foundation
 import TaflCore
 
-public struct Tiling27: @unchecked Sendable { // reason: UserDefaults is thread-safe and this only reads it
-    private let defaults: UserDefaults?
+public struct Tiling27: Sendable {
+    private let value: @Sendable (String) -> Any?
 
-    public init(defaults: UserDefaults? = UserDefaults(suiteName: "com.apple.WindowManager")) {
-        self.defaults = defaults
+    /// `read` looks a key up; by default in Apple's `com.apple.WindowManager` domain, which Tafl only reads.
+    public init(read value: @escaping @Sendable (String) -> Any? = { key in
+        UserDefaults(suiteName: "com.apple.WindowManager")?.object(forKey: key)
+    }) {
+        self.value = value
     }
 
     /// A setting whose key is unset is nil.
@@ -18,6 +21,6 @@ public struct Tiling27: @unchecked Sendable { // reason: UserDefaults is thread-
     }
 
     private func flag(_ key: String) -> Bool? {
-        (defaults?.object(forKey: key) as? NSNumber)?.boolValue
+        (value(key) as? NSNumber)?.boolValue
     }
 }

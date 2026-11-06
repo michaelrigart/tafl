@@ -2,25 +2,20 @@ import Foundation
 import Testing
 @testable import TaflPlatform27
 
-/// Values are stored as `Any` so a test can write an integer, as macOS does, or a Bool.
-private func withSuite(_ values: [String: Any], _ body: (UserDefaults) -> Void) {
-    let name = "com.michaelrigart.tafl.tests.tiling.\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: name)!
-    defer { defaults.removePersistentDomain(forName: name) }
-    for (key, value) in values { defaults.set(value, forKey: key) }
-    body(defaults)
+/// Values are stored as `Any` so a test can supply an integer, as macOS stores them, or a Bool.
+private func tilingReading(_ values: [String: Any]) -> Tiling27 {
+    nonisolated(unsafe) let values = values // reason: read-only test fixture
+    return Tiling27(read: { values[$0] })
 }
 
 @Test func edgeDragStoredAsIntegerZeroReadsAsOff() {
-    withSuite(["EnableTilingByEdgeDrag": 0]) { defaults in
-        #expect(Tiling27(defaults: defaults).read().edgeDrag == false)
-    }
+    let tiling = tilingReading(["EnableTilingByEdgeDrag": 0])
+    #expect(tiling.read().edgeDrag == false)
 }
 
 @Test func edgeDragStoredAsTrueReadsAsOn() {
-    withSuite(["EnableTilingByEdgeDrag": true]) { defaults in
-        #expect(Tiling27(defaults: defaults).read().edgeDrag == true)
-    }
+    let tiling = tilingReading(["EnableTilingByEdgeDrag": true])
+    #expect(tiling.read().edgeDrag == true)
 }
 
 @Test func eachSettingReadsItsOwnKey() {
@@ -30,37 +25,27 @@ private func withSuite(_ values: [String: Any], _ body: (UserDefaults) -> Void) 
         "EnableTopTilingByEdgeDrag": true,
         "EnableTiledWindowMargins": true,
     ]
-    withSuite(keys) { defaults in
-        let settings = Tiling27(defaults: defaults).read()
-        #expect(settings.edgeDrag == false)
-        #expect(settings.optionAccelerator == true)
-        #expect(settings.topEdgeDrag == true)
-        #expect(settings.tiledMargins == true)
-    }
+    let tiling = tilingReading(keys)
+    let settings = tiling.read()
+    #expect(settings.edgeDrag == false)
+    #expect(settings.optionAccelerator == true)
+    #expect(settings.topEdgeDrag == true)
+    #expect(settings.tiledMargins == true)
 }
 
 @Test func unsetSwitchesReadAsNil() {
-    withSuite([:]) { defaults in
-        #expect(Tiling27(defaults: defaults).read()
-            == .init(edgeDrag: nil, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: nil))
-    }
+    let tiling = tilingReading([:])
+    #expect(tiling.read()
+        == .init(edgeDrag: nil, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: nil))
 }
 
 @Test func oneUnsetKeyDoesNotAffectTheOthers() {
-    withSuite(["EnableTilingByEdgeDrag": 1]) { defaults in
-        let settings = Tiling27(defaults: defaults).read()
-        #expect(settings.edgeDrag == true)
-        #expect(settings.optionAccelerator == nil)
-    }
+    let tiling = tilingReading(["EnableTilingByEdgeDrag": 1])
+    let settings = tiling.read()
+    #expect(settings.edgeDrag == true)
+    #expect(settings.optionAccelerator == nil)
 }
 
 @Test func missingDefaultsReadAsAllNil() {
-    #expect(Tiling27(defaults: nil).read() == .init(edgeDrag: nil, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: nil))
-}
-
-@Test func readingNeverWritesTheDomain() {
-    withSuite([:]) { defaults in
-        _ = Tiling27(defaults: defaults).read()
-        #expect(defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix("Enable") }.isEmpty)
-    }
+    #expect(Tiling27(read: { _ in nil }).read() == .init(edgeDrag: nil, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: nil))
 }
