@@ -121,6 +121,8 @@ struct ConfigParserTests {
     func escapedKeyErrors() {
         expect("\"\\u0067ap\" = -1\nstep = 0", line: 1, "gap must be between 0 and 100")
         expect("\"\\u0067ap\" = -1", line: 1, "gap must be between 0 and 100")
+        expect("\"\\x67ap\" = -1\nstep = 0", line: 1, "gap must be between 0 and 100")
+        expect("\"\\x67\\x61p\" = -1\nstep = 0", line: 1, "gap must be between 0 and 100")
     }
 
     @Test("A value of the wrong type names the key and the type it needs")

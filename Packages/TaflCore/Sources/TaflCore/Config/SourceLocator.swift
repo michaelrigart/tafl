@@ -161,28 +161,54 @@ private struct Scan {
         return segments
     }
 
-    /// The bytes of the TOML basic-string escape at the position, which moves past it: `\b \t \n \f
-    /// \r \" \\`, `\uXXXX` and `\UXXXXXXXX`. Anything else (TOMLDecoder rejects it) keeps its character.
+    /// The bytes of the basic-string escape at the position, which moves past it: the ones
+    /// TOMLDecoder 0.4.5 decodes, `\b \t \n \f \r \e \" \\`, `\xHH`, `\uXXXX` and `\UXXXXXXXX`. Any other
+    /// (or a malformed one) is an error to TOMLDecoder, so the file never reaches this point with
+    /// one; the character is kept.
     private mutating func escape() -> [UInt8] {
         let escaped = bytes[position + 1]
         let simple: [UInt8: UInt8] = [
             UInt8(ascii: "b"): 0x08, UInt8(ascii: "t"): 0x09, UInt8(ascii: "n"): 0x0A,
-            UInt8(ascii: "f"): 0x0C, UInt8(ascii: "r"): 0x0D, Self.doubleQuote: Self.doubleQuote,
-            Self.backslash: Self.backslash,
+            UInt8(ascii: "f"): 0x0C, UInt8(ascii: "r"): 0x0D, UInt8(ascii: "e"): 0x1B,
+            Self.doubleQuote: Self.doubleQuote, Self.backslash: Self.backslash,
         ]
         if let byte = simple[escaped] {
             position += 2
             return [byte]
         }
-        let digits = escaped == UInt8(ascii: "u") ? 4 : escaped == UInt8(ascii: "U") ? 8 : 0
-        guard digits > 0, position + 2 + digits <= bytes.count,
-              let code = UInt32(String(decoding: bytes[(position + 2)..<(position + 2 + digits)], as: UTF8.self), radix: 16),
-              let scalar = Unicode.Scalar(code) else {
+        let digits = switch escaped {
+        case UInt8(ascii: "x"): 2
+        case UInt8(ascii: "u"): 4
+        case UInt8(ascii: "U"): 8
+        default: 0
+        }
+        guard digits > 0, position + 2 + digits <= bytes.count else {
+            position += 2
+            return [escaped]
+        }
+        var code: UInt32 = 0
+        for byte in bytes[(position + 2)..<(position + 2 + digits)] {
+            guard let digit = Self.hexValue(byte) else {
+                position += 2
+                return [escaped]
+            }
+            code = code * 16 + digit
+        }
+        guard let scalar = Unicode.Scalar(code) else {
             position += 2
             return [escaped]
         }
         position += 2 + digits
         return Array(String(Character(scalar)).utf8)
+    }
+
+    private static func hexValue(_ byte: UInt8) -> UInt32? {
+        switch byte {
+        case UInt8(ascii: "0")...UInt8(ascii: "9"): UInt32(byte - UInt8(ascii: "0"))
+        case UInt8(ascii: "a")...UInt8(ascii: "f"): UInt32(byte - UInt8(ascii: "a") + 10)
+        case UInt8(ascii: "A")...UInt8(ascii: "F"): UInt32(byte - UInt8(ascii: "A") + 10)
+        default: nil
+        }
     }
 
     /// Skips one value, which may span lines when it is an array, an inline table or a multi-line string.

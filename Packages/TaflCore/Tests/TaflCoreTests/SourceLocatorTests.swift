@@ -70,17 +70,21 @@ struct SourceLocatorTests {
         "\\u0067ap" = 1
         "st\\U00000065p" = 2
         "tab\\tbell\\b\\f\\r\\n\\"quote\\\\" = 3
-        'raw\\u0067' = 4
+        "\\x6Dax" = 4
+        "bell\\e" = 5
+        'raw\\u0067' = 6
         ["t\\u0061ble"]
-        k = 5
+        k = 7
         """
         let locator = SourceLocator(text)
         #expect(locator.line(of: [.key("gap")]) == 1)
         #expect(locator.line(of: [.key("step")]) == 2)
         #expect(locator.line(of: [.key("tab\tbell\u{8}\u{C}\r\n\"quote\\")]) == 3)
-        #expect(locator.line(of: [.key("raw\\u0067")]) == 4)
+        #expect(locator.line(of: [.key("max")]) == 4)
+        #expect(locator.line(of: [.key("bell\u{1B}")]) == 5)
+        #expect(locator.line(of: [.key("raw\\u0067")]) == 6)
         #expect(locator.line(of: [.key("raw\u{67}")]) == nil)
-        #expect(locator.line(of: [.key("table"), .key("k")]) == 6)
+        #expect(locator.line(of: [.key("table"), .key("k")]) == 8)
     }
 
     @Test("A header with spaces and a quoted part is still found")
