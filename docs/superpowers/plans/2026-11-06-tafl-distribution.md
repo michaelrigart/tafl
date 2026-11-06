@@ -164,7 +164,7 @@ Nothing in this task goes into the repository: the drawing waits in the scratchp
   - `depends_on arch: :arm64`, `depends_on macos: :golden_gate`, `app "Tafl.app", target: "/Applications/Tafl.app"`, `uninstall quit: "com.michaelrigart.tafl"`, `livecheck` unchanged;
   - `zap trash:` exactly `~/.local/state/tafl` and `~/Library/Preferences/com.michaelrigart.tafl.plist`;
   - `caveats`: "Open Anyway" in System Settings › Privacy & Security, because Tafl isn't notarized; the Accessibility permission, through Tafl's onboarding window; quit Rectangle, or any app using the same shortcuts, first, because Tafl gets no error for a shortcut another app holds.
-- [ ] **Step 3: Add to case a of `test-release-dry-run`,** against the rendered cask: it contains `"~/.local/state/tafl"`; it contains neither `.config` nor `quarantine` nor `xattr`.
+- [ ] **Step 3: Add to case a of `test-release-dry-run`,** against the rendered cask: the entries of its `zap trash:` list, read from that stanza alone, are exactly `~/.local/state/tafl` and `~/Library/Preferences/com.michaelrigart.tafl.plist`, in that order; and the whole cask contains neither `.config` nor `quarantine` nor `xattr`.
 - [ ] **Step 4: Commit** "Add the release script and the cask template". `scripts/release` refuses a dirty tree even for a dry run, so this comes before Step 5.
 - [ ] **Step 5: Run** `scripts/tests/test-release-dry-run` (every case passes, `brew style` included), then `scripts/release --dry-run` on this branch (acceptance 4). The dry run builds signed with the team, passes `verify-app --team CX4MWR5579 <app> <version>`, writes `Tafl-<version>.zip` and prints the changelog section. `lipo -archs` on the unpacked app prints `arm64`. Delete `build/release/` afterwards. A failure is fixed in a new commit and Step 5 runs again.
 
@@ -198,7 +198,7 @@ Nothing in this task goes into the repository: the drawing waits in the scratchp
   - Rules: replace "Builds are ad-hoc signed, so every rebuild needs Accessibility granted again…" with Hulder's signing rule: team-signed builds keep the grant across rebuilds (confirmed for Hulder; for Tafl once acceptance 2 is recorded), ad hoc builds need it after every rebuild, and moving from ad hoc to team-signed needs it once, after `tccutil reset Accessibility com.michaelrigart.tafl` (which Michael runs). Every other rule stays.
 - [ ] **Step 3: Revise v1's design:** under its header, `**Revised:** 2026-11-06: signing moved to Michael's Personal Team; see `docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`.` Replace the Signing bullet with one stating Personal Team signing, as the other three now use, and pointing at the same design. Its Decisions stay as they are.
 - [ ] **Step 4: Run the README's build block from a fresh clone.** `git clone` this checkout into the scratchpad and run the block as written, with the ad hoc override, up to and including the `xcodebuild` line (the install and `open` lines would replace v1's probe build: acceptance 5's launch stays open for Michael). `scripts/verify-app` on the product exits 0.
-- [ ] **Step 5: Check for this Mac.** `git grep -nE '/Users/|/private/|michael@|~/Code' -- README.md AGENTS.md CHANGELOG.md scripts design .github` finds nothing.
+- [ ] **Step 5: Check for this Mac** in the working files, tracked or not (the README isn't committed yet, and `git grep` would skip it): `rg -n --hidden -e '/Users/' -e '/private/' -e 'michael@' -e '~/Code' README.md AGENTS.md CHANGELOG.md scripts design .github` finds nothing.
 - [ ] **Step 6: Commit** "Document installing, building and releasing".
 
 ---
@@ -209,8 +209,10 @@ Nothing in this task goes into the repository: the drawing waits in the scratchp
 2. **Going public,** as the spec's section says:
    - scan the tracked files and the full history of `main`, `feat/tafl-v1` and `feat/distribution` with `gitleaks` and a grep for private content; anything found goes to Michael (via v1's driver) before any push;
    - `gh repo create michaelrigart/tafl --public`, then `git remote add origin git@github.com:michaelrigart/tafl.git`;
-   - push `main`, then `feat/tafl-v1`, then `feat/distribution`, each in its own call; message v1's driver the moment `origin` exists;
-   - open this branch's draft pull request into `feat/tafl-v1` (merge-request skill, assigned to Michael, "Rulings" and the open acceptance items in its body); record it in the distribution design's Status and this plan's.
+   - push `main`, then `feat/tafl-v1`, then `feat/distribution`, each in its own call;
+   - v1's draft pull request (`feat/tafl-v1` into `main`) is opened by v1's driver, because its body carries v1's rulings and v1's Status edit is on v1's branch. Message the driver the moment `origin` exists, asking for that pull request and its Status update, and get back its URL;
+   - open this branch's draft pull request into `feat/tafl-v1` (merge-request skill, assigned to Michael, linking v1's pull request, with "Rulings" and the open acceptance items in its body); record it in the distribution design's Status and this plan's;
+   - Going public is done when both pull requests exist and both designs' Status lines name them.
 3. **CI** on the pull request passes (acceptance 1). A failure with Xcode 27.1, or in a v1 suite, goes to v1's driver; this branch fixes only its own files.
 4. **Rebase** onto the latest `origin/feat/tafl-v1`, keeping both sides in v1's design header and `AGENTS.md`; re-check the README's Limitations against v1's "Measured on macOS 27.2" section if it has landed; run both suites, the script tests and the Release build; push with a lease.
 5. **Codex's pre-merge review** (`xreview dispatch --checkpoint pre-merge --diff origin/feat/tafl-v1...feat/distribution`), and fix rounds until it approves.
