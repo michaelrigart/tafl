@@ -62,11 +62,9 @@ enum Windows27 {
             let subrole = try optional.string(element, kAXSubroleAttribute).answer()
             let window = try optional.windowElement(of: element, role: role, subrole: { subrole })
             let title = try optional.string(element, kAXTitleAttribute).answer() ?? ""
-            var minSize = try optional.size(element, "AXMinSize").answer()
-            if minSize == nil { minSize = try optional.size(element, "AXMinimumSize").answer() }
+            let minSize = try optional.minimumSize(of: element)
             let isFullscreen = try optional.isFullscreen(element, window: window)
-            var isMinimized = false
-            if let window { isMinimized = try optional.bool(window, kAXMinimizedAttribute).answer() ?? false }
+            let isMinimized = try optional.isMinimized(window: window)
             return WindowAttributes27(
                 role: role, subrole: subrole, title: title, frame: frame, canMove: canMove, canResize: canResize,
                 minSize: minSize, isFullscreen: isFullscreen, isMinimized: isMinimized)

@@ -3,18 +3,20 @@ import CoreGraphics
 
 /// The Accessibility queries a window read makes, by attribute, as a seam: the live ones ask the
 /// element (on its app's `AXQueue`), a test answers its own. Each gives the value, or the error
-/// the query failed with.
-struct WindowQueries27<Element> {
-    var frame: (Element) -> Result<CGRect, AXFailure>
-    var string: (Element, String) -> Result<String, AXFailure>
-    var element: (Element, String) -> Result<Element, AXFailure>
-    var bool: (Element, String) -> Result<Bool, AXFailure>
-    var size: (Element, String) -> Result<CGSize, AXFailure>
-    var settable: (Element, String) -> Result<Bool, AXFailure>
+/// the query failed with. The rules built on them (the window element, full screen, minimized,
+/// the minimum size) are the only ones Tafl has: the read, the write path and the probe all ask
+/// them here.
+public struct WindowQueries27<Element> {
+    public let frame: (Element) -> Result<CGRect, AXFailure>
+    public let string: (Element, String) -> Result<String, AXFailure>
+    public let element: (Element, String) -> Result<Element, AXFailure>
+    public let bool: (Element, String) -> Result<Bool, AXFailure>
+    public let size: (Element, String) -> Result<CGSize, AXFailure>
+    public let settable: (Element, String) -> Result<Bool, AXFailure>
 }
 
 extension WindowQueries27<AXUIElement> {
-    static var live: Self {
+    public static var live: Self {
         Self(
             frame: AXWindowAccess.frame,
             string: AXWindowAccess.stringResult,
@@ -41,7 +43,7 @@ extension WindowQueries27 {
 
     /// Rectangle's `windowElement` (see `AXWindowAccess.resolveWindowElement`), asking for the role,
     /// and for the subrole only when it decides.
-    func windowElement(of element: Element) throws(AXFailure) -> Element? {
+    public func windowElement(of element: Element) throws(AXFailure) -> Element? {
         try windowElement(
             of: element,
             role: string(element, kAXRoleAttribute).answer(),
@@ -49,7 +51,7 @@ extension WindowQueries27 {
     }
 
     /// Whether the element's window is full screen, as a read tells it, or why that could not be told.
-    func fullscreen(of element: Element) -> Result<Bool, AXFailure> {
+    public func fullscreen(of element: Element) -> Result<Bool, AXFailure> {
         Result { () throws(AXFailure) in try isFullscreen(element, window: windowElement(of: element)) }
     }
 
@@ -75,6 +77,18 @@ extension WindowQueries27 {
             return subrole == kAXZoomButtonSubrole
         }
         return try bool(element, "AXFullScreen").answer() ?? false
+    }
+
+    /// Whether the window is minimized; an element with no window is not.
+    public func isMinimized(window: Element?) throws(AXFailure) -> Bool {
+        guard let window else { return false }
+        return try bool(window, kAXMinimizedAttribute).answer() ?? false
+    }
+
+    /// The smallest size the app allows: `AXMinSize`, or `AXMinimumSize` when it has none.
+    public func minimumSize(of element: Element) throws(AXFailure) -> CGSize? {
+        if let size = try size(element, "AXMinSize").answer() { return size }
+        return try size(element, "AXMinimumSize").answer()
     }
 }
 

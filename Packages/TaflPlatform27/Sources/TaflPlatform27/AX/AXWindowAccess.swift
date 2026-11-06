@@ -97,37 +97,6 @@ public enum AXWindowAccess {
         copyValue(element, kAXSubroleAttribute) as? String
     }
 
-    public static func isMinimized(_ element: AXUIElement) -> Bool? {
-        windowElement(for: element).flatMap(isMinimized(window:))
-    }
-
-    public static func isMinimized(window: AXUIElement) -> Bool? {
-        copyValue(window, kAXMinimizedAttribute) as? Bool
-    }
-
-    /// Rectangle's test: a full-screen window's AXFullScreenButton has the zoom subrole.
-    public static func isFullscreen(_ element: AXUIElement) -> Bool? {
-        windowElement(for: element).flatMap(isFullscreen(window:))
-    }
-
-    public static func isFullscreen(window: AXUIElement) -> Bool? {
-        guard let button = elementValue(window, kAXFullScreenButtonAttribute),
-              let subrole = subrole(button)
-        else { return nil }
-        return subrole == kAXZoomButtonSubrole
-    }
-
-    /// The undocumented `AXFullScreen` attribute, read next to `isFullscreen` so the two can be compared.
-    public static func fullScreenAttribute(_ element: AXUIElement) -> Bool? {
-        copyValue(element, "AXFullScreen") as? Bool
-    }
-
-    public static func minimumSize(_ element: AXUIElement) -> CGSize? {
-        if case .success(let size) = sizeValue(element, "AXMinSize") { return size }
-        if case .success(let size) = sizeValue(element, "AXMinimumSize") { return size }
-        return nil
-    }
-
     public static func enhancedUserInterface(app pid: pid_t) -> Bool? {
         copyValue(AXUIElementCreateApplication(pid), "AXEnhancedUserInterface") as? Bool
     }
@@ -154,14 +123,6 @@ public enum AXWindowAccess {
         if isWindow == true { return element }
         if let window = try containingWindow() { return window }
         return try subrole() == kAXStandardWindowSubrole ? element : nil
-    }
-
-    private static func windowElement(for element: AXUIElement) -> AXUIElement? {
-        resolveWindowElement(
-            element,
-            isWindow: role(element).map { $0 == kAXWindowRole },
-            containingWindow: { elementValue(element, kAXWindowAttribute) },
-            subrole: { subrole(element) })
     }
 
     /// The last resort in Rectangle's front-window lookup: the system-wide focused element,
@@ -207,10 +168,6 @@ public enum AXWindowAccess {
         copyResult(element, attribute).flatMap { value in
             CFGetTypeID(value) == AXUIElementGetTypeID() ? .success(value as! AXUIElement) : .failure(AXFailure(.illegalArgument))
         }
-    }
-
-    private static func elementValue(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
-        try? elementResult(element, attribute).get()
     }
 
     private static func pointValue(_ element: AXUIElement, _ attribute: String) -> Result<CGPoint, AXFailure> {

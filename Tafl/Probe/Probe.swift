@@ -71,8 +71,10 @@ enum Probe {
         let title: String?
     }
 
+    /// Minimized and full screen are what Tafl's window read decides; nil when the app did not answer.
     private nonisolated static func describeWindows(pid: pid_t) -> [WindowRow] {
-        AXWindowAccess.windows(of: pid).map { window in
+        let ask = WindowQueries27.live
+        return AXWindowAccess.windows(of: pid).map { window in
             let frame = AXWindowAccess.frame(window)
             let frameText = format(frame)
             let identityText: String
@@ -81,10 +83,11 @@ enum Probe {
             } else {
                 identityText = "windowID=none"
             }
+            let minimized = try? ask.isMinimized(window: ask.windowElement(of: window))
             let text = "frame=\(frameText) position-settable=\(AXWindowAccess.isSettable(window, attribute: "AXPosition")) "
                 + "size-settable=\(AXWindowAccess.isSettable(window, attribute: "AXSize")) "
-                + "minimized=\(describe(AXWindowAccess.isMinimized(window))) fullscreen=\(describe(AXWindowAccess.isFullscreen(window))) "
-                + "axFullScreenAttribute=\(describe(AXWindowAccess.fullScreenAttribute(window))) "
+                + "minimized=\(describe(minimized)) fullscreen=\(describe(try? ask.fullscreen(of: window).get())) "
+                + "axFullScreenAttribute=\(describe(try? ask.bool(window, "AXFullScreen").get())) "
                 + "subrole=\(AXWindowAccess.subrole(window) ?? "nil") \(identityText)"
             return WindowRow(text: text, title: AXWindowAccess.title(window))
         }
@@ -128,7 +131,7 @@ enum Probe {
             return
         }
         let enhancedBefore = AXWindowAccess.enhancedUserInterface(app: pid)
-        let minimum = AXWindowAccess.minimumSize(window)
+        let minimum = try? WindowQueries27.live.minimumSize(of: window)
         ProbeLog.write("apply: enhancedUI=\(describe(enhancedBefore)) minimumSize=\(minimum.map { "\($0.width)x\($0.height)" } ?? "nil") "
             + "position-settable=\(AXWindowAccess.isSettable(window, attribute: "AXPosition")) "
             + "size-settable=\(AXWindowAccess.isSettable(window, attribute: "AXSize"))")
