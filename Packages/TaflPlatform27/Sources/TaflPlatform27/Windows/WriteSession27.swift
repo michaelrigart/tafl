@@ -65,7 +65,7 @@ final class WriteSession27: WriteSession {
             return Windows27.writePosition(
                 settable: { AXWindowAccess.settability(target, attribute: kAXPositionAttribute) },
                 write: { AXWindowAccess.setPosition(target, CGPoint(x: point.x, y: point.y)) },
-                isFullscreen: { AXWindowAccess.isFullscreen(target) ?? false })
+                isFullscreen: { WindowQueries27.live.fullscreen(of: target) })
         }
     }
 

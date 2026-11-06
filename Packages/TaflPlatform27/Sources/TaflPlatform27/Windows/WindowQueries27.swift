@@ -26,6 +26,20 @@ extension WindowQueries27<AXUIElement> {
 }
 
 extension WindowQueries27 {
+    /// Rectangle's `windowElement` (see `AXWindowAccess.resolveWindowElement`), asking for the role,
+    /// and for the subrole only when it decides.
+    func windowElement(of element: Element) throws(AXFailure) -> Element? {
+        try windowElement(
+            of: element,
+            role: string(element, kAXRoleAttribute).answer(),
+            subrole: { () throws(AXFailure) in try string(element, kAXSubroleAttribute).answer() })
+    }
+
+    /// Whether the element's window is full screen, as a read tells it, or why that could not be told.
+    func fullscreen(of element: Element) -> Result<Bool, AXFailure> {
+        Result { () throws(AXFailure) in try isFullscreen(element, window: windowElement(of: element)) }
+    }
+
     /// Rectangle's `windowElement` (see `AXWindowAccess.resolveWindowElement`), from a role already read.
     func windowElement(
         of element: Element,

@@ -24,7 +24,7 @@ public enum AXWindowAccess {
     static func lookUpFocusedWindow<Element>(
         focused: () -> Result<Element, AXFailure>,
         first: () -> Result<Element?, AXFailure>,
-        systemWide: () -> Element?
+        systemWide: () -> Result<Element?, AXFailure>
     ) -> Result<Element, AXFailure> {
         switch focused() {
         case .success(let window): return .success(window)
@@ -36,8 +36,11 @@ public enum AXWindowAccess {
         case .failure(let failure) where failure.code == .cannotComplete: return .failure(failure)
         case .success(nil), .failure: break
         }
-        if let window = systemWide() { return .success(window) }
-        return .failure(AXFailure(.noValue))
+        switch systemWide() {
+        case .success(let window?): return .success(window)
+        case .failure(let failure) where failure.code == .cannotComplete: return .failure(failure)
+        case .success(nil), .failure: return .failure(AXFailure(.noValue))
+        }
     }
 
     public static func windows(of pid: pid_t) -> [AXUIElement] {
@@ -160,12 +163,15 @@ public enum AXWindowAccess {
 
     /// The last resort in Rectangle's front-window lookup: the system-wide focused element,
     /// or its window. Kept only when it belongs to the app asked about.
-    private static func systemWideFocusedWindow(pid: pid_t) -> AXUIElement? {
-        guard let focused = elementValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute),
-              let window = windowElement(for: focused),
-              Self.pid(window) == pid
-        else { return nil }
-        return window
+    private static func systemWideFocusedWindow(pid: pid_t) -> Result<AXUIElement?, AXFailure> {
+        let ask = WindowQueries27.live
+        return Result { () throws(AXFailure) -> AXUIElement? in
+            guard let focused = try ask.element(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute).answer(),
+                  let window = try ask.windowElement(of: focused),
+                  Self.pid(window) == pid
+            else { return nil }
+            return window
+        }
     }
 
     private static func copyResult(_ element: AXUIElement, _ attribute: String) -> Result<AnyObject, AXFailure> {

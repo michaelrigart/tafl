@@ -117,7 +117,7 @@ enum Windows27 {
     static func writePosition(
         settable: () -> Result<Bool, AXFailure>,
         write: () -> AXError,
-        isFullscreen: () -> Bool
+        isFullscreen: () -> Result<Bool, AXFailure>
     ) -> Result<Void, PlatformFailure> {
         switch settable() {
         case .failure(let failure):
@@ -131,11 +131,17 @@ enum Windows27 {
         return code == .success ? .success(()) : .failure(positionFailure(for: code, isFullscreen: isFullscreen))
     }
 
-    static func positionFailure(for code: AXError, isFullscreen: () -> Bool) -> PlatformFailure {
+    /// A refusal says why by asking whether the window is full screen; an app that does not answer
+    /// that is `.notResponding`, and a window gone by then is `.noWindow`.
+    static func positionFailure(for code: AXError, isFullscreen: () -> Result<Bool, AXFailure>) -> PlatformFailure {
         switch code {
-        case .cannotComplete: .notResponding
-        case .invalidUIElement: .noWindow
-        default: isFullscreen() ? .fullscreen : .cannotMove
+        case .cannotComplete: return .notResponding
+        case .invalidUIElement: return .noWindow
+        default:
+            switch isFullscreen() {
+            case .success(let fullscreen): return fullscreen ? .fullscreen : .cannotMove
+            case .failure(let unanswered): return positionFailure(for: unanswered.code, isFullscreen: { .success(false) })
+            }
         }
     }
 

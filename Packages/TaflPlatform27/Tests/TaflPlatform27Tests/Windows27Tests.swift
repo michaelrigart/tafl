@@ -88,14 +88,20 @@ private func attributes(
 }
 
 @Test func aFailedPositionWriteIsFullscreenCannotMoveOrNotRespondingByCause() {
-    #expect(Windows27.positionFailure(for: .cannotComplete, isFullscreen: { false }) == .notResponding)
-    #expect(Windows27.positionFailure(for: .invalidUIElement, isFullscreen: { false }) == .noWindow)
-    #expect(Windows27.positionFailure(for: .failure, isFullscreen: { false }) == .cannotMove)
-    #expect(Windows27.positionFailure(for: .failure, isFullscreen: { true }) == .fullscreen)
+    #expect(Windows27.positionFailure(for: .cannotComplete, isFullscreen: { .success(false) }) == .notResponding)
+    #expect(Windows27.positionFailure(for: .invalidUIElement, isFullscreen: { .success(false) }) == .noWindow)
+    #expect(Windows27.positionFailure(for: .failure, isFullscreen: { .success(false) }) == .cannotMove)
+    #expect(Windows27.positionFailure(for: .failure, isFullscreen: { .success(true) }) == .fullscreen)
+}
+
+@Test func aRefusalWhoseFullScreenCheckGetsNoAnswerIsNotRespondingOrNoWindow() {
+    #expect(Windows27.positionFailure(for: .failure, isFullscreen: { .failure(AXFailure(.cannotComplete)) }) == .notResponding)
+    #expect(Windows27.positionFailure(for: .failure, isFullscreen: { .failure(AXFailure(.invalidUIElement)) }) == .noWindow)
+    #expect(position(settable: .success(false), fullscreen: .failure(AXFailure(.cannotComplete))).failure == .notResponding)
 }
 
 private func position(
-    settable: Result<Bool, AXFailure>, write: AXError = .success, fullscreen: Bool = false
+    settable: Result<Bool, AXFailure>, write: AXError = .success, fullscreen: Result<Bool, AXFailure> = .success(false)
 ) -> (failure: PlatformFailure?, wrote: Bool) {
     var wrote = false
     let result = Windows27.writePosition(
@@ -105,7 +111,7 @@ private func position(
 }
 
 private func lookUp(
-    focused: () -> Result<Int, AXFailure>, first: () -> Result<Int?, AXFailure>, systemWide: () -> Int?
+    focused: () -> Result<Int, AXFailure>, first: () -> Result<Int?, AXFailure>, systemWide: () -> Result<Int?, AXFailure>
 ) -> Result<Int, AXFailure> {
     AXWindowAccess.lookUpFocusedWindow(focused: focused, first: first, systemWide: systemWide)
 }
@@ -131,9 +137,9 @@ private func lookUp(
     let unsettable = position(settable: .success(false))
     #expect(unsettable.failure == .cannotMove)
     #expect(!unsettable.wrote)
-    #expect(position(settable: .success(false), fullscreen: true).failure == .fullscreen)
+    #expect(position(settable: .success(false), fullscreen: .success(true)).failure == .fullscreen)
     #expect(position(settable: .success(true), write: .failure).failure == .cannotMove)
-    #expect(position(settable: .success(true), write: .failure, fullscreen: true).failure == .fullscreen)
+    #expect(position(settable: .success(true), write: .failure, fullscreen: .success(true)).failure == .fullscreen)
 }
 
 @Test func aSettableWindowIsWritten() {
@@ -151,7 +157,7 @@ private func lookUp(
     let result = lookUp(
         focused: { calls.append("focused"); return .failure(AXFailure(.cannotComplete)) },
         first: { calls.append("first"); return .success(1) },
-        systemWide: { calls.append("systemWide"); return 2 })
+        systemWide: { calls.append("systemWide"); return .success(2) })
     #expect(result == .failure(AXFailure(.cannotComplete)))
     #expect(calls == ["focused"])
 }
@@ -161,20 +167,27 @@ private func lookUp(
     let result = lookUp(
         focused: { calls.append("focused"); return .failure(AXFailure(.noValue)) },
         first: { calls.append("first"); return .failure(AXFailure(.cannotComplete)) },
-        systemWide: { calls.append("systemWide"); return 2 })
+        systemWide: { calls.append("systemWide"); return .success(2) })
     #expect(result == .failure(AXFailure(.cannotComplete)))
     #expect(calls == ["focused", "first"])
 }
 
+@Test func theFocusedLookupStopsAtATimeoutInTheSystemWideLookup() {
+    let failed = lookUp(focused: { .failure(AXFailure(.noValue)) }, first: { .success(nil) }, systemWide: { .failure(AXFailure(.cannotComplete)) })
+    #expect(failed == .failure(AXFailure(.cannotComplete)))
+    let gone = lookUp(focused: { .failure(AXFailure(.noValue)) }, first: { .success(nil) }, systemWide: { .failure(AXFailure(.invalidUIElement)) })
+    #expect(gone == .failure(AXFailure(.noValue)))
+}
+
 @Test func theFocusedLookupFallsThroughOrdinaryFailuresInOrder() {
     #expect(lookUp(
-        focused: { .failure(AXFailure(.noValue)) }, first: { .success(1) }, systemWide: { 2 }) == .success(1))
+        focused: { .failure(AXFailure(.noValue)) }, first: { .success(1) }, systemWide: { .success(2) }) == .success(1))
     #expect(lookUp(
-        focused: { .failure(AXFailure(.noValue)) }, first: { .success(nil) }, systemWide: { 2 }) == .success(2))
+        focused: { .failure(AXFailure(.noValue)) }, first: { .success(nil) }, systemWide: { .success(2) }) == .success(2))
     #expect(lookUp(
-        focused: { .failure(AXFailure(.noValue)) }, first: { .success(nil) }, systemWide: { Int?.none }) == .failure(AXFailure(.noValue)))
+        focused: { .failure(AXFailure(.noValue)) }, first: { .success(nil) }, systemWide: { .success(nil) }) == .failure(AXFailure(.noValue)))
     #expect(lookUp(
-        focused: { .success(0) }, first: { .success(1) }, systemWide: { 2 }) == .success(0))
+        focused: { .success(0) }, first: { .success(1) }, systemWide: { .success(2) }) == .success(0))
 }
 
 @Test func aRefusedSizeIsLeftToTheCoresReadBack() {
@@ -228,16 +241,19 @@ private struct AnsweringWindow {
         Query("w", "AXSize"): .success(true),
     ]
 
-    func read() -> Result<WindowAttributes27, AXFailure> {
+    var queries: WindowQueries27<String> {
         let missing = AXFailure(.attributeUnsupported)
-        let queries = WindowQueries27<String>(
+        return WindowQueries27(
             frame: { _ in frame },
             string: { strings[Query($0, $1)] ?? .failure(missing) },
             element: { elements[Query($0, $1)] ?? .failure(missing) },
             bool: { bools[Query($0, $1)] ?? .failure(missing) },
             size: { sizes[Query($0, $1)] ?? .failure(missing) },
             settable: { settable[Query($0, $1)] ?? .failure(missing) })
-        return Windows27.attributes(of: "w", asking: queries)
+    }
+
+    func read() -> Result<WindowAttributes27, AXFailure> {
+        Windows27.attributes(of: "w", asking: queries)
     }
 }
 
@@ -322,4 +338,16 @@ private func everyQueryTheAppDoesNotAnswerFailsTheReadAsItsFrameWould(_ asked: A
     #expect(gone.mapError { Windows27.failure(for: $0.code) } == .failure(.noWindow))
     // Any other failure is the attribute's absence.
     #expect((try? asked.window(failingWith: .attributeUnsupported).read().get()) != nil)
+}
+
+/// What a refused position write asks before it says "full screen" or "can't move".
+@Test func theWritesFullScreenCheckTellsATimeoutFromANo() {
+    #expect(AnsweringWindow().queries.fullscreen(of: "w") == .success(false))
+    var zoomed = AnsweringWindow()
+    zoomed.strings[Query("b", "AXSubrole")] = .success("AXZoomButton")
+    #expect(zoomed.queries.fullscreen(of: "w") == .success(true))
+    for asked in [Asked.role, .containingWindow, .fullScreenButton, .buttonSubrole, .fullScreenAttribute] {
+        #expect(asked.window(failingWith: .cannotComplete).queries.fullscreen(of: "w") == .failure(AXFailure(.cannotComplete)), "\(asked)")
+        #expect((try? asked.window(failingWith: .attributeUnsupported).queries.fullscreen(of: "w").get()) == false, "\(asked)")
+    }
 }
