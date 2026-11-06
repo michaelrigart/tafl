@@ -325,3 +325,30 @@ private final class Taken: Sendable {
         await fake.waitUntil(timeout: .milliseconds(50)) { !$0.callLog.isEmpty }
     }
 }
+
+private final class Admissions: Sendable {
+    private let value = Mutex(0)
+    func ask() -> WriteGo { value.withLock { $0 += 1 }; return .write }
+    var count: Int { value.withLock { $0 } }
+}
+
+/// A position write asks whether the position is settable before it asks `admit`, so a write that
+/// cannot be made is never admitted.
+@Test(.timeLimit(.minutes(1))) func aPositionWriteThatFailsItsSettabilityQueryIsNotAdmitted() async throws {
+    let window = window(1, frame: rect(10, 10, 400, 300))
+    let (fake, clock) = await makeFake(window)
+    await fake.configure { $0.windows[window.handle]?.canMove = false }
+    let admissions = Admissions()
+    let admit: @Sendable () -> WriteGo = { admissions.ask() }
+    let s = try await session(fake, window.handle)
+
+    #expect(await s.setPosition(ScreenPoint(x: 0, y: 25), admit: admit) == .failure(.cannotMove))
+    #expect(admissions.count == 0)
+
+    await fake.configure { $0.windows[window.handle]?.canMove = true; $0.hung = [window.handle.pid] }
+    let hungAppsWrite = Task { await s.setPosition(ScreenPoint(x: 0, y: 25), admit: admit) }
+    await clock.waitForSleepers(1)
+    await clock.advance(by: .milliseconds(500))
+    #expect(await hungAppsWrite.value == .failure(.notResponding))
+    #expect(admissions.count == 0)
+}

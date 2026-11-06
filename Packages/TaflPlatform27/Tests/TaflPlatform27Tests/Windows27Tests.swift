@@ -105,9 +105,46 @@ private func position(
 ) -> (failure: PlatformFailure?, wrote: Bool) {
     var wrote = false
     let result = Windows27.writePosition(
-        settable: { settable }, write: { wrote = true; return write }, isFullscreen: { fullscreen })
+        settable: { settable }, admit: { .write }, write: { wrote = true; return write }, isFullscreen: { fullscreen })
     if case .failure(let failure) = result { return (failure, wrote) }
     return (nil, wrote)
+}
+
+/// Every call a position write makes, in order, and what it came to.
+private func positionCalls(
+    settable: Result<Bool, AXFailure> = .success(true), admit: WriteGo = .write
+) -> (calls: [String], result: Result<WriteGo, PlatformFailure>) {
+    var calls: [String] = []
+    let result = Windows27.writePosition(
+        settable: { calls.append("settable"); return settable },
+        admit: { calls.append("admit"); return admit },
+        write: { calls.append("write"); return .success },
+        isFullscreen: { calls.append("fullscreen"); return .success(false) })
+    return (calls, result)
+}
+
+/// The class rule: no Accessibility call sits between a write's admission and the call that
+/// changes the frame, so the settability query comes first.
+@Test func aPositionWriteIsAdmittedAfterItsSettabilityQueryAndRightBeforeTheSetter() {
+    let made = positionCalls()
+    #expect(made.calls == ["settable", "admit", "write"])
+    #expect(made.result == .success(.write))
+}
+
+@Test(arguments: [WriteGo.cancelled, .interrupted, .declined])
+private func aPositionWriteTheAdmissionRefusesMakesNoWriteAndReturnsTheAnswer(_ go: WriteGo) {
+    let made = positionCalls(admit: go)
+    #expect(made.calls == ["settable", "admit"])
+    #expect(made.result == .success(go))
+}
+
+@Test func aPositionWriteThatCannotBeMadeIsNeverAdmitted() {
+    let refused = positionCalls(settable: .success(false))
+    #expect(refused.calls == ["settable", "fullscreen"])
+    #expect(refused.result == .failure(.cannotMove))
+    let timedOut = positionCalls(settable: .failure(AXFailure(.cannotComplete)))
+    #expect(timedOut.calls == ["settable"])
+    #expect(timedOut.result == .failure(.notResponding))
 }
 
 private func lookUp(

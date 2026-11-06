@@ -39,7 +39,10 @@ final class FakeGate: Sendable {
 /// A scripted platform. A read hands what it read to the caller's `take` in the same actor step, as
 /// the platform does inside its app's queue: a gate that holds a read's result holds it after `take`
 /// has run. A write asks its `admit` in the same step as the write, after its gate: a read made while
-/// the gate holds the write is one the app's queue holds ahead of it.
+/// the gate holds the write is one the app's queue holds ahead of it. A position write first asks
+/// whether the position is settable, as the platform does, and the gate holds that query: a hung
+/// app times it out, and a window that cannot be moved fails it, each without the write being
+/// admitted. The admission is the last step before the write.
 ///
 /// Every write-session call is logged as `"begin"`, `"size <w>x<h>"`, `"position <x>,<y>"`,
 /// `"read"` or `"end"`; a write that `admit` does not allow is logged with its answer, as in
@@ -314,7 +317,7 @@ actor FakePlatform: WindowPlatform {
         _ size: ScreenSize,
         admit: @Sendable () -> WriteGo
     ) async -> Result<WriteGo, PlatformFailure> {
-        await write(handle, "size \(format(size.width))x\(format(size.height))", admit: admit) { window in
+        await write(handle, "size \(format(size.width))x\(format(size.height))", queriesSettability: false, admit: admit) { window in
             if window.canResize { window.frame.size = sizeRule?(window, size) ?? size }
             return .success(())
         }
@@ -325,8 +328,7 @@ actor FakePlatform: WindowPlatform {
         _ point: ScreenPoint,
         admit: @Sendable () -> WriteGo
     ) async -> Result<WriteGo, PlatformFailure> {
-        await write(handle, "position \(format(point.x)),\(format(point.y))", admit: admit) { window in
-            guard window.canMove else { return .failure(.cannotMove) }
+        await write(handle, "position \(format(point.x)),\(format(point.y))", queriesSettability: true, admit: admit) { window in
             window.frame.origin = positionRule?(window, point) ?? point
             return .success(())
         }
@@ -349,16 +351,30 @@ actor FakePlatform: WindowPlatform {
         return true
     }
 
-    /// A write: its call is claimed as `enter` does, then `admit` is asked in the same step as the
-    /// write. A hung app's write is admitted, then fails after 0.5 s on the clock without changing
-    /// the window.
+    /// A write: its call is claimed as `enter` does. A write that queries settability does so next:
+    /// a hung app times out after 0.5 s on the clock, and a window that cannot be moved is refused,
+    /// neither admitted. Then `admit` is asked in the same step as the write. A hung app's size
+    /// write is admitted, then fails after 0.5 s on the clock without changing the window.
     private func write(
         _ handle: WindowHandle,
         _ entry: String,
+        queriesSettability: Bool,
         admit: @Sendable () -> WriteGo,
         _ apply: (inout WindowSnapshot) -> Result<Void, PlatformFailure>
     ) async -> Result<WriteGo, PlatformFailure> {
         await claim(handle)
+        if queriesSettability {
+            if hung.contains(handle.pid) {
+                callLog.append(entry)
+                await hungWait()
+                return .failure(.notResponding)
+            }
+            guard let window = windows[handle] else { return .failure(.noWindow) }
+            guard window.canMove else {
+                callLog.append(entry)
+                return .failure(.cannotMove)
+            }
+        }
         let go = admit()
         guard go == .write else {
             callLog.append("\(entry) \(go)")

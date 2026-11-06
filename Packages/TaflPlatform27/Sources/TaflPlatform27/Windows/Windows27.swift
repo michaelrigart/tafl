@@ -116,13 +116,16 @@ enum Windows27 {
         code == .cannotComplete ? .notResponding : .noWindow
     }
 
-    /// Settable, then write, each classified by its own error code: a timeout is `.notResponding`,
-    /// never "can't move"; only a genuine refusal is `.fullscreen` or `.cannotMove`.
+    /// Settable, then admission, then write, each classified by its own error code: a timeout is
+    /// `.notResponding`, never "can't move"; only a genuine refusal is `.fullscreen` or `.cannotMove`.
+    /// No call sits between the admission and the setter, and a write that cannot be made is never
+    /// admitted. A write `admit` does not allow is not made, and its answer is the result.
     static func writePosition(
         settable: () -> Result<Bool, AXFailure>,
+        admit: () -> WriteGo,
         write: () -> AXError,
         isFullscreen: () -> Result<Bool, AXFailure>
-    ) -> Result<Void, PlatformFailure> {
+    ) -> Result<WriteGo, PlatformFailure> {
         switch settable() {
         case .failure(let failure):
             return .failure(positionFailure(for: failure.code, isFullscreen: isFullscreen))
@@ -131,8 +134,10 @@ enum Windows27 {
         case .success(true):
             break
         }
+        let go = admit()
+        guard go == .write else { return .success(go) }
         let code = write()
-        return code == .success ? .success(()) : .failure(positionFailure(for: code, isFullscreen: isFullscreen))
+        return code == .success ? .success(.write) : .failure(positionFailure(for: code, isFullscreen: isFullscreen))
     }
 
     /// A refusal says why by asking whether the window is full screen; an app that does not answer

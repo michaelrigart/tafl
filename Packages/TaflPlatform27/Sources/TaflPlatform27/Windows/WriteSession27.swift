@@ -11,10 +11,19 @@ final class WriteSession27: WriteSession {
     private let axQueue: AXQueue
     private let leases: WriteLeases
     private let restoresEnhancedUI: Bool
+    private let settable: @Sendable (AXUIElement, String) -> Result<Bool, AXFailure>
     private let isEnded = Mutex(false)
 
-    init(pid: pid_t, element: AXElementBox, axQueue: AXQueue, leases: WriteLeases, restoresEnhancedUI: Bool) {
+    init(
+        pid: pid_t,
+        element: AXElementBox,
+        axQueue: AXQueue,
+        leases: WriteLeases,
+        restoresEnhancedUI: Bool,
+        settable: @escaping @Sendable (AXUIElement, String) -> Result<Bool, AXFailure> = { AXWindowAccess.settability($0, attribute: $1) }
+    ) {
         self.pid = pid
+        self.settable = settable
         self.element = element
         self.axQueue = axQueue
         self.leases = leases
@@ -48,38 +57,30 @@ final class WriteSession27: WriteSession {
 
     func setSize(_ size: ScreenSize, admit: @escaping @Sendable () -> WriteGo) async -> Result<WriteGo, PlatformFailure> {
         let element = element
-        return await write(admit: admit) {
+        return await axQueue.run(pid: pid) {
+            let go = admit()
+            guard go == .write else { return .success(go) }
             let code = AXWindowAccess.setSize(element.element, CGSize(width: size.width, height: size.height))
             if let failure = Windows27.sizeFailure(for: code) { return .failure(failure) }
-            return .success(())
+            return .success(.write)
         }
     }
 
+    /// The settability query comes first and `admit` after it: the query can block on an app that
+    /// does not answer, and a stop that arrives meanwhile must still refuse the write.
     func setPosition(
         _ point: ScreenPoint,
         admit: @escaping @Sendable () -> WriteGo
     ) async -> Result<WriteGo, PlatformFailure> {
         let element = element
-        return await write(admit: admit) {
+        let settable = settable
+        return await axQueue.run(pid: pid) {
             let target = element.element
             return Windows27.writePosition(
-                settable: { AXWindowAccess.settability(target, attribute: kAXPositionAttribute) },
+                settable: { settable(target, kAXPositionAttribute) },
+                admit: admit,
                 write: { AXWindowAccess.setPosition(target, CGPoint(x: point.x, y: point.y)) },
                 isFullscreen: { WindowQueries27.live.fullscreen(of: target) })
-        }
-    }
-
-    /// Asks `admit` in the block on the app's queue that makes the write, immediately before it, so
-    /// every read queued ahead of the write has reached its `take` first. A write `admit` does not
-    /// allow is not made.
-    private func write(
-        admit: @escaping @Sendable () -> WriteGo,
-        _ body: @escaping @Sendable () -> Result<Void, PlatformFailure>
-    ) async -> Result<WriteGo, PlatformFailure> {
-        await axQueue.run(pid: pid) {
-            let go = admit()
-            guard go == .write else { return .success(go) }
-            return body().map { .write }
         }
     }
 

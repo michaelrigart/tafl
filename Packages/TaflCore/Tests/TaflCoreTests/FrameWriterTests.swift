@@ -358,14 +358,19 @@ private enum QueuedStop: CaseIterable {
     case overtake
 }
 
-/// Call 1 is the first write, held as if behind other work on the app's queue: it has passed every
-/// check made before it was queued, and only its admission can still refuse it.
-@Test(.timeLimit(.minutes(1)), arguments: QueuedStop.allCases)
-private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ stop: QueuedStop) async {
-    let rig = await Rig(start: crossStart)
+/// Call 1 is the first write, held as if behind other work on the app's queue (a size write) or
+/// while its settability query blocks (a position write): it has passed every check made before it
+/// was queued, and only its admission can still refuse it. The admission comes after that query, so
+/// a stop that arrives while the query is held makes no write.
+@Test(.timeLimit(.minutes(1)), arguments: FirstPart.allCases, QueuedStop.allCases)
+private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: FirstPart, _ stop: QueuedStop) async {
+    let sameDisplayStart = rect(600, 100, 300, 300)
+    var started = part == .size ? crossJob() : job(start: sameDisplayStart, target: rect(0, 25, 500, 775))
+    started.firstWrite = FirstWrite(opensChainOn: displayA, yieldsToTouch: true)
+    let rig = await Rig(start: started.start)
     rig.owner.layoutApplicationBegan(1)
     let gate = await rig.fake.pause(beforeCall: 1)
-    let task = rig.start(crossJob(firstWrite: FirstWrite(opensChainOn: displayA, yieldsToTouch: true)), layoutApplication: 1)
+    let task = rig.start(started, layoutApplication: 1)
     #expect(await pollUntil { gate.waiterCount == 1 })
     switch stop {
     case .cancel: task.cancel()
@@ -376,8 +381,9 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ stop: Qu
     gate.open()
 
     #expect(await task.value == .cancelled(lastVerified: nil))
-    #expect(await rig.fake.windows[handle]?.frame == crossStart)
-    #expect(await rig.log == ["begin", "size 1200x900 \(stop == .touch ? "declined" : "cancelled")", "end"])
+    #expect(await rig.fake.windows[handle]?.frame == started.start)
+    let write = part == .size ? "size 1200x900" : "position 0,25"
+    #expect(await rig.log == ["begin", "\(write) \(stop == .touch ? "declined" : "cancelled")", "end"])
     #expect(rig.chain == nil)
 }
 
