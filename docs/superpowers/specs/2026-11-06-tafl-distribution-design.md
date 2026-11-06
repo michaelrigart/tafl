@@ -2,8 +2,8 @@
 
 **Date:** 2026-11-06
 **Owner:** Michael Rigart
-**Status:** In progress (branch `feat/distribution`, stacked on `feat/tafl-v1`; no pull request
-yet, because the repository has no remote)
+**Status:** In progress ([PR #1](https://github.com/michaelrigart/tafl/pull/1), `feat/distribution`
+into `feat/tafl-v1`)
 **Template:** Hulder's distribution design (`michaelrigart/hulder`,
 `docs/superpowers/specs/2026-11-03-hulder-distribution-design.md`). The shared build recipe is
 canonical in Muninn's (`michaelrigart/muninn`,

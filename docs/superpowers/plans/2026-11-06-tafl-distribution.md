@@ -1,6 +1,6 @@
 # Tafl Distribution Implementation Plan
 
-**Status:** In progress (branch `feat/distribution`, stacked on `feat/tafl-v1`; no pull request yet).
+**Status:** In progress ([PR #1](https://github.com/michaelrigart/tafl/pull/1), `feat/distribution` into `feat/tafl-v1`). Codex approved the plan in round 2.
 
 **Execution notes:** Tasks 1–9 build into the shared `build/`, so only tasks that build nothing share a batch: {1, 3, 6}, then 2, 5, 7, 8 in order. Task 4 runs once Michael has approved Task 3's drawing; until then the run carries on with the others. Task 9 runs last of the build tasks. "Finishing" is the controller's, not a subagent's.
 
