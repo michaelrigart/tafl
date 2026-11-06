@@ -104,14 +104,17 @@ final class CompositionRoot {
         Log.app.notice("Tafl started")
     }
 
-    /// Removes the hotkeys, then stops the engine, which saves the memory. Windows stay where they
-    /// are. The report consumer runs until the engine has stopped, so a failed save is logged.
+    /// Removes the hotkeys and stops the engine placing windows, then waits for startup and a
+    /// restart, which a slow app can hold up, and stops the engine, which saves the memory. Windows
+    /// stay where they are, and nothing placed them after Quit. The report consumer runs until the
+    /// engine has stopped, so a failed save is logged.
     func shutdown() async {
         shuttingDown = true
         permissionTask?.cancel()
         watcher?.stop()
         sessionEvents?.stop()
         activator.deactivateAll()
+        await engine.stopPlacing()
         await startTask?.value
         await restartTask?.value
         activator.deactivateAll()

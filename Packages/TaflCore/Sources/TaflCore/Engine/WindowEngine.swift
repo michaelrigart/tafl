@@ -229,10 +229,12 @@ public actor WindowEngine {
         if case .failure = await memory.save() { report(.memorySaveFailed) }
     }
 
-    /// Refuses new requests, stops the ones queued or running, waits until each has ended its
-    /// session and recorded what it did, stops observing and saves the memory. The engine does not
-    /// start again.
-    public func stop() async {
+    /// The first step of stopping, which does not wait: the engine places nothing more. It refuses
+    /// new requests, and stops the ones queued or running, so the owner refuses their writes at
+    /// admission; a startup, a rules run, a layout run or a restart that resumes afterwards sends
+    /// nothing more, and nothing saves but `stop`. Quit calls it before it waits for startup and a
+    /// restart, which a slow app can hold up. Idempotent.
+    public func stopPlacing() async {
         isStopping = true
         eventTask?.cancel()
         settleTask?.cancel()
@@ -243,6 +245,13 @@ public actor WindowEngine {
         rulesTask = nil
         background = [:]
         frameReads = [:]
+        await queue.halt()
+    }
+
+    /// Stops placing, waits until each request has ended its session and recorded what it did,
+    /// stops observing and saves the memory. The engine does not start again.
+    public func stop() async {
+        await stopPlacing()
         await queue.stop()
         await platform.stopObserving()
         await writeMemory()
@@ -266,10 +275,10 @@ public actor WindowEngine {
 
     private func restart(_ generation: Int) async {
         // A newer restart is waiting and registers the observers itself.
-        guard restarts.isCurrent(generation) else { return }
+        guard restarts.isCurrent(generation), !isStopping else { return }
         await platform.stopObserving()
         let apps = await platform.startObserving(notices: owner)
-        guard restarts.isCurrent(generation), let journal = restartJournal else { return }
+        guard restarts.isCurrent(generation), !isStopping, let journal = restartJournal else { return }
         var answer: [Int32: Set<ObservedEvent>] = [:]
         for app in apps { answer[app.pid, default: []].formUnion(app.missing) }
         unobservable = journal.applied(to: answer)
@@ -381,7 +390,7 @@ public actor WindowEngine {
         let since = reconfigurations.current
         let displays = await platform.displays()
         let windows = await platform.visibleWindows(take: owner.take)
-        guard reconfigurations.isCurrent(since) else { return }
+        guard !isStopping, reconfigurations.isCurrent(since) else { return }
         let requests = LayoutPlanner.requests(definition, windows: windows, displays: displays, source: .layout(name))
         for request in requests { owner.touch(request.window) }
         let count = await run(requests, since: since, application: application)

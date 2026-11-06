@@ -2,6 +2,7 @@ import Foundation
 
 extension WindowEngine {
     func listen() {
+        guard !isStopping else { return }
         eventTask = Task { [platform] in
             for await event in platform.events {
                 await self.handle(event)
@@ -67,7 +68,8 @@ extension WindowEngine {
     /// placement was planned overtakes it.
     private func windowCreated(_ snapshot: WindowSnapshot) {
         let window = snapshot.handle
-        guard !isFrozen,
+        guard !isStopping,
+              !isFrozen,
               snapshot.isPlaceable,
               !isLeftOutOfPlacement(pid: window.pid),
               let definition = activeLayout.definition(in: config),

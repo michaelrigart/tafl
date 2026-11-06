@@ -36,13 +36,17 @@ public actor WindowRequestQueue {
         return await task.value
     }
 
-    /// Refuses every later request, cancels the queued and running ones, and returns once each has
-    /// finished: a running write stops before its next write and ends its session.
-    public func stop() async {
+    /// Refuses every later request and cancels the queued and running ones, without waiting for
+    /// them: a running write stops before its next write.
+    public func halt() {
         isStopped = true
-        let pending = Array(entries.values)
-        for entry in pending { entry.cancel() }
-        for entry in pending { await entry.finished() }
+        for entry in entries.values { entry.cancel() }
+    }
+
+    /// Halts, then returns once each request has finished and ended its session.
+    public func stop() async {
+        halt()
+        for entry in Array(entries.values) { await entry.finished() }
     }
 
     private func release(_ window: WindowHandle, _ id: Int) {

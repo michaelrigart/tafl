@@ -1997,6 +1997,69 @@ private func rulesOvertakenByALayout() async -> Rig {
     #expect(rig.reports == [.memory(.fresh)])
 }
 
+/// What Quit does while startup or a layout run is still awaiting an app: placing stops at once,
+/// before the lifecycle tasks are awaited, and the memory is saved when `stop` finishes.
+@Test(.timeLimit(.minutes(1))) func aStopBeginningWhileStartupsRulesAwaitTheWindowsMovesNothingAfterIt() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let first = await Rig(displays: bothDisplays, windows: [window(1, frame: rect(1100, 100, 400, 300))], store: store)
+    await first.engine.start(config: config())
+    await first.engine.perform(.firstThird)
+    await first.emit(.windowMoved(handle))
+    await first.waitForEvents(1)
+    await first.engine.stop()
+
+    // Next launch: B is gone, and the rules would move the window. Quit comes while they read the windows.
+    let moved = rect(300, 300, 400, 300)
+    let second = await Rig(windows: [window(1, frame: moved)], store: store)
+    let reads = FakeGate()
+    await second.fake.configure { $0.visibleWindowsGate = reads }
+    let starting = Task { await second.engine.start(config: config()) }
+    await second.fake.waitUntil { _ in reads.waiterCount == 1 }
+    await second.engine.stopPlacing()
+    reads.open()
+    await starting.value
+    #expect(await second.log.isEmpty)
+    #expect(await second.frame() == moved)
+
+    // The memory is saved once startup has ended, and the setup it holds is still the old one.
+    try? FileManager.default.removeItem(at: directory)
+    await second.engine.stop()
+    guard case .loaded(let saved) = store.load() else {
+        Issue.record("Expected stop to save the memory")
+        return
+    }
+    #expect(saved.lastDisplays == bothDisplays)
+    #expect(second.reports.allSatisfy { if case .displayChangeHandled = $0 { false } else { true } })
+}
+
+@Test(.timeLimit(.minutes(1))) func aStopBeginningWhileALayoutRunWaitsOnASlowAppWritesNothingAfterIt() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let one = window(1, frame: start)
+    let two = window(2, frame: start)
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(windows: [one, two], focused: nil, store: store)
+    await rig.engine.start(config: config(layouts: [desk]))
+    // The app's first write is held, as a slow app holds it.
+    let gate = await rig.fake.pause(beforeCall: 1)
+    let applying = Task { await rig.engine.applyLayout(named: "Desk") }
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.engine.stopPlacing()
+    gate.open()
+    await applying.value
+    #expect(await rig.log.filter { $0.hasPrefix("size") || $0.hasPrefix("position") }.allSatisfy { $0.hasSuffix("cancelled") })
+    #expect(await rig.frame(of: one.handle) == start)
+    #expect(await rig.frame(of: two.handle) == start)
+    #expect(rig.reports == [.memory(.fresh)])
+
+    await rig.engine.stop()
+    guard case .loaded = store.load() else {
+        Issue.record("Expected stop to save the memory")
+        return
+    }
+}
+
 // MARK: Windows that stop being placeable
 
 @Test(.timeLimit(.minutes(1))) func aWindowMinimisedWhileALayoutRunsIsSkipped() async {

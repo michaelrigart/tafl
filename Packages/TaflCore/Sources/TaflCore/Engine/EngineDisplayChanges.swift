@@ -120,7 +120,7 @@ extension WindowEngine {
         await setActiveLayout(nil)
         let known = await memory.read()
         let visible = await platform.visibleWindows(take: owner.take)
-        guard reconfigurations.isCurrent(began) else { return }
+        guard !isStopping, reconfigurations.isCurrent(began) else { return }
         let windows = visible.map { window in
             WindowAtChange(
                 snapshot: window,
