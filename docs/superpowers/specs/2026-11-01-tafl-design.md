@@ -6,6 +6,8 @@
 [michaelrigart/tafl#2](https://github.com/michaelrigart/tafl/pull/2)). Signed off by Michael on
 2026-11-01, after Codex's spec review.
 **Name:** Tafl, after the Norse board game played by placing pieces on a grid.
+**Revised:** 2026-11-06: signing moved to Michael's Personal Team; see
+`docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`.
 
 ## Why
 
@@ -188,8 +190,10 @@ Tafl has failed, even if it works, if it:
     out. Hardened Runtime on.
 - **Install location.** Tafl runs from `/Applications`.
 - **Identity.** Bundle identifier `com.michaelrigart.tafl`.
-- **Signing.** Ad-hoc, like Linger and Hulder. The Accessibility grant is tied to the
-  signature, so every ad-hoc rebuild needs it granted again.
+- **Signing.** Michael's Personal Team, as Linger, Hulder and Muninn now do. The Accessibility
+  grant is tied to the certificate, so it should survive rebuilds; ad hoc builds, which CI and
+  contributors use, need it again after every rebuild. See
+  `docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`.
 - **Toolchain.** The same as Linger and Hulder:
   - Xcode through `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` per command.
   - XcodeGen, pinned in the repository's `mise.toml`; the generated project is not tracked.
