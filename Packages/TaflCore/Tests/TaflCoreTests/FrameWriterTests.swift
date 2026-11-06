@@ -308,7 +308,31 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.move(to: rect(400, 400, 400, 300)) == .external)
     gate.open()
     #expect(await task.value == .interrupted)
-    #expect(await rig.log == ["begin", "end"])
+    #expect(await rig.log == ["begin", "size 1200x900 interrupted", "end"])
+}
+
+private enum FirstPart: CaseIterable {
+    case size, position
+}
+
+/// Call 1 is the first write; the window's app has a reading of it queued ahead of that write.
+@Test(.timeLimit(.minutes(1)), arguments: FirstPart.allCases)
+private func aReadingQueuedAheadOfAWriteThatFindsAnExternalChangeStopsTheWrite(_ part: FirstPart) async {
+    let sameDisplayStart = rect(600, 100, 300, 300)
+    let started = part == .size ? crossJob() : job(start: sameDisplayStart, target: rect(0, 25, 500, 775))
+    let rig = await Rig(start: started.start)
+    let gate = await rig.fake.pause(beforeCall: 1)
+    let task = rig.start(started)
+    #expect(await pollUntil { gate.waiterCount == 1 })
+
+    // The user resizes and moves the window; the reading queued first sees it.
+    let usersFrame = rect(300, 300, 450, 350)
+    #expect(await rig.move(to: usersFrame) == .external)
+    gate.open()
+    #expect(await task.value == .interrupted)
+    #expect(await rig.fake.windows[handle]?.frame == usersFrame)
+    let write = part == .size ? "size 1200x900" : "position 0,25"
+    #expect(await rig.log == ["begin", "\(write) interrupted", "end"])
 }
 
 @Test(.timeLimit(.minutes(1))) func aMoveBeforeTheRequestDoesNotStopIt() async {
@@ -517,12 +541,15 @@ private func aChangeWhileTheSessionBeginsIsJudgedBeforeTheFirstWrite(_ during: D
 
     let result = await task.value
     switch during {
-    case .cancel, .reconfigure:
+    case .cancel:
         #expect(result == .cancelled(lastVerified: nil))
         #expect(await rig.log == ["begin", "end"])
+    case .reconfigure:
+        #expect(result == .cancelled(lastVerified: nil))
+        #expect(await rig.log == ["begin", "size 1200x900 cancelled", "end"])
     case .externalMove:
         #expect(result == .interrupted)
-        #expect(await rig.log == ["begin", "end"])
+        #expect(await rig.log == ["begin", "size 1200x900 interrupted", "end"])
     case .unchangedStart:
         #expect(result == .placed(crossTarget))
         #expect(await rig.log == crossLog)

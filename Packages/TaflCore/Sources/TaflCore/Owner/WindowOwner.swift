@@ -126,7 +126,9 @@ public final class WindowOwner: WindowNotices {
         state.withLock { $0.checkpoint(ticket, firstWrite: firstWrite) }
     }
 
-    /// Before each write: the checkpoint, then the first write's terms, then the write is in flight.
+    /// A write's admission, which the platform asks on the app's queue immediately before the write
+    /// (see `WriteSession`): the checkpoint, then the first write's terms, then the write is in
+    /// flight. A write waiting on the queue is not in flight until it is admitted.
     public func willWrite(
         _ ticket: RequestTicket,
         _ part: WritePart,

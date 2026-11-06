@@ -13,7 +13,7 @@ final class WriteSession27: WriteSession {
     private let restoresEnhancedUI: Bool
     private let isEnded = Mutex(false)
 
-    private init(pid: pid_t, element: AXElementBox, axQueue: AXQueue, leases: WriteLeases, restoresEnhancedUI: Bool) {
+    init(pid: pid_t, element: AXElementBox, axQueue: AXQueue, leases: WriteLeases, restoresEnhancedUI: Bool) {
         self.pid = pid
         self.element = element
         self.axQueue = axQueue
@@ -46,23 +46,40 @@ final class WriteSession27: WriteSession {
         return result.mapError { Windows27.failure(for: $0.code) }
     }
 
-    func setSize(_ size: ScreenSize) async -> Result<Void, PlatformFailure> {
+    func setSize(_ size: ScreenSize, admit: @escaping @Sendable () -> WriteGo) async -> Result<WriteGo, PlatformFailure> {
         let element = element
-        let code = await axQueue.run(pid: pid) {
-            AXWindowAccess.setSize(element.element, CGSize(width: size.width, height: size.height))
+        return await write(admit: admit) {
+            let code = AXWindowAccess.setSize(element.element, CGSize(width: size.width, height: size.height))
+            if let failure = Windows27.sizeFailure(for: code) { return .failure(failure) }
+            return .success(())
         }
-        if let failure = Windows27.sizeFailure(for: code) { return .failure(failure) }
-        return .success(())
     }
 
-    func setPosition(_ point: ScreenPoint) async -> Result<Void, PlatformFailure> {
+    func setPosition(
+        _ point: ScreenPoint,
+        admit: @escaping @Sendable () -> WriteGo
+    ) async -> Result<WriteGo, PlatformFailure> {
         let element = element
-        return await axQueue.run(pid: pid) {
+        return await write(admit: admit) {
             let target = element.element
             return Windows27.writePosition(
                 settable: { AXWindowAccess.settability(target, attribute: kAXPositionAttribute) },
                 write: { AXWindowAccess.setPosition(target, CGPoint(x: point.x, y: point.y)) },
                 isFullscreen: { AXWindowAccess.isFullscreen(target) ?? false })
+        }
+    }
+
+    /// Asks `admit` in the block on the app's queue that makes the write, immediately before it, so
+    /// every read queued ahead of the write has reached its `take` first. A write `admit` does not
+    /// allow is not made.
+    private func write(
+        admit: @escaping @Sendable () -> WriteGo,
+        _ body: @escaping @Sendable () -> Result<Void, PlatformFailure>
+    ) async -> Result<WriteGo, PlatformFailure> {
+        await axQueue.run(pid: pid) {
+            let go = admit()
+            guard go == .write else { return .success(go) }
+            return body().map { .write }
         }
     }
 

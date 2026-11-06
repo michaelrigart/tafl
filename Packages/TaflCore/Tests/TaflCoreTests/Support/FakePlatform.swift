@@ -38,10 +38,12 @@ final class FakeGate: Sendable {
 
 /// A scripted platform. A read hands what it read to the caller's `take` in the same actor step, as
 /// the platform does inside its app's queue: a gate that holds a read's result holds it after `take`
-/// has run.
+/// has run. A write asks its `admit` in the same step as the write, after its gate: a read made while
+/// the gate holds the write is one the app's queue holds ahead of it.
 ///
 /// Every write-session call is logged as `"begin"`, `"size <w>x<h>"`, `"position <x>,<y>"`,
-/// `"read"` or `"end"`. Call indices count those calls from 0, in the order they start (a
+/// `"read"` or `"end"`; a write that `admit` does not allow is logged with its answer, as in
+/// `"size <w>x<h> interrupted"`, and changes nothing. Call indices count those calls from 0, in the order they start (a
 /// `beginWriting` that waits for its app's session slot starts once it has the slot). A call
 /// keeps its index while it is held: a gated call is logged only when its gate opens, so another
 /// app's calls that start later may log ahead of it.
@@ -307,27 +309,27 @@ actor FakePlatform: WindowPlatform {
         return .success(take(window.frame))
     }
 
-    fileprivate func writeSize(_ handle: WindowHandle, _ size: ScreenSize) async -> Result<Void, PlatformFailure> {
-        if await enter(handle, "size \(format(size.width))x\(format(size.height))") {
-            return .failure(.notResponding)
+    fileprivate func writeSize(
+        _ handle: WindowHandle,
+        _ size: ScreenSize,
+        admit: @Sendable () -> WriteGo
+    ) async -> Result<WriteGo, PlatformFailure> {
+        await write(handle, "size \(format(size.width))x\(format(size.height))", admit: admit) { window in
+            if window.canResize { window.frame.size = sizeRule?(window, size) ?? size }
+            return .success(())
         }
-        guard var window = windows[handle] else { return .failure(.noWindow) }
-        if window.canResize {
-            window.frame.size = sizeRule?(window, size) ?? size
-            windows[handle] = window
-        }
-        return .success(())
     }
 
-    fileprivate func writePosition(_ handle: WindowHandle, _ point: ScreenPoint) async -> Result<Void, PlatformFailure> {
-        if await enter(handle, "position \(format(point.x)),\(format(point.y))") {
-            return .failure(.notResponding)
+    fileprivate func writePosition(
+        _ handle: WindowHandle,
+        _ point: ScreenPoint,
+        admit: @Sendable () -> WriteGo
+    ) async -> Result<WriteGo, PlatformFailure> {
+        await write(handle, "position \(format(point.x)),\(format(point.y))", admit: admit) { window in
+            guard window.canMove else { return .failure(.cannotMove) }
+            window.frame.origin = positionRule?(window, point) ?? point
+            return .success(())
         }
-        guard var window = windows[handle] else { return .failure(.noWindow) }
-        guard window.canMove else { return .failure(.cannotMove) }
-        window.frame.origin = positionRule?(window, point) ?? point
-        windows[handle] = window
-        return .success(())
     }
 
     fileprivate func finish(_ handle: WindowHandle) async {
@@ -340,17 +342,48 @@ actor FakePlatform: WindowPlatform {
     /// Claims the next call index, waits for its gate, logs the call, runs its hook and, for a
     /// hung app, waits 0.5 s on the clock. Returns true when the app is hung.
     private func enter(_ handle: WindowHandle, _ entry: String) async -> Bool {
+        await claim(handle)
+        callLog.append(entry)
+        guard hung.contains(handle.pid) else { return false }
+        await hungWait()
+        return true
+    }
+
+    /// A write: its call is claimed as `enter` does, then `admit` is asked in the same step as the
+    /// write. A hung app's write is admitted, then fails after 0.5 s on the clock without changing
+    /// the window.
+    private func write(
+        _ handle: WindowHandle,
+        _ entry: String,
+        admit: @Sendable () -> WriteGo,
+        _ apply: (inout WindowSnapshot) -> Result<Void, PlatformFailure>
+    ) async -> Result<WriteGo, PlatformFailure> {
+        await claim(handle)
+        let go = admit()
+        guard go == .write else {
+            callLog.append("\(entry) \(go)")
+            return .success(go)
+        }
+        callLog.append(entry)
+        if hung.contains(handle.pid) {
+            await hungWait()
+            return .failure(.notResponding)
+        }
+        guard var window = windows[handle] else { return .failure(.noWindow) }
+        let result = apply(&window)
+        windows[handle] = window
+        return result.map { .write }
+    }
+
+    /// Claims the next call index, waits for its gate and runs its hook.
+    private func claim(_ handle: WindowHandle) async {
         let index = callCount
         callCount += 1
         if let gate = gates.removeValue(forKey: index) { await gate.wait() }
-        callLog.append(entry)
         if let hook = beforeCall[index], var window = windows[handle] {
             hook(&window)
             windows[handle] = window
         }
-        guard hung.contains(handle.pid) else { return false }
-        await hungWait()
-        return true
     }
 
     /// A call in flight cannot be cancelled, so the wait runs in an unstructured task that
@@ -397,14 +430,17 @@ private final class FakeSession: WriteSession {
         return await platform.read(handle, take: take)
     }
 
-    func setSize(_ size: ScreenSize) async -> Result<Void, PlatformFailure> {
+    func setSize(_ size: ScreenSize, admit: @escaping @Sendable () -> WriteGo) async -> Result<WriteGo, PlatformFailure> {
         if usedAfterEnd() { return .failure(.cannotMove) }
-        return await platform.writeSize(handle, size)
+        return await platform.writeSize(handle, size, admit: admit)
     }
 
-    func setPosition(_ point: ScreenPoint) async -> Result<Void, PlatformFailure> {
+    func setPosition(
+        _ point: ScreenPoint,
+        admit: @escaping @Sendable () -> WriteGo
+    ) async -> Result<WriteGo, PlatformFailure> {
         if usedAfterEnd() { return .failure(.cannotMove) }
-        return await platform.writePosition(handle, point)
+        return await platform.writePosition(handle, point, admit: admit)
     }
 
     func end() async {

@@ -35,12 +35,17 @@ public struct CapabilityState: Equatable, Sendable {
 /// A run of writes to one window. The platform switches Enhanced UI off when the session
 /// begins and restores it at `end()`. Enhanced UI is per app, so at most one session per app
 /// exists at a time, whoever asked for it.
+///
+/// A write asks `admit` in the same serial work for the window's app that makes the write,
+/// immediately before it, so every read of the app queued ahead of the write has reached its
+/// `take` first. The write is made only when `admit` answers `.write`; the result is its answer.
+/// A failure means the write was admitted, and may or may not have happened.
 public protocol WriteSession: Sendable {
     /// Reads the frame and hands it to `take` inside the read (see `WindowPlatform`). The result is
     /// what `take` returned.
     func readFrame<T: Sendable>(take: @escaping @Sendable (ScreenRect) -> T) async -> Result<T, PlatformFailure>
-    func setSize(_ size: ScreenSize) async -> Result<Void, PlatformFailure>
-    func setPosition(_ point: ScreenPoint) async -> Result<Void, PlatformFailure>
+    func setSize(_ size: ScreenSize, admit: @escaping @Sendable () -> WriteGo) async -> Result<WriteGo, PlatformFailure>
+    func setPosition(_ point: ScreenPoint, admit: @escaping @Sendable () -> WriteGo) async -> Result<WriteGo, PlatformFailure>
     func end() async
 }
 

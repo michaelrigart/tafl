@@ -15,17 +15,19 @@ private func session(_ fake: FakePlatform, _ handle: WindowHandle) async throws 
     try await fake.beginWriting(handle).get()
 }
 
+private let admitted: @Sendable () -> WriteGo = { .write }
+
 @Test func fakeRecordsCallsAndAppliesRules() async throws {
     let w = window(1, frame: rect(10, 10, 400, 300))
     let (fake, _) = await makeFake(w)
     let s = try await session(fake, w.handle)
-    try await s.setSize(ScreenSize(width: 500, height: 775)).get()
-    try await s.setPosition(ScreenPoint(x: 0, y: 25)).get()
+    #expect(try await s.setSize(ScreenSize(width: 500, height: 775), admit: admitted).get() == .write)
+    #expect(try await s.setPosition(ScreenPoint(x: 0, y: 25), admit: admitted).get() == .write)
     #expect(try await s.readFrame(take: { $0 }).get() == rect(0, 25, 500, 775))
     #expect(await fake.callLog == ["begin", "size 500x775", "position 0,25", "read"])
 
     await fake.configure { $0.sizeRule = { _, asked in ScreenSize(width: min(asked.width, 600), height: asked.height) } }
-    try await s.setSize(ScreenSize(width: 800, height: 775)).get()
+    #expect(try await s.setSize(ScreenSize(width: 800, height: 775), admit: admitted).get() == .write)
     #expect(try await s.readFrame(take: { $0 }).get().width == 600)
 
     await s.end()
@@ -68,7 +70,7 @@ private final class Taken: Sendable {
     let w = window(1, frame: rect(0, 0, 100, 100))
     let (fake, _) = await makeFake(w)
     let s = try await session(fake, w.handle)
-    try await s.setSize(ScreenSize(width: 500.5, height: 775)).get()
+    #expect(try await s.setSize(ScreenSize(width: 500.5, height: 775), admit: admitted).get() == .write)
     #expect(await fake.callLog == ["begin", "size 500.5x775"])
 }
 
@@ -114,7 +116,7 @@ private final class Taken: Sendable {
     let (fake, _) = await makeFake(w)
     await fake.configure { $0.beforeCall[1] = { $0.frame.origin = ScreenPoint(x: 300, y: 300) } }
     let s = try await session(fake, w.handle)
-    try await s.setSize(ScreenSize(width: 500, height: 400)).get()
+    #expect(try await s.setSize(ScreenSize(width: 500, height: 400), admit: admitted).get() == .write)
     #expect(try await s.readFrame(take: { $0 }).get() == rect(300, 300, 500, 400))
 }
 
@@ -123,13 +125,13 @@ private final class Taken: Sendable {
     let (fake, _) = await makeFake(w)
     let gate = await fake.pause(beforeCall: 1)
     let s = try await session(fake, w.handle)
-    let write = Task { await s.setSize(ScreenSize(width: 500, height: 400)) }
+    let write = Task { await s.setSize(ScreenSize(width: 500, height: 400), admit: admitted) }
     for _ in 0..<100 { await Task.yield() }
     #expect(await fake.callLog == ["begin"])
     #expect(await fake.windows[w.handle]?.frame == rect(0, 0, 100, 100))
 
     gate.open()
-    try await write.value.get()
+    #expect(try await write.value.get() == .write)
     #expect(await fake.callLog == ["begin", "size 500x400"])
     #expect(await fake.windows[w.handle]?.frame == rect(0, 0, 500, 400))
 }
@@ -245,14 +247,14 @@ private final class Taken: Sendable {
     let (fake, _) = await makeFake(w)
     let gate = await fake.pause(beforeCall: 1)
     let s = try await session(fake, w.handle)
-    let write = Task { await s.setSize(ScreenSize(width: 500, height: 400)) }
+    let write = Task { await s.setSize(ScreenSize(width: 500, height: 400), admit: admitted) }
     #expect(await pollUntil { gate.waiterCount == 1 })
     write.cancel()
     for _ in 0..<100 { await Task.yield() }
     #expect(await fake.callLog == ["begin"])
 
     gate.open()
-    try await write.value.get()
+    #expect(try await write.value.get() == .write)
     #expect(await fake.callLog == ["begin", "size 500x400"])
 }
 

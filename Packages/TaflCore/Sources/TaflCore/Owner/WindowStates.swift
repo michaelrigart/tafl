@@ -107,7 +107,8 @@ struct WindowStates {
         return .write
     }
 
-    /// Before each write. The first opens the restore chain at the start when asked to.
+    /// A write's admission, just before it is made. The first opens the restore chain at the start
+    /// when asked to.
     mutating func willWrite(
         _ ticket: RequestTicket,
         _ part: WritePart,

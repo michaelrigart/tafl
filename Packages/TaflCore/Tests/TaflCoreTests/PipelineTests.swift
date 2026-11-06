@@ -435,7 +435,8 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     rig.owner.reconfigurationBegan()
     gate.open()
     #expect(await task.value == .superseded)
-    #expect(await rig.log.contains { $0.hasPrefix("size") || $0.hasPrefix("position") } == false)
+    // The first write reaches the app, which does not make it.
+    #expect(await rig.log == ["begin", "position 0,25 cancelled", "end"])
     #expect(rig.stored.restore[handle] == nil)
     #expect(rig.stored.placed[handle] == nil)
 }

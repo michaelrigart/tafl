@@ -57,7 +57,9 @@ public enum WriteResult: Equatable, Sendable {
 
 /// Applies a frame as a sequence of writes, one at a time, each read back. The owner judges every
 /// read-back, and every other reading of the window, as it is read: a frame someone else moved
-/// interrupts the request, and the writer stops at its next step. One request per window at a time;
+/// interrupts the request, and the writer stops at its next step. The owner admits each write on the
+/// app's queue as it is made, so a write queued behind the reading that interrupted the request is
+/// not made either. One request per window at a time;
 /// `WindowRequestQueue` provides that. The writer's result says what it saw itself; a reading the
 /// owner judged after the writer's last step reaches the request's end, not this result.
 public struct FrameWriter: Sendable {
@@ -229,30 +231,32 @@ public struct FrameWriter: Sendable {
         return classify(job, achieved: progress.expected)
     }
 
-    /// One write: the owner's go-ahead, the write, and its read-back, which the owner checks.
+    /// One write, which the owner admits on the app's queue just before it is made, and its
+    /// read-back, which the owner checks.
     private func perform(_ write: Write, _ context: Context) async throws(Stop) {
         let progress = context.progress
         let job = context.job
         if Task.isCancelled { throw Stop(result: .cancelled(lastVerified: progress.lastVerified)) }
-        let go = owner.willWrite(
-            job.ticket, write.part, targetVisible: job.targetVisible, displays: job.displays, firstWrite: job.firstWrite
-        )
-        switch go {
-        case .write: break
-        case .interrupted: throw Stop(result: .interrupted)
-        case .cancelled, .declined: throw Stop(result: .cancelled(lastVerified: progress.lastVerified))
-        }
-        progress.lastVerified = nil
-        let written = switch write {
-        case .size(let size): await context.session.setSize(size)
-        case .position(let point): await context.session.setPosition(point)
-        }
-        if case .failure(let failure) = written {
-            owner.writeFailed(job.ticket)
-            throw Stop(result: .failed(failure, lastVerified: progress.lastVerified))
-        }
         let owner = owner
         let ticket = job.ticket
+        let part = write.part
+        let admit: @Sendable () -> WriteGo = {
+            owner.willWrite(
+                ticket, part, targetVisible: job.targetVisible, displays: job.displays, firstWrite: job.firstWrite
+            )
+        }
+        let written = switch write {
+        case .size(let size): await context.session.setSize(size, admit: admit)
+        case .position(let point): await context.session.setPosition(point, admit: admit)
+        }
+        switch written {
+        case .success(.write): progress.lastVerified = nil
+        case .success(.interrupted): throw Stop(result: .interrupted)
+        case .success(.cancelled), .success(.declined): throw Stop(result: .cancelled(lastVerified: progress.lastVerified))
+        case .failure(let failure):
+            owner.writeFailed(ticket)
+            throw Stop(result: .failed(failure, lastVerified: nil))
+        }
         switch await context.session.readFrame(take: { owner.readBack(ticket, $0) }) {
         case .failure(let failure):
             owner.writeFailed(ticket)
