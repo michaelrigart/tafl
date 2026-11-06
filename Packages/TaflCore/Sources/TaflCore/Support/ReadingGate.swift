@@ -1,29 +1,30 @@
 import Foundation
 
-/// The newest reading accepted for each window. A reading older than that is refused, so a result
-/// read earlier never overwrites what a newer reading left. One as new is accepted, so a reading
-/// can be recorded in several steps. It is kept in memory only, never saved.
-struct ReadingGate: Sendable {
-    private var newest: [WindowHandle: ContinuousClock.Instant] = [:]
+/// The rule every reading of a window goes through: the newest reading accepted for each key, and a
+/// reading older than that is refused, so a result read earlier never overwrites what a newer
+/// reading left. One as new is accepted, so a reading can be recorded in several steps. It is kept
+/// in memory only, never saved.
+struct ReadingGate<Key: Hashable & Sendable>: Sendable {
+    private var newest: [Key: ContinuousClock.Instant] = [:]
 
-    /// Whether a reading taken at `readAt` is at least as new as the newest accepted for the window.
-    func accepts(_ window: WindowHandle, readAt: ContinuousClock.Instant) -> Bool {
-        newest[window].map { readAt >= $0 } ?? true
+    /// Whether a reading taken at `readAt` is at least as new as the newest accepted for the key.
+    func accepts(_ key: Key, readAt: ContinuousClock.Instant) -> Bool {
+        newest[key].map { readAt >= $0 } ?? true
     }
 
     /// Accepts the reading when it is at least as new as the newest, which it then becomes.
     @discardableResult
-    mutating func admit(_ window: WindowHandle, readAt: ContinuousClock.Instant) -> Bool {
-        guard accepts(window, readAt: readAt) else { return false }
-        newest[window] = readAt
+    mutating func admit(_ key: Key, readAt: ContinuousClock.Instant) -> Bool {
+        guard accepts(key, readAt: readAt) else { return false }
+        newest[key] = readAt
         return true
     }
 
-    mutating func forget(_ window: WindowHandle) {
-        newest[window] = nil
+    func newest(_ key: Key) -> ContinuousClock.Instant? {
+        newest[key]
     }
 
-    mutating func forget(pid: Int32) {
-        newest = newest.filter { $0.key.pid != pid }
+    mutating func forget(where matches: (Key) -> Bool) {
+        newest = newest.filter { !matches($0.key) }
     }
 }

@@ -83,9 +83,9 @@ extension WindowEngine {
         frameTasks[window]?.token == token
     }
 
-    /// Decides whose the window's new frame is through the writer, and keeps the memory in step.
+    /// Decides through the writer what the window's new frame says, and keeps the memory in step.
     /// A frame judged while a write runs counts too: the last one the write puts there is the
-    /// window's last known frame. A frame read before the newest the writer has of its own says
+    /// window's last known frame. A frame read before the window's newest accepted reading says
     /// nothing, and changes nothing.
     private func frameChanged(_ window: WindowHandle, token: Int, _ context: EventContext) async {
         guard case .success(let snapshot) = await platform.snapshot(of: window), isLive(window, token: token) else {
@@ -95,7 +95,7 @@ extension WindowEngine {
         guard isLive(window, token: token), verdict != .stale else { return }
         if verdict == .external {
             touched.insert(window)
-            await memory.record(window, .placement, readAt: snapshot.readAt) { $0.recordExternalChange(window) }
+            await memory.recordPlacement(window, readAt: snapshot.readAt) { $0.recordExternalChange() }
             guard isLive(window, token: token) else { return }
         }
         await recordLastKnownLive([snapshot], context)
@@ -106,13 +106,16 @@ extension WindowEngine {
     /// Records the window's frame, and places it when a layout is active and has an entry for it.
     /// The engine's state for a window begins when it first sees it, whatever the source. An
     /// announcement for a window it already knows comes late, with a snapshot older than what the
-    /// engine has: it writes nothing and places nothing.
+    /// engine has: it writes nothing and places nothing. Otherwise the announced frame is the
+    /// first Tafl has of the window, so whichever later reading first finds it elsewhere, an
+    /// event's or a placement's, counts as a move.
     private func windowCreated(_ snapshot: WindowSnapshot) async {
         guard await !knows(snapshot.handle) else {
             eventsHandled += 1
             return
         }
         await memory.processStarted(pid: snapshot.handle.pid)
+        await writer.firstSeen(snapshot.handle, FrameReading(frame: snapshot.frame, readAt: snapshot.readAt))
         let context = currentContext
         await recordLastKnownLive([snapshot], context)
         guard let since = context.since,
@@ -218,10 +221,10 @@ extension WindowEngine {
         }
         let reconfigurations = reconfigurations
         for (known, display) in entries {
-            await memory.record(known.handle, .lastKnown, readAt: known.readAt) { memory in
-                if let count, !reconfigurations.isCurrent(count) { return }
-                memory.recordLastKnown(known.handle, frame: known.frame, display: display, setup: setup)
-            }
+            await memory.recordLastKnown(
+                known.handle, frame: known.frame, display: display, setup: setup, readAt: known.readAt,
+                when: { count.map(reconfigurations.isCurrent) ?? true }
+            )
         }
     }
 }

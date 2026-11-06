@@ -39,6 +39,45 @@ public struct RestoreRecord: Codable, Equatable, Sendable {
     }
 }
 
+/// Where Tafl placed one window, and its restore chain: what a reading of that window may change.
+public struct WindowPlacement: Equatable, Sendable {
+    public var placed: PlacedRecord?
+    public var restore: RestoreRecord?
+
+    public init(placed: PlacedRecord? = nil, restore: RestoreRecord? = nil) {
+        self.placed = placed
+        self.restore = restore
+    }
+
+    public mutating func openChain(before: ScreenRect, on display: Display) {
+        if restore?.chainOpen == true { return }
+        restore = RestoreRecord(
+            frame: before,
+            display: display.identity,
+            visibleFrame: display.visibleFrame,
+            chainOpen: true
+        )
+    }
+
+    public mutating func recordPlaced(_ record: PlacedRecord) {
+        placed = record
+    }
+
+    public mutating func recordExternalChange() {
+        placed = nil
+        restore?.chainOpen = false
+    }
+
+    public func isAtAchievedFrame(_ frame: ScreenRect) -> Bool {
+        guard let placed else { return false }
+        return placed.achieved.isClose(to: frame, within: 1)
+    }
+
+    public mutating func completeRestore() {
+        restore = nil
+    }
+}
+
 public struct StoredFrame: Codable, Equatable, Sendable {
     public var display: DisplayIdentity
     public var relative: UnitRect
@@ -81,28 +120,35 @@ public struct WindowMemory: Codable, Equatable, Sendable {
         lastDisplays.isEmpty ? nil : DisplaySetup(lastDisplays)
     }
 
+    public func placement(of window: WindowHandle) -> WindowPlacement {
+        WindowPlacement(placed: placed[window], restore: restore[window])
+    }
+
+    public mutating func setPlacement(_ placement: WindowPlacement, of window: WindowHandle) {
+        placed[window] = placement.placed
+        restore[window] = placement.restore
+    }
+
+    private mutating func changePlacement(of window: WindowHandle, _ change: (inout WindowPlacement) -> Void) {
+        var placement = placement(of: window)
+        change(&placement)
+        setPlacement(placement, of: window)
+    }
+
     public mutating func openChain(_ window: WindowHandle, before: ScreenRect, on display: Display) {
-        if restore[window]?.chainOpen == true { return }
-        restore[window] = RestoreRecord(
-            frame: before,
-            display: display.identity,
-            visibleFrame: display.visibleFrame,
-            chainOpen: true
-        )
+        changePlacement(of: window) { $0.openChain(before: before, on: display) }
     }
 
     public mutating func recordPlaced(_ window: WindowHandle, _ record: PlacedRecord) {
-        placed[window] = record
+        changePlacement(of: window) { $0.recordPlaced(record) }
     }
 
     public mutating func recordExternalChange(_ window: WindowHandle) {
-        placed[window] = nil
-        restore[window]?.chainOpen = false
+        changePlacement(of: window) { $0.recordExternalChange() }
     }
 
     public func isAtAchievedFrame(_ window: WindowHandle, frame: ScreenRect) -> Bool {
-        guard let record = placed[window] else { return false }
-        return record.achieved.isClose(to: frame, within: 1)
+        placement(of: window).isAtAchievedFrame(frame)
     }
 
     public func restoreTarget(
@@ -119,7 +165,7 @@ public struct WindowMemory: Codable, Equatable, Sendable {
     }
 
     public mutating func completeRestore(_ window: WindowHandle) {
-        restore[window] = nil
+        changePlacement(of: window) { $0.completeRestore() }
     }
 
     public mutating func recordLastKnown(

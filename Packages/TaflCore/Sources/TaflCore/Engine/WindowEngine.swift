@@ -168,11 +168,14 @@ public actor WindowEngine {
         self.platform = platform
         self.clock = clock
         self.timing = timing
+        // The writer and the memory share each window's newest reading.
+        let readings = WindowReadings()
         writer = FrameWriter(
-            platform: platform, clock: clock, adjustments: adjustments, reapplyDelay: timing.reapplyDelay
+            platform: platform, clock: clock, adjustments: adjustments, reapplyDelay: timing.reapplyDelay,
+            readings: readings
         )
         queue = WindowRequestQueue()
-        memory = MemoryKeeper(store: store)
+        memory = MemoryKeeper(store: store, readings: readings)
         pipeline = Pipeline(platform: platform, writer: writer, queue: queue, memory: memory, steps: steps)
         tracker = SettleTracker(quietPeriod: timing.quietPeriod)
         (reports, reportSink) = AsyncStream.makeStream(of: EngineReport.self)
@@ -473,6 +476,8 @@ public actor WindowEngine {
                         }, eligible: {
                             guard request.source.yieldsToTouch else { return true }
                             return await self.isUntouched(window)
+                        }, moved: {
+                            await self.moved(window, run: runID)
                         }, landed: { outcome, readAt in
                             await self.landed(outcome, readAt: readAt, of: request.window, run: runID, since: since)
                         })
@@ -498,6 +503,11 @@ public actor WindowEngine {
 
     private func isUntouched(_ window: WindowHandle) -> Bool {
         !touched.contains(window)
+    }
+
+    /// Someone moved a window of a run: a placement Tafl makes on its own leaves it alone from now.
+    private func moved(_ window: WindowHandle, run runID: Int) {
+        if runWindows[runID]?.contains(window) == true { touched.insert(window) }
     }
 
     /// What one request of a run did, recorded inside the window's request: where it put the

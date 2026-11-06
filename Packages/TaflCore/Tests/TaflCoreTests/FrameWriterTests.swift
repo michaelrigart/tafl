@@ -457,8 +457,8 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.start(crossJob()).value == .placed(crossTarget))
     #expect(await !rig.writer.isWriting(handle))
     // After `write` returns and before the next one starts, a late frame equal to the achieved one is Tafl's.
-    #expect(await rig.writer.observe(handle, frame: crossTarget, readAt: .now) == .own)
-    #expect(await rig.writer.observe(handle, frame: rect(1000.5, 0, 1200, 899.5), readAt: .now) == .own)
+    #expect(await rig.writer.observe(handle, frame: crossTarget, readAt: .now) == .unchanged)
+    #expect(await rig.writer.observe(handle, frame: rect(1000.5, 0, 1200, 899.5), readAt: .now) == .unchanged)
     #expect(await rig.writer.observe(handle, frame: rect(1002, 0, 1200, 900), readAt: .now) == .external)
     #expect(await rig.writer.observe(WindowHandle(pid: 100, windowID: 2, isStable: true), frame: crossTarget, readAt: .now) == .external)
 
@@ -476,7 +476,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.writer.observe(handle, frame: crossTarget, readAt: .now) == .heldForWrite)
     gate.open()
     #expect(await task.value == .placed(crossStart))
-    #expect(await rig.writer.observe(handle, frame: crossStart, readAt: .now) == .own)
+    #expect(await rig.writer.observe(handle, frame: crossStart, readAt: .now) == .unchanged)
     #expect(await rig.writer.observe(handle, frame: crossTarget, readAt: .now) == .external)
 }
 
@@ -487,7 +487,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.writer.observe(handle, frame: steppedAchieved, readAt: .now) == .heldForWrite)
     await rig.clock.advance(by: .milliseconds(25))
     _ = await task.value
-    #expect(await rig.writer.observe(handle, frame: steppedAchieved, readAt: .now) == .own)
+    #expect(await rig.writer.observe(handle, frame: steppedAchieved, readAt: .now) == .unchanged)
 }
 
 @Test func aFrameReadBeforeTheRequestStartedIsStale() async {
@@ -515,12 +515,60 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.writer.observe(handle, frame: rect(100, 100, 1200, 900), readAt: .now) == .external)
 }
 
-@Test func afterARequestThatWroteNothingAnOlderFrameIsStillJudged() async {
+@Test func aRequestThatWroteNothingKeepsItsReadingAccepted() async {
     let rig = await Rig(start: crossStart)
     let earlier = ContinuousClock.now
     #expect(await rig.start(crossJob(), before: { false }).value == .cancelled(lastVerified: nil))
-    // Nothing of Tafl's own is there to be newer than it.
-    #expect(await rig.writer.observe(handle, frame: rect(400, 400, 400, 300), readAt: earlier) == .external)
+    #expect(await rig.writer.observe(handle, frame: rect(400, 400, 400, 300), readAt: earlier) == .stale)
+}
+
+// MARK: From Resolve's read
+
+@Test func aFrameReadAfterResolveIsHeldAndStopsTheRequestBeforeItWrites() async {
+    let rig = await Rig(start: crossStart)
+    let job = crossJob()
+    #expect(await rig.writer.begin(handle, start: FrameReading(frame: job.start, readAt: job.startReadAt)) == .unchanged)
+    #expect(await rig.writer.isWriting(handle))
+    #expect(await rig.writer.observe(handle, frame: rect(400, 400, 400, 300), readAt: .now) == .heldForWrite)
+    #expect(await rig.start(job).value == .interrupted)
+    #expect(await rig.log == ["begin", "end"])
+    #expect(await rig.writer.end(handle) == nil)
+    #expect(await !rig.writer.isWriting(handle))
+}
+
+@Test func aNewerFrameElsewhereAcceptedBeforeResolveRegistersOvertakesTheRequest() async {
+    let rig = await Rig(start: crossStart)
+    let resolved = FrameReading(frame: crossStart, readAt: .now)
+    #expect(await rig.writer.observe(handle, frame: rect(400, 400, 400, 300), readAt: .now) == .external)
+    #expect(await rig.writer.begin(handle, start: resolved) == .overtaken)
+    #expect(await !rig.writer.isWriting(handle))
+}
+
+@Test func aNewerFrameInTheSamePlaceBeforeResolveRegistersLetsTheRequestGoOn() async {
+    let rig = await Rig(start: crossStart)
+    let resolved = FrameReading(frame: crossStart, readAt: .now)
+    _ = await rig.writer.observe(handle, frame: crossStart, readAt: .now)
+    #expect(await rig.writer.begin(handle, start: resolved) == .unchanged)
+    #expect(await rig.writer.isWriting(handle))
+}
+
+@Test func aStartElsewhereThanTheNewestFrameIsAMove() async {
+    let rig = await Rig(start: crossStart)
+    #expect(await rig.start(crossJob()).value == .placed(crossTarget))
+    #expect(await rig.writer.begin(handle, start: FrameReading(frame: crossTarget, readAt: .now)) == .unchanged)
+    await rig.writer.end(handle)
+    #expect(await rig.writer.begin(handle, start: FrameReading(frame: rect(300, 300, 1200, 900), readAt: .now)) == .moved)
+}
+
+@Test func endReturnsAHeldFrameThatShowsAMoveAndKeepsItAsTheNewest() async {
+    let rig = await Rig(start: crossStart)
+    let earlier = ContinuousClock.now
+    _ = await rig.writer.begin(handle, start: FrameReading(frame: crossStart, readAt: .now))
+    let moved = FrameReading(frame: rect(400, 400, 400, 300), readAt: .now)
+    #expect(await rig.writer.observe(handle, frame: moved.frame, readAt: moved.readAt) == .heldForWrite)
+    #expect(await rig.writer.end(handle) == moved)
+    #expect(await rig.writer.observe(handle, frame: crossStart, readAt: earlier) == .stale)
+    #expect(await rig.writer.observe(handle, frame: moved.frame, readAt: .now) == .unchanged)
 }
 
 // MARK: The first-write callback

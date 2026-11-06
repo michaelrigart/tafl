@@ -52,8 +52,7 @@ public struct ResolvedWindow: Sendable {
 private enum Resolution {
     case resolved(ResolvedWindow)
     case failed(FailureKind)
-    /// When the window that can't be placed was read.
-    case skipped(ContinuousClock.Instant)
+    case skipped
 }
 
 public enum PlanResult: Sendable {
@@ -88,21 +87,24 @@ public actor Pipeline {
     }
 
     /// `eligible` is asked after Resolve, just before the first write: a placement that is no longer
-    /// wanted then writes nothing and comes back superseded. `landed` runs inside the window's
-    /// request once its outcome is known, with when the newest reading the outcome rests on was
-    /// taken (nil when the window could not be read), so what it records comes before anything
-    /// the window's next request records.
+    /// wanted then writes nothing and comes back superseded. `moved` runs as soon as a reading the
+    /// request takes part in shows that someone else moved the window: Resolve's own, or one read
+    /// after it that the request did not write over. `landed` runs inside the window's request
+    /// once its outcome is known, with when the newest reading the outcome rests on was taken (nil
+    /// when the window could not be read), so what it records comes before anything the window's
+    /// next request records.
     public func run(
         _ window: WindowHandle,
         config: Config,
         unplaceable: Unplaceable = .skipped,
         plan: @escaping @Sendable (ResolvedWindow) -> PlanResult,
         eligible: @escaping @Sendable () async -> Bool = { true },
+        moved: @escaping @Sendable () async -> Void = {},
         landed: @escaping @Sendable (PlacementOutcome, ContinuousClock.Instant?) async -> Void = { _, _ in }
     ) async -> PlacementOutcome {
         let outcome = await queue.run(window) { [self] in
             let (outcome, readAt) = await execute(
-                window, config: config, unplaceable: unplaceable, plan: plan, eligible: eligible
+                window, config: config, unplaceable: unplaceable, plan: plan, eligible: eligible, moved: moved
             )
             await landed(outcome, readAt)
             return outcome
@@ -117,23 +119,58 @@ public actor Pipeline {
 
     // MARK: Stages
 
-    /// The outcome, and when the newest reading it rests on was taken.
+    /// The outcome, and when the newest reading it rests on was taken. The request takes part from
+    /// Resolve's read: frames read for the window from then on are held for it until it ends.
     private func execute(
         _ window: WindowHandle,
         config: Config,
         unplaceable: Unplaceable,
         plan: @Sendable (ResolvedWindow) -> PlanResult,
-        eligible: @Sendable () async -> Bool
+        eligible: @Sendable () async -> Bool,
+        moved: @Sendable () async -> Void
     ) async -> (PlacementOutcome, ContinuousClock.Instant?) {
         // Read first: a reconfiguration that begins after this cancels the write.
         let epoch = await writer.epoch
+        let snapshot: WindowSnapshot
+        switch await platform.snapshot(of: window) {
+        case .failure(let failure): return (.failed(await failureKind(failure, window: window, appName: nil)), nil)
+        case .success(let value): snapshot = value
+        }
+        switch await writer.begin(window, start: FrameReading(frame: snapshot.frame, readAt: snapshot.readAt)) {
+        case .overtaken:
+            return (.failed(.movedDuringPlacement), snapshot.readAt)
+        case .moved:
+            await memory.recordPlacement(window, readAt: snapshot.readAt) { $0.recordExternalChange() }
+            await moved()
+        case .unchanged:
+            break
+        }
+        let outcome = await proceed(
+            snapshot, epoch: epoch, config: config, unplaceable: unplaceable, plan: plan, eligible: eligible
+        )
+        if let after = await writer.end(window) {
+            await memory.recordPlacement(window, readAt: after.readAt) { $0.recordExternalChange() }
+            await moved()
+        }
+        return outcome
+    }
+
+    /// The stages after Resolve's read.
+    private func proceed(
+        _ snapshot: WindowSnapshot,
+        epoch: Int,
+        config: Config,
+        unplaceable: Unplaceable,
+        plan: @Sendable (ResolvedWindow) -> PlanResult,
+        eligible: @Sendable () async -> Bool
+    ) async -> (PlacementOutcome, ContinuousClock.Instant?) {
+        let window = snapshot.handle
         let resolved: ResolvedWindow
-        switch await resolve(window, unplaceable: unplaceable) {
-        case .failed(let kind): return (.failed(kind), nil)
-        case .skipped(let readAt): return (.skipped, readAt)
+        switch await resolve(snapshot, unplaceable: unplaceable) {
+        case .failed(let kind): return (.failed(kind), snapshot.readAt)
+        case .skipped: return (.skipped, snapshot.readAt)
         case .resolved(let value): resolved = value
         }
-        let snapshot = resolved.snapshot
         let request: MoveRequest
         switch plan(resolved) {
         case .nothing: return (.unchanged, snapshot.readAt)
@@ -181,8 +218,8 @@ public actor Pipeline {
             guard await eligible() else { return false }
             writing.withLock { $0 = true }
             if opensChain {
-                await keeper.record(window, .placement, readAt: snapshot.readAt) {
-                    $0.openChain(window, before: snapshot.frame, on: current)
+                await keeper.recordPlacement(window, readAt: snapshot.readAt) {
+                    $0.openChain(before: snapshot.frame, on: current)
                 }
             }
             return true
@@ -194,19 +231,14 @@ public actor Pipeline {
         return (outcome, readAt)
     }
 
-    /// Resolve: the window, its display, and the memory about it, reconciled with where the
-    /// window is.
-    private func resolve(_ window: WindowHandle, unplaceable: Unplaceable) async -> Resolution {
-        let snapshot: WindowSnapshot
-        switch await platform.snapshot(of: window) {
-        case .failure(let failure): return .failed(await failureKind(failure, window: window, appName: nil))
-        case .success(let value): snapshot = value
-        }
+    /// Resolve: the window's display, and the memory about it, reconciled with where the window is.
+    private func resolve(_ snapshot: WindowSnapshot, unplaceable: Unplaceable) async -> Resolution {
+        let window = snapshot.handle
         // The predicate the runs enumerate with, for every request, before anything is recorded.
         if !snapshot.isPlaceable {
             if unplaceable == .explained, snapshot.isFullscreen { return .failed(.fullscreen) }
             if unplaceable == .explained, snapshot.isSheet { return .failed(.cannotMove) }
-            return .skipped(snapshot.readAt)
+            return .skipped
         }
         if !snapshot.canMove { return .failed(.cannotMove) }
         let displays = await platform.displays()
@@ -214,9 +246,9 @@ public actor Pipeline {
             return .failed(.cannotMove)
         }
         // A window that has left the frame Tafl put it in was moved by something Tafl did not see.
-        await memory.record(window, .placement, readAt: snapshot.readAt) { memory in
-            if memory.placed[window] != nil, !memory.isAtAchievedFrame(window, frame: snapshot.frame) {
-                memory.recordExternalChange(window)
+        await memory.recordPlacement(window, readAt: snapshot.readAt) { placement in
+            if placement.placed != nil, !placement.isAtAchievedFrame(snapshot.frame) {
+                placement.recordExternalChange()
             }
         }
         let known = await memory.read()
@@ -256,9 +288,9 @@ public actor Pipeline {
                 display: display(of: achieved)
             )
             let completesRestore = request.source.completesRestore && result == .placed(achieved)
-            await memory.record(window, .placement, readAt: readAt) { memory in
-                memory.recordPlaced(window, record)
-                if completesRestore { memory.completeRestore(window) }
+            await memory.recordPlacement(window, readAt: readAt) { placement in
+                placement.recordPlaced(record)
+                if completesRestore { placement.completeRestore() }
             }
             switch result {
             case .sizeRefused: return .failed(.sizeRefused(app: snapshot.appName))
@@ -266,7 +298,7 @@ public actor Pipeline {
             default: return .placed(achieved)
             }
         case .interrupted:
-            await memory.record(window, .placement, readAt: readAt) { $0.recordExternalChange(window) }
+            await memory.recordPlacement(window, readAt: readAt) { $0.recordExternalChange() }
             return .failed(.movedDuringPlacement)
         case .cancelled(let verified):
             if let verified { await recordOwn(verified, window, display: display(of: verified), readAt: readAt) }
@@ -277,7 +309,7 @@ public actor Pipeline {
             } else if wrote {
                 // Nothing verified after a write: the window is no longer at the old record, but
                 // nothing external happened, so the chain stays open.
-                await memory.record(window, .placement, readAt: readAt) { $0.placed[window] = nil }
+                await memory.recordPlacement(window, readAt: readAt) { $0.placed = nil }
             }
             return .failed(await failureKind(failure, window: window, appName: snapshot.appName))
         }
@@ -293,7 +325,7 @@ public actor Pipeline {
         let record = PlacedRecord(
             action: nil, layout: nil, placement: nil, cycleStep: 0, achieved: frame, display: display
         )
-        await memory.record(window, .placement, readAt: readAt) { $0.recordPlaced(window, record) }
+        await memory.recordPlacement(window, readAt: readAt) { $0.recordPlaced(record) }
     }
 
     /// A request whose target is where the window already is: the window counts as placed by it,
@@ -312,10 +344,10 @@ public actor Pipeline {
         )
         let opensChain = request.source.countsForRestore
         let completesRestore = request.source.completesRestore
-        await memory.record(window, .placement, readAt: resolved.snapshot.readAt) { memory in
-            if opensChain { memory.openChain(window, before: frame, on: resolved.display) }
-            memory.recordPlaced(window, record)
-            if completesRestore { memory.completeRestore(window) }
+        await memory.recordPlacement(window, readAt: resolved.snapshot.readAt) { placement in
+            if opensChain { placement.openChain(before: frame, on: resolved.display) }
+            placement.recordPlaced(record)
+            if completesRestore { placement.completeRestore() }
         }
     }
 

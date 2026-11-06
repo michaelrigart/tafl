@@ -72,6 +72,8 @@ actor FakePlatform: WindowPlatform {
     var unobserved: [UnobservedApp] = []
 
     private(set) var callLog: [String] = []
+    /// Holds the next `displays()` call until the gate opens.
+    var displaysGate: FakeGate?
     /// Holds the next `visibleWindows()` call until the gate opens.
     var visibleWindowsGate: FakeGate?
     /// Holds the next `startObserving()` call until the gate opens.
@@ -155,7 +157,13 @@ actor FakePlatform: WindowPlatform {
 
     // MARK: WindowPlatform
 
-    func displays() async -> [Display] { displays }
+    func displays() async -> [Display] {
+        if let gate = displaysGate {
+            displaysGate = nil
+            await gate.wait()
+        }
+        return displays
+    }
 
     func focusedWindow() async -> Result<WindowSnapshot, PlatformFailure> {
         guard let focused else { return .failure(.noWindow) }

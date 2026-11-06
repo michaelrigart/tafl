@@ -29,9 +29,7 @@ final class MemoryKeeperTests {
     }
 
     private func change(_ keeper: MemoryKeeper) async {
-        await keeper.record(keeperWindow, .placement, readAt: .now) {
-            $0.openChain(keeperWindow, before: rect(1, 2, 3, 4), on: displayA)
-        }
+        await keeper.recordPlacement(keeperWindow, readAt: .now) { $0.openChain(before: rect(1, 2, 3, 4), on: displayA) }
     }
 
     private func isSuccess(_ result: Result<Void, any Error>) -> Bool {
@@ -140,17 +138,13 @@ final class MemoryKeeperTests {
         let quitApp = WindowHandle(pid: 200, windowID: 1, isStable: true)
         await keeper.forget(keeperWindow)
         await keeper.forget(pid: 200)
-        await keeper.record(keeperWindow, .placement, readAt: .now) { $0.openChain(keeperWindow, before: rect(1, 2, 3, 4), on: displayA) }
-        await keeper.record(quitApp, .placement, readAt: .now) { $0.openChain(quitApp, before: rect(1, 2, 3, 4), on: displayA) }
-        // A change that writes another window drops what it wrote for a gone one too.
-        let alive = WindowHandle(pid: 300, windowID: 1, isStable: true)
-        await keeper.record(alive, .placement, readAt: .now) { memory in
-            memory.openChain(alive, before: rect(1, 2, 3, 4), on: displayA)
-            memory.openChain(quitApp, before: rect(1, 2, 3, 4), on: displayA)
+        for gone in [keeperWindow, quitApp] {
+            await keeper.recordPlacement(gone, readAt: .now) { $0.openChain(before: rect(1, 2, 3, 4), on: displayA) }
+            await keeper.recordLastKnown(gone, frame: rect(1, 2, 3, 4), display: displayA, setup: DisplaySetup([displayA]), readAt: .now)
         }
-        #expect(await keeper.read().restore.keys.sorted { $0.pid < $1.pid } == [alive])
+        #expect(await keeper.read() == WindowMemory())
         await keeper.processStarted(pid: 200)
-        await keeper.record(quitApp, .placement, readAt: .now) { $0.openChain(quitApp, before: rect(1, 2, 3, 4), on: displayA) }
+        await keeper.recordPlacement(quitApp, readAt: .now) { $0.openChain(before: rect(1, 2, 3, 4), on: displayA) }
         #expect(await keeper.read().restore[quitApp] != nil)
     }
 
@@ -161,52 +155,43 @@ final class MemoryKeeperTests {
         let setup = DisplaySetup([displayA])
         let older = ContinuousClock.now
         let newer = older.advanced(by: .milliseconds(1))
-        await keeper.record(window, .lastKnown, readAt: newer) {
-            $0.recordLastKnown(keeperWindow, frame: rect(0, 25, 500, 775), display: displayA, setup: setup)
-        }
-        let refused: Void? = await keeper.record(window, .lastKnown, readAt: older) {
-            $0.recordLastKnown(keeperWindow, frame: rect(100, 100, 400, 300), display: displayA, setup: setup)
-        }
-        #expect(refused == nil)
+        await keeper.recordLastKnown(window, frame: rect(0, 25, 500, 775), display: displayA, setup: setup, readAt: newer)
+        let recorded = await keeper.recordLastKnown(
+            window, frame: rect(100, 100, 400, 300), display: displayA, setup: setup, readAt: older
+        )
+        #expect(!recorded)
         #expect(await keeper.read().lastKnown(window, setup: setup)?.relative == rect(0, 25, 500, 775).relative(to: v))
     }
 
-    @Test func anOlderReadingLeavesANewerPlacement() async {
-        let keeper = MemoryKeeper()
+    @Test func aPlacementChangesOnlyFromAReadingAsNewAsTheWindowsNewest() async {
+        let readings = WindowReadings()
+        let keeper = MemoryKeeper(readings: readings)
         let older = ContinuousClock.now
         let newer = older.advanced(by: .milliseconds(1))
         let placed = PlacedRecord(
             action: .leftHalf, layout: nil, placement: .leftHalf, cycleStep: 0,
             achieved: rect(0, 25, 500, 775), display: displayA.identity
         )
-        await keeper.record(window, .placement, readAt: newer) { memory in
-            memory.openChain(keeperWindow, before: rect(1, 2, 3, 4), on: displayA)
-            memory.recordPlaced(keeperWindow, placed)
+        _ = readings.judge(window, FrameReading(frame: rect(0, 25, 500, 775), readAt: newer))
+        let accepted: Void? = await keeper.recordPlacement(window, readAt: newer) { placement in
+            placement.openChain(before: rect(1, 2, 3, 4), on: displayA)
+            placement.recordPlaced(placed)
         }
-        await keeper.record(window, .placement, readAt: older) { $0.recordExternalChange(keeperWindow) }
-        let after = await keeper.read()
-        #expect(after.placed[window] == placed)
-        #expect(after.restore[window]?.chainOpen == true)
+        let refused: Void? = await keeper.recordPlacement(window, readAt: older) { $0.recordExternalChange() }
+        #expect(accepted != nil)
+        #expect(refused == nil)
+        #expect(await keeper.read().placement(of: window) == WindowPlacement(placed: placed, restore: RestoreRecord(
+            frame: rect(1, 2, 3, 4), display: displayA.identity, visibleFrame: v, chainOpen: true
+        )))
     }
 
-    @Test func aReadingAsNewAsTheNewestIsAccepted() async {
-        let keeper = MemoryKeeper()
-        let readAt = ContinuousClock.now
-        await keeper.record(window, .placement, readAt: readAt) { $0.openChain(keeperWindow, before: rect(1, 2, 3, 4), on: displayA) }
-        let again: Void? = await keeper.record(window, .placement, readAt: readAt) { $0.recordExternalChange(keeperWindow) }
-        #expect(again != nil)
-        #expect(await keeper.read().restore[window]?.chainOpen == false)
-    }
-
-    @Test func eachPartKeepsItsOwnNewestReading() async {
+    @Test func aNewerLastKnownFrameDoesNotHoldAnOlderPlacementBack() async {
         let keeper = MemoryKeeper()
         let older = ContinuousClock.now
         let newer = older.advanced(by: .milliseconds(1))
-        await keeper.record(window, .lastKnown, readAt: newer) {
-            $0.recordLastKnown(keeperWindow, frame: rect(0, 25, 500, 775), display: displayA, setup: DisplaySetup([displayA]))
-        }
-        let placement: Void? = await keeper.record(window, .placement, readAt: older) {
-            $0.openChain(keeperWindow, before: rect(1, 2, 3, 4), on: displayA)
+        await keeper.recordLastKnown(window, frame: rect(0, 25, 500, 775), display: displayA, setup: DisplaySetup([displayA]), readAt: newer)
+        let placement: Void? = await keeper.recordPlacement(window, readAt: older) {
+            $0.openChain(before: rect(1, 2, 3, 4), on: displayA)
         }
         #expect(placement != nil)
         #expect(await keeper.read().restore[window] != nil)

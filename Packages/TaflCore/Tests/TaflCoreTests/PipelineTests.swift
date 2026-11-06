@@ -61,6 +61,7 @@ private func chain(_ frame: ScreenRect, open: Bool = true) -> RestoreRecord {
 private struct Rig {
     let clock = ManualClock()
     let fake: FakePlatform
+    let readings = WindowReadings()
     let writer: FrameWriter
     let memory: MemoryKeeper
     let pipeline: Pipeline
@@ -77,8 +78,10 @@ private struct Rig {
             fake.windows[handle] = window(1, frame: start, appName: "Terminal")
             configure(fake)
         }
-        writer = FrameWriter(platform: fake, clock: clock, adjustments: MacOSAdjustment.measured27, reapplyDelay: nil)
-        memory = MemoryKeeper(memory: initial)
+        writer = FrameWriter(
+            platform: fake, clock: clock, adjustments: MacOSAdjustment.measured27, reapplyDelay: nil, readings: readings
+        )
+        memory = MemoryKeeper(memory: initial, readings: readings)
         pipeline = Pipeline(platform: fake, writer: writer, queue: WindowRequestQueue(), memory: memory, steps: steps)
     }
 
@@ -567,11 +570,14 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
 /// Later than any reading a test makes: what it records stands for a newer reading of the window.
 private let later = ContinuousClock.now.advanced(by: .seconds(3600))
 
-/// Records the window's placement memory as a reading newer than any the request takes.
+/// Records the window's placement memory from a reading newer than any the request takes, of the
+/// window where the request finds it, so the request still writes.
 private func recordNewer(_ rig: Rig, placed record: PlacedRecord?, restore: RestoreRecord?) async {
-    await rig.memory.record(handle, .placement, readAt: later) { memory in
-        memory.placed[handle] = record
-        memory.restore[handle] = restore
+    let frame = await rig.frame
+    _ = rig.readings.judge(handle, FrameReading(frame: frame, readAt: later))
+    await rig.memory.recordPlacement(handle, readAt: later) { placement in
+        placement.placed = record
+        placement.restore = restore
     }
 }
 

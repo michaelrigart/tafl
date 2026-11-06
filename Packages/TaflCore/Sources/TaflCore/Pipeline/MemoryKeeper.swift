@@ -5,8 +5,6 @@ struct GoneWindows: Sendable {
     private var windows: Set<WindowHandle> = []
     private var processes: Set<Int32> = []
 
-    var isEmpty: Bool { windows.isEmpty && processes.isEmpty }
-
     func contains(_ window: WindowHandle) -> Bool {
         windows.contains(window) || processes.contains(window.pid)
     }
@@ -27,15 +25,6 @@ struct GoneWindows: Sendable {
     }
 }
 
-/// The parts of a window's memory. Each accepts a reading only when it is at least as new as the
-/// newest that part has accepted for the window.
-public enum MemoryPart: Sendable {
-    /// The window's last-known frames.
-    case lastKnown
-    /// Where Tafl placed the window, and its restore chain.
-    case placement
-}
-
 /// What the memory holds that belongs to no window, so it changes without a reading.
 public struct GeneralMemory: Sendable {
     public var activeLayout: String?
@@ -45,19 +34,26 @@ public struct GeneralMemory: Sendable {
 
 /// Owns the window memory and its store. It writes only after a load that left the file
 /// replaceable, so a file written by another version, or one that can't be read, is never
-/// overwritten. It also keeps which windows are gone, so no path writes their memory again, and
-/// the newest reading each part of a window's memory has accepted, so an older one never
-/// overwrites it.
+/// overwritten. It also keeps which windows are gone, so no path writes their memory again. A
+/// window's memory changes only from a reading of it that no newer one has overtaken: its
+/// placement against the window's newest reading, which the writer shares, and its last-known
+/// frames against the newest recorded for them.
 public actor MemoryKeeper {
     private var memory: WindowMemory
     private let store: MemoryStore?
     private var mayWrite = false
     private var gone = GoneWindows()
-    private var readings: [MemoryPart: ReadingGate] = [:]
+    private let readings: WindowReadings
+    private var lastKnownReadings = ReadingGate<WindowHandle>()
 
     public init(memory: WindowMemory = WindowMemory(), store: MemoryStore? = nil) {
+        self.init(memory: memory, store: store, readings: WindowReadings())
+    }
+
+    init(memory: WindowMemory = WindowMemory(), store: MemoryStore? = nil, readings: WindowReadings) {
         self.memory = memory
         self.store = store
+        self.readings = readings
     }
 
     /// Loads from the store. A loaded memory replaces the current one; every other result leaves
@@ -86,26 +82,38 @@ public actor MemoryKeeper {
         memory
     }
 
-    /// Every change to a window's memory goes through here, with the reading it rests on: a
-    /// reading of `window` taken at `readAt`. The change runs only when that part of the window's
-    /// memory has accepted no newer reading, and returns nil otherwise; the newer state stands.
-    /// Whatever a change wrote for a gone window is dropped in the same step, so a destroyed
-    /// window, or one whose app quit, is never written again, whichever path writes and however
-    /// late it finishes.
+    /// Changes where Tafl placed a window, and its restore chain, from a reading of it taken at
+    /// `readAt`: only when no newer reading of the window has been accepted, and only for a window
+    /// that is not gone. The change reaches only that window's entries. Returns its result, or nil
+    /// when the reading was refused; the newer state stands.
     @discardableResult
-    public func record<T>(
+    public func recordPlacement<T>(
         _ window: WindowHandle,
-        _ part: MemoryPart,
         readAt: ContinuousClock.Instant,
-        _ change: (inout WindowMemory) -> T
+        _ change: (inout WindowPlacement) -> T
     ) -> T? {
-        guard !gone.contains(window), readings[part, default: ReadingGate()].admit(window, readAt: readAt) else {
-            return nil
-        }
-        let result = change(&memory)
-        let gone = gone
-        if !gone.isEmpty, memory.holdsWindow(where: gone.contains) { memory.forget(where: gone.contains) }
+        guard !gone.contains(window), readings.accepts(window, readAt: readAt) else { return nil }
+        var placement = memory.placement(of: window)
+        let result = change(&placement)
+        memory.setPlacement(placement, of: window)
         return result
+    }
+
+    /// Records a window's last-known frame for a setup from a reading of it taken at `readAt`,
+    /// when no newer reading of the window has been recorded, `applies` holds, and the window is
+    /// not gone. Returns whether the frame was recorded.
+    @discardableResult
+    public func recordLastKnown(
+        _ window: WindowHandle,
+        frame: ScreenRect,
+        display: Display,
+        setup: DisplaySetup,
+        readAt: ContinuousClock.Instant,
+        when applies: @Sendable () -> Bool = { true }
+    ) -> Bool {
+        guard !gone.contains(window), lastKnownReadings.admit(window, readAt: readAt), applies() else { return false }
+        memory.recordLastKnown(window, frame: frame, display: display, setup: setup)
+        return true
     }
 
     /// Changes what belongs to no window: the active layout and the displays.
@@ -127,14 +135,14 @@ public actor MemoryKeeper {
     public func forget(_ window: WindowHandle) {
         gone.destroyed(window)
         memory.forget(window)
-        for part in readings.keys { readings[part]?.forget(window) }
+        lastKnownReadings.forget { $0 == window }
     }
 
     /// The app quit: the memory of its windows goes, for good.
     public func forget(pid: Int32) {
         gone.quit(pid)
         memory.forget(pid: pid)
-        for part in readings.keys { readings[part]?.forget(pid: pid) }
+        lastKnownReadings.forget { $0.pid == pid }
     }
 
     public func knows(_ window: WindowHandle) -> Bool {

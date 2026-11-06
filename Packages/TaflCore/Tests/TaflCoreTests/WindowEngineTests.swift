@@ -1904,9 +1904,7 @@ private func recordNewerLastKnown(
     _ rig: Rig, _ window: WindowHandle = handle, frame: ScreenRect = newerFrame, on display: Display = displayA,
     setup: DisplaySetup = DisplaySetup([displayA])
 ) async {
-    await rig.engine.memory.record(window, .lastKnown, readAt: later) {
-        $0.recordLastKnown(window, frame: frame, display: display, setup: setup)
-    }
+    await rig.engine.memory.recordLastKnown(window, frame: frame, display: display, setup: setup, readAt: later)
 }
 
 @Test(.timeLimit(.minutes(1))) func anOlderStartSeedLeavesANewerLastKnownFrame() async {
@@ -1931,9 +1929,10 @@ private func recordNewerLastKnown(
         action: .leftHalf, layout: nil, placement: .leftHalf, cycleStep: 0, achieved: leftHalfA, display: displayA.identity
     )
     await recordNewerLastKnown(rig)
-    await rig.engine.memory.record(handle, .placement, readAt: later) { memory in
-        memory.openChain(handle, before: start, on: displayA)
-        memory.recordPlaced(handle, placed)
+    _ = await rig.engine.writer.observe(handle, frame: start, readAt: later)
+    await rig.engine.memory.recordPlacement(handle, readAt: later) { placement in
+        placement.openChain(before: start, on: displayA)
+        placement.recordPlaced(placed)
     }
     await rig.fake.configure { $0.windows[handle]?.frame = rect(300, 300, 400, 300) }
     await rig.emit(.windowMoved(handle))
@@ -1969,16 +1968,18 @@ private func recordNewerLastKnown(
     let other = window(2, frame: rect(1100, 600, 400, 300))
     let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: leftHalfB), other])
     await rig.engine.start(config: config())
-    // Newer than the seed that follows the rules, though for the setup before the change.
-    await recordNewerLastKnown(rig, frame: rect(1500, 600, 400, 300), on: displayB, setup: DisplaySetup(bothDisplays))
+    // Newer than the seed that follows the rules, for the setup the change leads to.
+    await recordNewerLastKnown(rig)
+    // The window can't be moved, so the rules leave it where macOS put it for the seed to read.
     await rig.fake.configure {
         $0.windows[handle]?.frame = rect(0, 25, 600, 500)
+        $0.windows[handle]?.canMove = false
         $0.windows[other.handle]?.frame = rect(100, 100, 400, 300)
     }
     await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
     await rig.waitForChanges(1)
     let memory = await rig.engine.memory.read()
-    #expect(memory.lastKnown(handle, setup: DisplaySetup([displayA])) == nil)
+    #expect(memory.lastKnown(handle, setup: DisplaySetup([displayA]))?.relative == newerFrame.relative(to: v))
     #expect(memory.lastKnown(other.handle, setup: DisplaySetup([displayA])) != nil)
 }
 
@@ -2010,4 +2011,79 @@ private func recordNewerLastKnown(
     await rig.fake.configure { $0.windows[handle]?.title = "Docs" }
     await rig.emit(.titleChanged(handle, "Docs"))
     await rig.waitForFrame(rightHalfA)
+}
+
+// MARK: From Resolve's read
+
+@Test(.timeLimit(.minutes(1))) func aFrameReadJustBeforeANewWindowsPlacementReadsItIsNotATouch() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = window(1, frame: start)
+    let placing = FakeGate()
+    await rig.fake.configure { $0.windows[created.handle] = created; $0.snapshotGate = placing }
+    await rig.emit(.windowCreated(created))
+    await rig.fake.waitUntil { _ in placing.waiterCount == 1 }
+    // A move event reads the window where the app opened it, just before the placement reads it.
+    let late = FakeGate()
+    await rig.fake.configure { $0.snapshotLateGate = late }
+    await rig.emit(.windowMoved(handle))
+    await rig.fake.waitUntil { _ in late.waiterCount == 1 }
+    // The placement reads the window, then waits at Resolve's next call; the event is judged there.
+    let resolving = FakeGate()
+    await rig.fake.configure { $0.displaysGate = resolving }
+    placing.open()
+    await rig.fake.waitUntil { _ in resolving.waiterCount == 1 }
+    late.open()
+    await rig.waitForEvents(1)
+    #expect(await !rig.engine.touched.contains(handle))
+    resolving.open()
+    await rig.waitForFrame(rightHalfA)
+}
+
+@Test(.timeLimit(.minutes(1))) func aMoveBetweenResolveAndTheFirstWriteStopsTheAction() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    let resolving = FakeGate()
+    await rig.fake.configure { $0.displaysGate = resolving }
+    let acting = Task { await rig.engine.perform(.leftHalf) }
+    await rig.fake.waitUntil { _ in resolving.waiterCount == 1 }
+    // Resolve has read the window; the user drags it before the first write.
+    let dragged = rect(300, 300, 400, 300)
+    await rig.fake.configure { $0.windows[handle]?.frame = dragged }
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(1)
+    resolving.open()
+    await acting.value
+    #expect(await rig.frame() == dragged)
+    #expect(await rig.log == ["begin", "end"])
+    await rig.waitForReport { $0 == .failure(.movedDuringPlacement, display: displayA.identity) }
+    #expect(await rig.engine.memory.read().restore[handle]?.chainOpen != true)
+}
+
+@Test(.timeLimit(.minutes(1))) func aNewWindowMovedBeforeItsPlacementReadsItStaysWhereItWasMoved() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = window(1, frame: start)
+    let placing = FakeGate()
+    await rig.fake.configure { $0.windows[created.handle] = created; $0.snapshotGate = placing }
+    await rig.emit(.windowCreated(created))
+    await rig.fake.waitUntil { _ in placing.waiterCount == 1 }
+    // The user moves the new window. Its event reads the new frame first, but is judged last: the
+    // placement's own read is the first Tafl accepts of the moved window.
+    let dragged = rect(300, 300, 400, 300)
+    let late = FakeGate()
+    await rig.fake.configure { $0.windows[handle]?.frame = dragged; $0.snapshotLateGate = late }
+    await rig.emit(.windowMoved(handle))
+    await rig.fake.waitUntil { _ in late.waiterCount == 1 }
+    placing.open()
+    await rig.waitForEvents(1)
+    late.open()
+    await rig.waitForEvents(2)
+    #expect(await rig.frame() == dragged)
+    #expect(await rig.log == ["begin", "end"])
+    #expect(await rig.engine.touched.contains(handle))
 }
