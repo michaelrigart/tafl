@@ -2148,6 +2148,32 @@ func anActionAfterADragStartsANewChainAtTheDraggedFrame(eventReadFirst: Bool) as
     #expect(await rig.frame() == dragged)
 }
 
+/// Resolve's read is the first Tafl has of the drag: the action's focused read came before it, and
+/// the window moves while Resolve's read waits. The drag is no interruption of a request not yet begun.
+@Test(.timeLimit(.minutes(1))) func anActionWhoseResolveReadFirstSeesADragStartsANewChainThere() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    await rig.engine.perform(.leftHalf)
+    // The action reads the focused window first; Resolve's read is the call after it.
+    let next = await rig.fake.snapshotCount
+    let resolveRead = await rig.fake.pauseSnapshot(at: next + 1)
+    let acting = Task { await rig.engine.perform(.rightHalf) }
+    await rig.fake.waitUntil { _ in resolveRead.waiterCount == 1 }
+    await rig.fake.configure { $0.windows[handle]?.frame = dragged }
+    resolveRead.open()
+    await acting.value
+    #expect(await rig.frame() == rightHalfA)
+    #expect(await rig.engine.memory.read().restore[handle] == RestoreRecord(
+        frame: dragged, display: displayA.identity, visibleFrame: v, chainOpen: true
+    ))
+    // The drag's own notification reads the window after the action: Tafl's own frame by then.
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(1)
+    #expect(rig.reports.allSatisfy { if case .failure = $0 { false } else { true } })
+    await rig.engine.perform(.restore)
+    #expect(await rig.frame() == dragged)
+}
+
 /// A new window the user moves while its placement waits to read it. With `eventReadFirst`, the
 /// move's read is done before the placement reads; otherwise its result is held until then.
 @Test(.timeLimit(.minutes(1)), arguments: [false, true])
@@ -2179,6 +2205,33 @@ func aNewWindowMovedBeforeItsPlacementReadsItKeepsTheMovedFrame(eventReadFirst: 
     }
     #expect(await rig.frame() == dragged)
     #expect(await rig.isTouched())
+    let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA]))
+    #expect(known?.relative == dragged.relative(to: v))
+}
+
+/// A new window the user moves while its placement waits to read it, the placement's read judged
+/// before the move's own: the move's read is held until the placement has read the moved window.
+@Test(.timeLimit(.minutes(1))) func aNewWindowMovedWhoseMoveEventReadsAfterItsPlacementKeepsTheMovedFrame() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let created = window(1, frame: start)
+    let placing = FakeGate()
+    await rig.fake.configure { $0.windows[created.handle] = created; $0.snapshotGate = placing }
+    await rig.emit(.windowCreated(created))
+    await rig.fake.waitUntil { _ in placing.waiterCount == 1 }
+    // The move's notification waits before it reads, behind the placement.
+    let eventRead = FakeGate()
+    await rig.fake.configure { $0.windows[handle]?.frame = dragged; $0.snapshotGate = eventRead }
+    await rig.emit(.windowMoved(handle))
+    await rig.fake.waitUntil { _ in eventRead.waiterCount == 1 }
+    placing.open()
+    await rig.waitForEvents(1)
+    #expect(await rig.isTouched())
+    eventRead.open()
+    await rig.waitForEvents(2)
+    #expect(await rig.frame() == dragged)
     let known = await rig.engine.memory.read().lastKnown(handle, setup: DisplaySetup([displayA]))
     #expect(known?.relative == dragged.relative(to: v))
 }
