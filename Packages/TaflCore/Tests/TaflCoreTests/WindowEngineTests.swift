@@ -1997,8 +1997,8 @@ private func rulesOvertakenByALayout() async -> Rig {
     #expect(rig.reports == [.memory(.fresh)])
 }
 
-/// What Quit does while startup or a layout run is still awaiting an app: placing stops at once,
-/// before the lifecycle tasks are awaited, and the memory is saved when `stop` finishes.
+/// Quit while startup's rules are still reading the windows: placing stops at once, before startup is
+/// awaited, so the run sends nothing once the read returns, and the memory is saved when `stop` finishes.
 @Test(.timeLimit(.minutes(1))) func aStopBeginningWhileStartupsRulesAwaitTheWindowsMovesNothingAfterIt() async {
     let (store, directory) = temporaryStore()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -2033,6 +2033,38 @@ private func rulesOvertakenByALayout() async -> Rig {
     #expect(second.reports.allSatisfy { if case .displayChangeHandled = $0 { false } else { true } })
 }
 
+/// Quit while startup's rules wait on an app's write: the app's next request is stopped only by the
+/// halted queue, since startup's own checks (the count of reconfigurations, the layout application) do
+/// not change when a stop begins.
+@Test(.timeLimit(.minutes(1))) func aStopBeginningWhileStartupsRulesAwaitAWriteStartsNoLaterRequest() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let first = await Rig(displays: bothDisplays, windows: [strayB1, strayB2], focused: nil, store: store)
+    await first.engine.start(config: config())
+    await first.engine.stop()
+
+    // Next launch: B is gone, and the rules would move both windows, one app's, one after the other.
+    let one = rect(50, 50, 300, 300)
+    let two = rect(400, 400, 300, 300)
+    let second = await Rig(
+        windows: [window(1, frame: one), window(2, frame: two)], focused: nil, store: store
+    )
+    let write = await second.fake.pause(beforeCall: 0)
+    let starting = Task { await second.engine.start(config: config()) }
+    await second.fake.waitUntil { _ in write.waiterCount == 1 }
+    await second.engine.stopPlacing()
+    write.open()
+    await starting.value
+    #expect(await second.log.filter { $0 == "begin" }.count == 1)
+    #expect(await second.log.filter { $0.hasPrefix("size") || $0.hasPrefix("position") }.allSatisfy { $0.hasSuffix("cancelled") })
+    #expect(await second.frame(of: strayB1.handle) == one)
+    #expect(await second.frame(of: strayB2.handle) == two)
+    #expect(second.reports.allSatisfy { if case .displayChangeHandled = $0 { false } else { true } })
+    await second.engine.stop()
+}
+
+/// Quit while a layout run waits on a slow app's write: the held write ends cancelled, and the run's
+/// other window is not written.
 @Test(.timeLimit(.minutes(1))) func aStopBeginningWhileALayoutRunWaitsOnASlowAppWritesNothingAfterIt() async {
     let (store, directory) = temporaryStore()
     defer { try? FileManager.default.removeItem(at: directory) }
