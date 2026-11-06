@@ -185,7 +185,7 @@ private final class Taken: Sendable {
     #expect(failure == .noWindow)
 }
 
-@Test func anAnnouncementAndAnEndReachTheNoticesAsTheirEventsAreEmitted() async {
+@Test(.timeLimit(.minutes(1))) func anAnnouncementAndAnEndReachTheNoticesAsTheirEventsAreEmitted() async {
     let w = window(1, frame: rect(0, 0, 100, 100))
     let (fake, _) = await makeFake(w)
     let owner = WindowOwner(adjustments: [])

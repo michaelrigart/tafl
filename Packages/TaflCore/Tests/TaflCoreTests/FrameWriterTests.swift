@@ -274,7 +274,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.log == crossLog)
 }
 
-@Test func aMoveWhileTheSizeIsInFlightStopsBeforeTheNextWrite() async {
+@Test(.timeLimit(.minutes(1))) func aMoveWhileTheSizeIsInFlightStopsBeforeTheNextWrite() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 2)
     let task = rig.start(crossJob())
@@ -286,7 +286,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.log == ["begin", "size 1200x900", "read", "end"])
 }
 
-@Test func aReadingDifferingOnlyInThePartInFlightIsOwn() async {
+@Test(.timeLimit(.minutes(1))) func aReadingDifferingOnlyInThePartInFlightIsOwn() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 2)
     let task = rig.start(crossJob())
@@ -299,7 +299,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await task.value == .placed(crossTarget))
 }
 
-@Test func aMoveWhileTheSessionBeginsStopsTheFirstWrite() async {
+@Test(.timeLimit(.minutes(1))) func aMoveWhileTheSessionBeginsStopsTheFirstWrite() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 0)
     let task = rig.start(crossJob())
@@ -311,7 +311,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.log == ["begin", "end"])
 }
 
-@Test func aMoveBeforeTheRequestDoesNotStopIt() async {
+@Test(.timeLimit(.minutes(1))) func aMoveBeforeTheRequestDoesNotStopIt() async {
     let rig = await Rig(start: crossStart)
     #expect(await rig.move(to: rect(400, 400, 400, 300)) == .first)
     #expect(await rig.move(to: crossStart) == .external)
@@ -387,7 +387,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 
 // MARK: The first write
 
-@Test func theFirstWriteOpensTheChainAtTheStart() async {
+@Test(.timeLimit(.minutes(1))) func theFirstWriteOpensTheChainAtTheStart() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob(firstWrite: FirstWrite(opensChainOn: displayA)))
     await rig.clock.waitForSleepers(1)
@@ -397,7 +397,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(rig.chain?.frame == crossStart)
 }
 
-@Test func aRequestThatYieldsToTouchWritesNothingForATouchedWindow() async {
+@Test(.timeLimit(.minutes(1))) func aRequestThatYieldsToTouchWritesNothingForATouchedWindow() async {
     let rig = await Rig(start: crossStart)
     #expect(await rig.read() == .first)
     rig.owner.touch(handle)
@@ -411,7 +411,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 
 // MARK: Readings over the whole request
 
-@Test func aReadingAtTheAchievedFrameDuringTheWaitKeepsTheReapply() async {
+@Test(.timeLimit(.minutes(1))) func aReadingAtTheAchievedFrameDuringTheWaitKeepsTheReapply() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
@@ -422,7 +422,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.log.suffix(7) == ["begin", "read", "size 1210x900", "read", "size 1210x900", "read", "end"])
 }
 
-@Test func aMoveDuringTheWaitDropsTheReapply() async {
+@Test(.timeLimit(.minutes(1))) func aMoveDuringTheWaitDropsTheReapply() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
@@ -433,7 +433,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.log == steppedLog)
 }
 
-@Test func aMoveWhileTheSessionEndsInterruptsTheRequest() async {
+@Test(.timeLimit(.minutes(1))) func aMoveWhileTheSessionEndsInterruptsTheRequest() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 5)
     let task = rig.start(crossJob())
@@ -444,7 +444,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await task.value == .interrupted)
 }
 
-@Test func aReadingOfTheAchievedFrameWhileTheSessionEndsIsOwn() async {
+@Test(.timeLimit(.minutes(1))) func aReadingOfTheAchievedFrameWhileTheSessionEndsIsOwn() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 5)
     let task = rig.start(crossJob())
@@ -455,7 +455,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await task.value == .placed(crossTarget))
 }
 
-@Test func aMoveDuringAnAttemptWithNothingToWriteInterruptsIt() async {
+@Test(.timeLimit(.minutes(1))) func aMoveDuringAnAttemptWithNothingToWriteInterruptsIt() async {
     let target = rect(0, 25, 500, 775)
     let rig = await Rig(start: target)
     let gate = await rig.fake.pause(beforeCall: 0)
@@ -468,7 +468,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.log == ["begin", "end"])
 }
 
-@Test func aReadingIsTaflsOwnWithinAPointOfTheNewestFrame() async {
+@Test(.timeLimit(.minutes(1))) func aReadingIsTaflsOwnWithinAPointOfTheNewestFrame() async {
     let rig = await Rig(start: crossStart)
     // The first reading Tafl has of a window is no move.
     #expect(await rig.read() == .first)
@@ -484,7 +484,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 
 // MARK: From Resolve's read
 
-@Test func aMoveAfterResolveStopsTheRequestBeforeItOpensASession() async {
+@Test(.timeLimit(.minutes(1))) func aMoveAfterResolveStopsTheRequestBeforeItOpensASession() async {
     let rig = await Rig(start: crossStart)
     var started = crossJob()
     started.ticket = rig.owner.beginRequest(window(1, frame: crossStart)).ticket
@@ -586,7 +586,7 @@ func aLimitedSizeIsPositionedAsIfItWereTheSizeAskedFor(target: ScreenRect) async
 
 // MARK: Reconfigurations
 
-@Test func aRequestBegunBeforeAReconfigurationNeverOpensASession() async {
+@Test(.timeLimit(.minutes(1))) func aRequestBegunBeforeAReconfigurationNeverOpensASession() async {
     let rig = await Rig(start: crossStart)
     var stale = crossJob()
     stale.ticket = rig.owner.beginRequest(window(1, frame: crossStart)).ticket
@@ -611,7 +611,7 @@ private func readDuring(_ rig: Rig, call: Int, job: WriteJob) async -> (verdict:
     return (verdict, await task.value)
 }
 
-@Test(arguments: 1...5)
+@Test(.timeLimit(.minutes(1)), arguments: 1...5)
 func aReadingBetweenAnyTwoCallsIsOwn(call: Int) async {
     let rig = await Rig(start: crossStart)
     let read = await readDuring(rig, call: call, job: crossJob())
@@ -619,7 +619,7 @@ func aReadingBetweenAnyTwoCallsIsOwn(call: Int) async {
     #expect(read.result == .placed(crossTarget))
 }
 
-@Test(arguments: 1...5)
+@Test(.timeLimit(.minutes(1)), arguments: 1...5)
 func aReadingBetweenAnyTwoCallsOfAPositionFirstWriteIsOwn(call: Int) async {
     let start = rect(600, 100, 300, 300)
     let target = rect(0, 25, 500, 775)
@@ -629,7 +629,7 @@ func aReadingBetweenAnyTwoCallsOfAPositionFirstWriteIsOwn(call: Int) async {
     #expect(read.result == .placed(target))
 }
 
-@Test(arguments: 1...5)
+@Test(.timeLimit(.minutes(1)), arguments: 1...5)
 func aReadingAroundAClampIsOwn(call: Int) async {
     let start = rect(1100, 100, 1800, 1400)
     let rig = await Rig(start: start) {
@@ -641,7 +641,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(read.result == .placed(v))
 }
 
-@Test func aMoveWhileTheSessionEndsIsExternalEvenToTheWrittenSize() async {
+@Test(.timeLimit(.minutes(1))) func aMoveWhileTheSessionEndsIsExternalEvenToTheWrittenSize() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 5)
     let task = rig.start(crossJob())
@@ -687,7 +687,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(await rig.log.filter { $0 == "begin" }.count == 2)
 }
 
-@Test func aMoveWhileAReapplyBeginsInterruptsTheRequestEvenWhenTheBeginFails() async {
+@Test(.timeLimit(.minutes(1))) func aMoveWhileAReapplyBeginsInterruptsTheRequestEvenWhenTheBeginFails() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let gate = await rig.fake.pause(beforeCall: steppedLog.count)
     let task = rig.start(steppedJob())
@@ -727,7 +727,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(await rig.log.count == 8)
 }
 
-@Test func aMoveDuringTheWaitInterruptsTheRequestWhenAReconfigurationEndsIt() async {
+@Test(.timeLimit(.minutes(1))) func aMoveDuringTheWaitInterruptsTheRequestWhenAReconfigurationEndsIt() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
@@ -739,7 +739,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(await rig.log == steppedLog)
 }
 
-@Test func aMoveDuringTheWaitInterruptsTheRequestWhenACancellationEndsIt() async {
+@Test(.timeLimit(.minutes(1))) func aMoveDuringTheWaitInterruptsTheRequestWhenACancellationEndsIt() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
@@ -779,7 +779,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(await task.value == .failed(.notResponding, lastVerified: nil))
 }
 
-@Test func aMoveAfterAWriteFailedMidwayIsExternal() async {
+@Test(.timeLimit(.minutes(1))) func aMoveAfterAWriteFailedMidwayIsExternal() async {
     // Size lands, then the position write fails, with nothing verified since.
     let rig = await Rig(start: crossStart) { $0.beforeCall = [2: { $0.canMove = false }] }
     #expect(await rig.start(crossJob()).value == .failed(.cannotMove, lastVerified: nil))

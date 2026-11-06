@@ -397,7 +397,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(rig.stored.restore[handle]?.frame == rect(10, 40, 300, 200))
 }
 
-@Test func aMoveTheWriterNeverSawStillKeepsItsPlacementOutOfTheMemory() async throws {
+@Test(.timeLimit(.minutes(1))) func aMoveTheWriterNeverSawStillKeepsItsPlacementOutOfTheMemory() async throws {
     let rig = await Rig(start: rect(100, 100, 400, 300))
     // Two writes, each read back, then the session's end (call 5), held while the user drags the window
     // and something reads it.

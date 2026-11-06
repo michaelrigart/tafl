@@ -142,7 +142,7 @@ final class MemoryKeeperTests {
         #expect(before <= savedAt && savedAt <= after)
     }
 
-    @Test func aLoadHandsTheOwnerItsWindowsAndAReadAddsWhatBelongsToNoWindow() async throws {
+    @Test(.timeLimit(.minutes(1))) func aLoadHandsTheOwnerItsWindowsAndAReadAddsWhatBelongsToNoWindow() async throws {
         var existing = WindowMemory(activeLayout: "Desk", lastDisplays: [displayA], savedAt: Date(timeIntervalSince1970: 1))
         existing.openChain(window, before: rect(1, 2, 3, 4), on: displayA)
         try store.save(existing)

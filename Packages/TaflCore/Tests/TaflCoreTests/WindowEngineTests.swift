@@ -542,6 +542,9 @@ private final class Rig: Sendable {
     await rig.fake.configure { $0.windows[handle]?.title = "Docs"; $0.snapshotGate = reads }
     await rig.emit(.titleChanged(handle, "Docs"))
     await rig.fake.waitUntil { _ in reads.waiterCount == 1 }
+    // Without the held read, the shortcut's own read would take the gate and wait for it forever; a
+    // time limit cannot end that, because a gated call is not cancellable.
+    guard reads.waiterCount == 1 else { return reads.open() }
     await rig.engine.perform(.leftHalf)
     reads.open()
     await rig.waitForEvents(2)
@@ -1251,7 +1254,7 @@ private let strayA2 = rect(250, 275, 200, 150)
     #expect(await !rig.engine.owner.knows(handle))
 }
 
-@Test func aQuitAppIsForgottenByTheOwner() async {
+@Test(.timeLimit(.minutes(1))) func aQuitAppIsForgottenByTheOwner() async {
     let rig = await Rig(windows: [window(1, frame: start)])
     await rig.engine.start(config: config())
     await rig.engine.perform(.rightHalf)
