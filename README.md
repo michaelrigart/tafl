@@ -105,9 +105,9 @@ Add `CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=` to `xcodebuild` to sign ad hoc inst
 ```sh
 mise trust mise.toml
 mise exec -- xcodegen generate
-xcodebuild -project Tafl.xcodeproj -scheme Tafl -configuration Release -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
+xcodebuild -project Tafl.xcodeproj -scheme Tafl -configuration Release -derivedDataPath build/dd.noindex CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
 rm -rf /Applications/Tafl.app
-ditto build/Build/Products/Release/Tafl.app /Applications/Tafl.app
+ditto build/dd.noindex/Build/Products/Release/Tafl.app /Applications/Tafl.app
 open /Applications/Tafl.app
 ```
 
@@ -147,9 +147,9 @@ can be checked by rerunning it. Release builds do not contain it: `scripts/verif
 a build that does. Build Debug, install it to `/Applications`, then run for example:
 
 ```sh
-xcodebuild -project Tafl.xcodeproj -scheme Tafl -configuration Debug -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
+xcodebuild -project Tafl.xcodeproj -scheme Tafl -configuration Debug -derivedDataPath build/dd.noindex CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
 rm -rf /Applications/Tafl.app
-ditto build/Build/Products/Debug/Tafl.app /Applications/Tafl.app
+ditto build/dd.noindex/Build/Products/Debug/Tafl.app /Applications/Tafl.app
 open /Applications/Tafl.app --args -TaflProbe windows
 ```
 

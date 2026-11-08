@@ -61,7 +61,7 @@ import Testing
 }
 
 @Test func aCopyOutsideApplicationsNeverTouchesTheLoginItem() {
-    let path = "/Users/m/Code/tafl/build/Build/Products/Debug/Tafl.app"
+    let path = "/Users/m/Code/tafl/build/dd.noindex/Build/Products/Debug/Tafl.app"
     #expect(ConfigReload.loginItem(enabled: true, lastApplied: nil, bundlePath: path) == .skipNotInstalled)
     #expect(ConfigReload.loginItem(enabled: true, lastApplied: true, bundlePath: path) == .unchanged)
     #expect(ConfigReload.loginItem(enabled: true, lastApplied: nil, bundlePath: "/Applications2/Tafl.app") == .skipNotInstalled)

@@ -30,10 +30,10 @@ jobs:
       - name: Generate the project
         run: mise exec -- xcodegen generate
       - name: Build Release, signed ad hoc
-        run: xcodebuild -project Tafl.xcodeproj -scheme Tafl -configuration Release -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
+        run: xcodebuild -project Tafl.xcodeproj -scheme Tafl -configuration Release -derivedDataPath build/dd.noindex CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
       - name: Verify the app
-        run: scripts/verify-app build/Build/Products/Release/Tafl.app
+        run: scripts/verify-app build/dd.noindex/Build/Products/Release/Tafl.app
       - name: Build Debug, signed ad hoc
-        run: xcodebuild -project Tafl.xcodeproj -scheme Tafl -configuration Debug -derivedDataPath build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
+        run: xcodebuild -project Tafl.xcodeproj -scheme Tafl -configuration Debug -derivedDataPath build/dd.noindex CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= -quiet build
       - name: Test the verifier
-        run: scripts/tests/test-verify-app build/Build/Products/Release/Tafl.app build/Build/Products/Debug/Tafl.app
+        run: scripts/tests/test-verify-app build/dd.noindex/Build/Products/Release/Tafl.app build/dd.noindex/Build/Products/Debug/Tafl.app

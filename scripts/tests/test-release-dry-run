@@ -251,6 +251,9 @@ if [[ "$status" -ne 0 ]]; then echo "$output" >&2; fi
 
 version="$(sed -n 's/^Version: //p' <<<"$output" | head -1)"
 expect "a: prints a YYYYMMDD-HHMM version" test -n "$version" -a "${#version}" -eq 13
+verified_app="$(sed -n 's/^Verified //p' <<<"$output" | head -1)"
+expect "a: the Release app is built inside build/dd.noindex" contains "$verified_app" "$(cd "$clone" && pwd)/build/dd.noindex/"
+expect "a: no Release build lands directly in build/Build" test ! -e "$clone/build/Build"
 zip="$clone/build/release/Tafl-$version.zip"
 expect "a: writes Tafl-<version>.zip" test -f "$zip"
 zip_entries="$(zipinfo -1 "$zip")"
