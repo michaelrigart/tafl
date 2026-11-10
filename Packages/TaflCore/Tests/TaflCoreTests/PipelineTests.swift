@@ -206,7 +206,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let task = rig.start(request(.named(.rightHalf), source: .action(.rightHalf)))
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(500))
-    #expect(await task.value == .failed(.notResponding(app: "Hung App")))
+    #expect(await task.bounded() == .failed(.notResponding(app: "Hung App")))
 }
 
 @Test func anAppWithNoKnownNameIsCalledTheApp() async {
@@ -215,7 +215,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let task = rig.start(request(.named(.rightHalf), source: .action(.rightHalf)))
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(500))
-    #expect(await task.value == .failed(.notResponding(app: "The app")))
+    #expect(await task.bounded() == .failed(.notResponding(app: "The app")))
 }
 
 @Test func anAppThatDoesNotAnswerFailsWithItsName() async {
@@ -223,7 +223,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let task = rig.start(request(.named(.rightHalf), source: .action(.rightHalf)))
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(500))
-    #expect(await task.value == .failed(.notResponding(app: "Terminal")))
+    #expect(await task.bounded() == .failed(.notResponding(app: "Terminal")))
     #expect(await rig.log == [])
 }
 
@@ -425,7 +425,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let owner = rig.owner
     #expect(try await rig.fake.snapshot(of: handle) { owner.read($0) }.get() == .external)
     ending.open()
-    #expect(await task.value == .failed(.movedDuringPlacement))
+    #expect(await task.bounded() == .failed(.movedDuringPlacement))
     #expect(rig.stored.placed[handle] == nil)
     #expect(rig.stored.restore[handle]?.chainOpen == false)
 }
@@ -438,7 +438,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(await pollUntil { gate.waiterCount == 1 })
     await rig.fake.configure { $0.windows[handle] = nil }
     gate.open()
-    #expect(await task.value == .failed(.noWindow))
+    #expect(await task.bounded() == .failed(.noWindow))
     #expect(await rig.log == ["begin"])
     #expect(rig.stored.restore[handle] == nil)
     #expect(rig.stored.placed[handle] == nil)
@@ -451,7 +451,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(await pollUntil { gate.waiterCount == 1 })
     rig.owner.reconfigurationBegan()
     gate.open()
-    #expect(await task.value == .superseded)
+    #expect(await task.bounded() == .superseded)
     // The first write reaches the app, which does not make it.
     #expect(await rig.log == ["begin", "position 0,25 cancelled", "end"])
     #expect(rig.stored.restore[handle] == nil)
@@ -470,8 +470,8 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(await rig.waitForRequests(2))
     gate.open()
 
-    #expect(await first.value == .superseded)
-    #expect(await second.value == .placed(rightHalf))
+    #expect(await first.bounded() == .superseded)
+    #expect(await second.bounded() == .placed(rightHalf))
     #expect(rig.stored.restore[handle] == chain(start))
     #expect(rig.stored.placed[handle]?.action == .rightHalf)
 }
@@ -494,8 +494,8 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(await rig.waitForRequests(2))
     gate.open()
 
-    #expect(await older.value == .superseded)
-    #expect(await newer.value == .placed(rightHalf))
+    #expect(await older.bounded() == .superseded)
+    #expect(await newer.bounded() == .placed(rightHalf))
     #expect(resolved.frame == start)
     #expect(await rig.log.prefix(3) == ["begin", "position 0,25 cancelled", "end"])
     #expect(rig.stored.restore[handle] == chain(start))
@@ -510,7 +510,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     rig.owner.reconfigurationBegan()
     gate.open()
 
-    #expect(await task.value == .superseded)
+    #expect(await task.bounded() == .superseded)
     let frame = await rig.frame
     #expect(frame != start)
     #expect(frame != leftHalf)
@@ -560,7 +560,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(await pollUntil { gate.waiterCount == 1 })
     await rig.fake.configure { $0.windows[handle] = nil }
     gate.open()
-    #expect(await task.value == .failed(.noWindow))
+    #expect(await task.bounded() == .failed(.noWindow))
     #expect(rig.stored.placed[handle] == placed(start))
 }
 

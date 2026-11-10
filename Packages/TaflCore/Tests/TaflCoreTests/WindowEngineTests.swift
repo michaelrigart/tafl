@@ -290,8 +290,8 @@ private final class Rig: Sendable {
     // The queue has the second request once it has asked the first to stop.
     await rig.waitForRequests(2)
     gate.open()
-    await first.value
-    await second.value
+    await first.bounded()
+    await second.bounded()
     #expect(await rig.frame() == rightHalfA)
 }
 
@@ -317,7 +317,7 @@ private final class Rig: Sendable {
     #expect(rig.reports == [.memory(.fresh)])
 
     await rig.clock.advance(by: .milliseconds(500))
-    await applying.value
+    await applying.bounded()
     // The run is summed up, and its failure says why on the window's display.
     let failure = EngineReport.failure(.notResponding(app: "Example"), display: displayA.identity)
     await rig.waitForReport { $0 == failure }
@@ -691,7 +691,7 @@ private func finishSettling(_ rig: Rig) async {
         }
         await Task.yield()
     }
-    await rig.engine.rulesTask?.value
+    await rig.engine.rulesTask?.bounded()
 }
 
 private func displayChangesHandled(_ rig: Rig) -> Int {
@@ -800,7 +800,7 @@ private func dockedRig() async -> Rig {
     await rig.emit(.reconfigurationBegan)
     await rig.waitForEvents(3)
     reads.open()
-    await rig.engine.rulesTask?.value
+    await rig.engine.rulesTask?.bounded()
     #expect(await rig.engine.changeOrigin == [wide])
     // The stopped run leaves the stored setup to the change that follows.
     #expect(await rig.engine.memory.read().lastDisplays == [displayA])
@@ -819,7 +819,7 @@ private func dockedRig() async -> Rig {
     await rig.waitForChanges(1)
     #expect(await rig.engine.memory.read().lastDisplays == bothDisplays)
     seed.open()
-    await starting.value
+    await starting.bounded()
     #expect(await rig.engine.memory.read().lastDisplays == bothDisplays)
 }
 
@@ -1250,7 +1250,7 @@ private let strayA2 = rect(250, 275, 200, 150)
     await rig.emit(.reconfigurationBegan)
     await rig.waitForEvents(3)
     reads.open()
-    await rig.engine.rulesTask?.value
+    await rig.engine.rulesTask?.bounded()
     #expect(await rig.log.isEmpty)
     #expect(await rig.engine.isFrozen)
     #expect(rig.reports.allSatisfy { if case .displayChangeHandled = $0 { false } else { true } })
@@ -1267,7 +1267,7 @@ private let strayA2 = rect(250, 275, 200, 150)
     await rig.emit(.reconfigurationBegan)
     await rig.waitForEvents(1)
     reads.open()
-    await applying.value
+    await applying.bounded()
     #expect(await rig.log.isEmpty)
     #expect(await rig.frame() == start)
     // A stopped run neither reports nor activates: a report sent after it would come after any such.
@@ -1324,7 +1324,7 @@ private let strayA2 = rect(250, 275, 200, 150)
     #expect(known?.display == displayB.identity)
     #expect(known?.relative == leftHalfB.relative(to: displayB.visibleFrame))
     gate.open()
-    await acting.value
+    await acting.bounded()
 
     // macOS moves the window when B goes away; the left half it was in carries over.
     await rig.fake.configure { $0.windows[handle]?.frame = rect(50, 50, 300, 300) }
@@ -1476,7 +1476,7 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
     await second.emit(.reconfigurationBegan)
     await second.waitForEvents(1)
     reads.open()
-    await starting.value
+    await starting.bounded()
     #expect(await second.log.isEmpty)
     #expect(await second.engine.isFrozen)
 }
@@ -1537,7 +1537,7 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
     let acting = Task { await rig.engine.perform(.leftHalf) }
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(500))
-    await acting.value
+    await acting.bounded()
     await rig.waitForReport { $0 == .failure(.notResponding(app: "The app"), display: nil) }
 }
 
@@ -1569,8 +1569,8 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
         await rig.clock.advance(by: quiet)
         await rig.emit(.reconfigurationBegan)
         await rig.waitForEvents(3)
-        await waiting?.value
-        await rig.engine.rulesTask?.value
+        await waiting?.bounded()
+        await rig.engine.rulesTask?.bounded()
         // Whatever the order, the change that began last is still open and still frozen.
         #expect(await rig.engine.tracker.isChanging)
         #expect(await rig.engine.isFrozen)
@@ -1594,7 +1594,7 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
     await rig.emit(.windowMoved(a.handle))
     await rig.waitForEvents(1)
     await rig.clock.advance(by: .milliseconds(500))
-    await applying.value
+    await applying.bounded()
     #expect(await rig.engine.memory.read().lastKnown(a.handle, setup: setup)?.relative == dragged.relative(to: v))
 }
 
@@ -1622,7 +1622,7 @@ private func pollUntilLastKnown(
     await rig.emit(.windowDestroyed(a.handle))
     await rig.waitForEvents(1)
     await rig.clock.advance(by: .milliseconds(500))
-    await applying.value
+    await applying.bounded()
     let after = await rig.engine.memory.read()
     #expect(after.lastKnown.values.allSatisfy { $0[a.handle] == nil })
 }
@@ -1640,7 +1640,7 @@ private func pollUntilLastKnown(
     await rig.emit(.windowMoved(onB.handle))
     await rig.waitForEvents(1)
     late.open()
-    await starting.value
+    await starting.bounded()
     let known = await rig.engine.memory.read().lastKnown(onB.handle, setup: DisplaySetup(bothDisplays))
     #expect(known?.relative == dragged.relative(to: displayB.visibleFrame))
 }
@@ -1658,7 +1658,7 @@ private func pollUntilLastKnown(
     let moved = rect(1500, 600, 400, 300)
     await rig.fake.configure { $0.windows[onB.handle]?.frame = moved }
     seedRead.open()
-    await starting.value
+    await starting.bounded()
     let known = await rig.engine.memory.read().lastKnown(onB.handle, setup: DisplaySetup(bothDisplays))
     #expect(known?.relative == moved.relative(to: displayB.visibleFrame))
 }
@@ -1673,7 +1673,7 @@ private func pollUntilLastKnown(
     await rig.emit(.unobservable(pid: 300, bundleID: "com.c", missing: [.moved]))
     await rig.waitForEvents(1)
     gate.open()
-    await restarting.value
+    await restarting.bounded()
     #expect(await rig.engine.unobservable == [300: [.moved]])
     await rig.waitForReport { $0 == .unobservable(bundleID: "com.c") }
 }
@@ -1697,7 +1697,7 @@ private func pollUntilLastKnown(
     await rig.emit(.reconfigurationBegan)
     await rig.waitForEvents(3)
     seedReads.open()
-    await rig.engine.rulesTask?.value
+    await rig.engine.rulesTask?.bounded()
     #expect(await rig.engine.activeLayoutName == nil)
     #expect(await rig.engine.isFrozen)
     #expect(rig.reports.allSatisfy { if case .displayChangeHandled = $0 { false } else { true } })
@@ -1724,7 +1724,7 @@ private func pollUntilLastKnown(
     await rig.emit(.reconfigurationBegan)
     await rig.waitForEvents(1)
     gate.open()
-    await applying.value
+    await applying.bounded()
     #expect(await rig.engine.activeLayoutName == nil)
     await rig.fake.configure { $0.accessibilityGranted = false }
     await rig.engine.perform(.leftHalf)
@@ -1748,7 +1748,7 @@ private func pollUntilLastKnown(
     await rig.clock.waitForSleepers(1)
     await rig.engine.applyLayout(named: "Second")
     await rig.clock.advance(by: .milliseconds(500))
-    await applyingFirst.value
+    await applyingFirst.bounded()
     #expect(await rig.engine.activeLayoutName == "Second")
     guard case .loaded(let saved) = store.load() else {
         Issue.record("Expected the active layout to be saved")
@@ -1773,7 +1773,7 @@ private func pollUntilLastKnown(
     // The app answers again: First's request in flight ends, and First sends none for the next window.
     await rig.fake.configure { $0.hung = [] }
     await rig.clock.advance(by: .milliseconds(500))
-    await applyingFirst.value
+    await applyingFirst.bounded()
     let queue = await rig.engine.queue
     #expect(await queue.requestCount == 2)
     #expect(await rig.frame(of: slowNext.handle) == start)
@@ -1795,7 +1795,7 @@ private func pollUntilLastKnown(
     await rig.fake.waitUntil { _ in reading.waiterCount == 1 }
     await rig.engine.applyLayout(named: "Second")
     reading.open()
-    await applyingFirst.value
+    await applyingFirst.bounded()
     #expect(await rig.frame(of: slow.handle) == start)
     await rig.waitForReport { $0 == .layoutApplied(name: "First", placed: 0, failed: 0) }
 }
@@ -1816,7 +1816,7 @@ private func pollUntilLastKnown(
     await rig.engine.applyLayout(named: "Second")
     #expect(await rig.frame(of: other.handle) == rightHalfA)
     write.open()
-    await applyingFirst.value
+    await applyingFirst.bounded()
     #expect(await rig.frame(of: slow.handle) == start)
     await rig.waitForReport { $0 == .layoutApplied(name: "First", placed: 0, failed: 0) }
     #expect(await rig.engine.activeLayoutName == "Second")
@@ -1834,7 +1834,7 @@ private func pollUntilLastKnown(
     await rig.clock.waitForSleepers(1)
     await rig.engine.update(config: config())
     await rig.clock.advance(by: .milliseconds(500))
-    await applying.value
+    await applying.bounded()
     #expect(await rig.engine.activeLayoutName == nil)
     #expect(await rig.engine.memory.read().activeLayout == nil)
     #expect(store.load() == .fresh)
@@ -1855,7 +1855,7 @@ private func pollUntilLastKnown(
     await rig.clock.waitForSleepers(1)
     await rig.engine.update(config: config(gap: 10, layouts: [desk]))
     await rig.clock.advance(by: .milliseconds(500))
-    await applying.value
+    await applying.bounded()
     #expect(await rig.engine.activeLayoutName == "Desk")
     guard case .loaded(let saved) = store.load() else {
         Issue.record("Expected the active layout to be saved")
@@ -2024,7 +2024,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     await rig.emit(.appQuit(pid: 400))
     await rig.waitForEvents(3)
     gate.open()
-    await restarting.value
+    await restarting.bounded()
     #expect(await rig.engine.unobservable.isEmpty)
     #expect(await rig.engine.unobservableAppCount == 0)
     #expect(!rig.reports.contains(.unobservable(bundleID: "com.d")))
@@ -2044,8 +2044,8 @@ private func rulesOvertakenByALayout() async -> Rig {
     // The second restart waits for the first rather than tear down its observers.
     #expect(await rig.fake.stopObservingCount == 1)
     gate.open()
-    await first.value
-    await second.value
+    await first.bounded()
+    await second.bounded()
     #expect(await rig.engine.unobservable == [300: [.moved]])
 }
 
@@ -2067,7 +2067,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     #expect(written.last == "end")
     await rig.engine.stop()
     await rig.clock.advance(by: .milliseconds(25))
-    await acting.value
+    await acting.bounded()
     // No write after stop, and the save holds where the first pass left the window.
     #expect(await rig.log == written)
     guard case .loaded(let saved) = store.load() else {
@@ -2093,8 +2093,8 @@ private func rulesOvertakenByALayout() async -> Rig {
     await rig.engine.perform(.rightHalf)
     await rig.engine.applyLayout(named: "Desk")
     gate.open()
-    await acting.value
-    await stopping.value
+    await acting.bounded()
+    await stopping.bounded()
     #expect(await rig.frame(of: other.handle) == start)
     #expect(await rig.log.filter { $0 == "begin" }.count == 1)
     #expect(rig.reports == [.memory(.fresh)])
@@ -2121,7 +2121,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     await second.fake.waitUntil { _ in reads.waiterCount == 1 }
     await second.engine.stopPlacing()
     reads.open()
-    await starting.value
+    await starting.bounded()
     #expect(await second.log.isEmpty)
     #expect(await second.frame() == moved)
 
@@ -2157,7 +2157,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     await second.fake.waitUntil { _ in write.waiterCount == 1 }
     await second.engine.stopPlacing()
     write.open()
-    await starting.value
+    await starting.bounded()
     #expect(await second.log.filter { $0 == "begin" }.count == 1)
     #expect(await second.log.filter { $0.hasPrefix("size") || $0.hasPrefix("position") }.allSatisfy { $0.hasSuffix("cancelled") })
     #expect(await second.frame(of: strayB1.handle) == one)
@@ -2182,7 +2182,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
     await rig.engine.stopPlacing()
     gate.open()
-    await applying.value
+    await applying.bounded()
     #expect(await rig.log.filter { $0.hasPrefix("size") || $0.hasPrefix("position") }.allSatisfy { $0.hasSuffix("cancelled") })
     #expect(await rig.frame(of: one.handle) == start)
     #expect(await rig.frame(of: two.handle) == start)
@@ -2209,7 +2209,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
     await rig.fake.configure { $0.windows[second.handle]?.isMinimized = true }
     gate.open()
-    await applying.value
+    await applying.bounded()
     #expect(await rig.frame(of: second.handle) == second.frame)
     #expect(await rig.log.filter { $0 == "begin" }.count == 1)
     #expect(rig.reports == [.memory(.fresh), .layoutApplied(name: "Desk", placed: 1, failed: 0)])
@@ -2260,7 +2260,7 @@ private func callsOf(_ placement: @Sendable (Rig) async -> Void, config: Config)
     await rig.emit(.windowDestroyed(handle))
     await rig.waitForEvents(1)
     ending.open()
-    await acting.value
+    await acting.bounded()
     let memory = await rig.engine.memory.read()
     #expect(memory.placed[handle] == nil)
     #expect(memory.restore[handle] == nil)
@@ -2278,7 +2278,7 @@ private func callsOf(_ placement: @Sendable (Rig) async -> Void, config: Config)
     await rig.emit(.windowDestroyed(handle))
     await rig.waitForEvents(1)
     ending.open()
-    await applying.value
+    await applying.bounded()
     let memory = await rig.engine.memory.read()
     #expect(memory.placed[handle] == nil)
     #expect(memory.restore[handle] == nil)
@@ -2301,7 +2301,7 @@ private func callsOf(_ placement: @Sendable (Rig) async -> Void, config: Config)
     await rig.emit(.windowMoved(handle))
     await rig.waitForEvents(1)
     ending.open()
-    await acting.value
+    await acting.bounded()
     let memory = await rig.engine.memory.read()
     #expect(memory.restore[handle]?.chainOpen == false)
     await rig.waitForReport { if case .failure = $0 { true } else { false } }
@@ -2420,7 +2420,7 @@ private func callsOf(_ placement: @Sendable (Rig) async -> Void, config: Config)
     await rig.emit(.windowMoved(handle))
     await rig.waitForEvents(1)
     resolving.open()
-    await acting.value
+    await acting.bounded()
     #expect(await rig.frame() == dragged)
     // Interrupted before Apply began: no session was opened.
     #expect(await rig.log == [])
@@ -2491,7 +2491,7 @@ private func dragThenAct(eventReadFirst: Bool) async -> (Rig, RestoreRecord?) {
         await rig.waitForEvents(1)
         resolving.open()
     }
-    await acting.value
+    await acting.bounded()
     return (rig, await rig.engine.memory.read().restore[handle])
 }
 
@@ -2518,7 +2518,7 @@ func anActionAfterADragStartsANewChainAtTheDraggedFrame(eventReadFirst: Bool) as
     await rig.fake.waitUntil { _ in resolveRead.waiterCount == 1 }
     await rig.fake.configure { $0.windows[handle]?.frame = dragged }
     resolveRead.open()
-    await acting.value
+    await acting.bounded()
     #expect(await rig.frame() == rightHalfA)
     #expect(await rig.engine.memory.read().restore[handle] == RestoreRecord(
         frame: dragged, display: displayA.identity, visibleFrame: v, chainOpen: true

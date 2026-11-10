@@ -179,7 +179,7 @@ func anAppThatQuitDuringTheLaunchWaitIsNeverReportedUnobservable() async {
     }
     await harness.observation.appQuit(pid: launching.pid)
     open.yield()
-    await retry.value
+    await retry.bounded()
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .appQuit(pid: 4242))
     #expect(await harness.next() == .reconfigurationEnded)
@@ -201,8 +201,8 @@ func aNewAppOnTheSamePidIsNotTakenOverByTheOldRetry() async {
     }
     open.yield()
     open.yield()
-    await retry.value
-    await second.value
+    await retry.bounded()
+    await second.bounded()
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .appQuit(pid: 4242))
     #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
@@ -216,7 +216,7 @@ func aRetryThatSucceedsReportsNothing() async {
         Issue.record("expected a retry")
         return
     }
-    await retry.value
+    await retry.bounded()
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .reconfigurationEnded)
     #expect(harness.registrations.count == 2)
@@ -230,7 +230,7 @@ func aRetryThatFailsAgainReportsTheAppUnobservable() async {
         Issue.record("expected a retry")
         return
     }
-    await retry.value
+    await retry.bounded()
     #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
 }
 
@@ -271,7 +271,7 @@ func anAppThatIsGoneButNotYetQuitIsNeitherRegisteredNorReportedWhenTheWaitEnds()
     // The wait ends because the app terminated, before the quit has been handled: its claim is still held.
     harness.isRunning.isSet = false
     open.yield()
-    await retry.value
+    await retry.bounded()
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .reconfigurationEnded)
     #expect(harness.registrations.count == 1)
@@ -377,7 +377,7 @@ func aCatchUpForAnAppThatQuitMeanwhilePublishesAndKeepsNothing() async {
     harness.isRunning.isSet = false
     await observation.appQuit(pid: 4242)
     gate.release()
-    await launch.value
+    await launch.bounded()
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
     #expect(await harness.next() == .appQuit(pid: 4242))
@@ -397,14 +397,14 @@ func aCatchUpOvertakenByARestartLeavesItsWindowsToTheNewRun() async {
     observation.end()
     observation.begin()
     gate.release()
-    await launch.value
+    await launch.bounded()
     // The stale catch-up published nothing and withdrew nothing: the app still runs.
     #expect(harness.registry.knownHandle(of: windowBox(5001)) == foundWindow)
     // The new run observes the app, adopts the window and owes it its announcement still.
     let observing = Task { await observation.attempt(launching) }
     #expect(await gate.waitForWaiters(1))
     gate.release()
-    _ = await observing.value
+    _ = await observing.bounded()
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
     guard case .windowCreated(let snapshot)? = await harness.next() else {
@@ -502,8 +502,8 @@ func aCatchUpOvertakenByARestartAfterItsEnumerationLeavesExactlyOneAnnouncement(
     #expect(await gate.waitForWaiters(2))
     // The stale catch-up and the new run's go on together; only the new claim's step announces.
     gate.release()
-    await launch.value
-    _ = await observing.value
+    await launch.bounded()
+    _ = await observing.bounded()
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
     guard case .windowCreated(let snapshot)? = await harness.next() else {
@@ -533,8 +533,8 @@ func twoCatchUpsRacingOnOneWindowAnnounceItOnce() async {
     let second = Task { await observation.appLaunched(launching) }
     #expect(await gate.waitForWaiters(2))
     gate.release()
-    await first.value
-    await second.value
+    await first.bounded()
+    await second.bounded()
     harness.continuation.yield(.reconfigurationEnded)
     var created = 0
     while let event = await harness.next(), event != .reconfigurationEnded {

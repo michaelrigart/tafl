@@ -47,8 +47,8 @@ private func waitForRequests(_ queue: WindowRequestQueue, _ count: Int) async {
     #expect(await pollUntil { gate.waiterCount == 1 })
     gate.open()
 
-    #expect(await first.value == nil)
-    #expect(await second.value == ["begin", "read", "end"])
+    #expect(await first.bounded() == .some(nil))
+    #expect(await second.bounded() == ["begin", "read", "end"])
 }
 
 @Test func reapplyDroppedByNewerRequest() async {
@@ -72,8 +72,8 @@ private func waitForRequests(_ queue: WindowRequestQueue, _ count: Int) async {
     await clock.waitForSleepers(1)
     let second = Task { await queue.run(handle) { 42 } }
 
-    #expect(await first.value == nil)
-    #expect(await second.value == 42)
+    #expect(await first.bounded() == .some(nil))
+    #expect(await second.bounded() == 42)
     #expect(await fake.callLog == [
         "begin", "size 1210x900", "read", "position 1000,0", "read", "size 1210x900", "read", "end",
     ])
@@ -100,7 +100,7 @@ private func waitForRequests(_ queue: WindowRequestQueue, _ count: Int) async {
 
     #expect(await queue.run(other) { "other" } == "other")
     release.set()
-    #expect(await first.value == "first")
+    #expect(await first.bounded() == "first")
 }
 
 @Test func aWaitingRequestCancelledBeforeItsBodyRunsReturnsNilAndNeverRuns() async {
@@ -125,8 +125,8 @@ private func waitForRequests(_ queue: WindowRequestQueue, _ count: Int) async {
     await waitForRequests(queue, 3)
     release.set()
 
-    #expect(await first.value == nil)
-    #expect(await second.value == nil)
-    #expect(await third.value == "third")
+    #expect(await first.bounded() == .some(nil))
+    #expect(await second.bounded() == .some(nil))
+    #expect(await third.bounded() == "third")
     #expect(!secondRan.isSet)
 }

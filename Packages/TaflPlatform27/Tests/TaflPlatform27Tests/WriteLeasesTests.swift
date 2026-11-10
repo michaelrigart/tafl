@@ -25,7 +25,7 @@ func aSecondLeaseForTheSameAppWaitsForTheFirstToBeReleased() async {
     await leases.release(pid: 6)
     order.withLock { $0.append("first ends") }
     await leases.release(pid: 5)
-    await second.value
+    await second.bounded()
     #expect(order.withLock { $0 } == ["other app", "first ends", "second"])
 }
 
@@ -45,6 +45,6 @@ func waitersTakeTheirTurnInOrder() async {
         _ = await queuedIterator.next()
     }
     await leases.release(pid: 5)
-    for task in tasks { await task.value }
+    for task in tasks { await task.bounded() }
     #expect(order.withLock { $0 } == [1, 2, 3])
 }

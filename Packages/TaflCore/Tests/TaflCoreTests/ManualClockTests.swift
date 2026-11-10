@@ -12,13 +12,13 @@ import Testing
     await clock.waitForSleepers(2)
 
     await clock.advance(by: .milliseconds(25))
-    _ = await first.result
+    _ = try? await first.bounded()
     #expect(woken.withLock { $0 } == ["25ms"])
     #expect(clock.now == .milliseconds(25))
     #expect(clock.sleeperCount == 1)
 
     second.cancel()
-    await #expect(throws: CancellationError.self) { try await second.value }
+    await #expect(throws: CancellationError.self) { try await second.bounded() }
     #expect(woken.withLock { $0 } == ["25ms"])
 }
 
@@ -29,8 +29,8 @@ import Testing
     await clock.waitForSleepers(2)
 
     await clock.advance(by: .seconds(1))
-    #expect(try await early.value == .milliseconds(100))
-    #expect(try await late.value == .milliseconds(300))
+    #expect(try await early.bounded() == .milliseconds(100))
+    #expect(try await late.bounded() == .milliseconds(300))
     #expect(clock.now == .seconds(1))
 }
 
@@ -47,7 +47,7 @@ import Testing
     await clock.waitForSleepers(1)
 
     await clock.advance(by: .milliseconds(100))
-    #expect(try await chain.value == [.milliseconds(25), .milliseconds(50), .milliseconds(75), .milliseconds(100)])
+    #expect(try await chain.bounded() == [.milliseconds(25), .milliseconds(50), .milliseconds(75), .milliseconds(100)])
     #expect(clock.sleeperCount == 0)
     #expect(clock.now == .milliseconds(100))
 }
@@ -58,7 +58,7 @@ private actor Hopper {
 
 /// An engine-like task wakes, does work across actor hops, then sleeps again. Another task
 /// registers a sleep meanwhile; that must not cut short the wait for the engine's next sleep.
-@Test func anotherTasksSleepDoesNotEndTheWakeGrace() async throws {
+@Test(.timeLimit(.minutes(1))) func anotherTasksSleepDoesNotEndTheWakeGrace() async throws {
     let clock = ManualClock()
     let hopper = Hopper()
     let (wakeUp, wakeUpSink) = AsyncStream.makeStream(of: Void.self)
@@ -94,7 +94,7 @@ private actor Hopper {
         withUnsafeCurrentTask { $0?.cancel() }
         try await clock.sleep(for: .seconds(1))
     }
-    await #expect(throws: CancellationError.self) { try await task.value }
+    await #expect(throws: CancellationError.self) { try await task.bounded() }
     #expect(clock.sleeperCount == 0)
 }
 

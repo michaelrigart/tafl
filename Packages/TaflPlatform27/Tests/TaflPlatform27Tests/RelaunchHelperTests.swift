@@ -118,6 +118,6 @@ private func exitedPID() throws -> Int32 {
     #expect(fakes.openLog.isEmpty)
     old.terminate()
     old.waitUntilExit()
-    #expect(await helper.value == true)
+    #expect(await helper.bounded() == true)
     #expect(fakes.openLog.count == 1)
 }

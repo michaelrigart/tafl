@@ -61,5 +61,5 @@ private func aStopArrivingWhileThePositionsSettabilityQueryBlocksRefusesTheWrite
     for await _ in entered { break }
     stopped.withLock { $0 = true }
     release.signal()
-    #expect(await write.value == .success(.cancelled))
+    #expect(await write.bounded() == .success(.cancelled))
 }

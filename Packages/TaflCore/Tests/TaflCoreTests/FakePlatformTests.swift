@@ -62,7 +62,7 @@ private final class Taken: Sendable {
     #expect(taken.all == [w.frame, w.frame])
     late.open()
     listedLate.open()
-    #expect(await read.value == .success(w.frame))
+    #expect(await read.bounded() == .success(w.frame))
     #expect(await listing.value.count == 1)
 }
 
@@ -152,7 +152,7 @@ private final class Taken: Sendable {
     #expect(finished.withLock { $0 } == false)
 
     await clock.advance(by: .milliseconds(1))
-    guard case .failure(let failure) = await attempt.value else {
+    guard case .failure(let failure) = await attempt.bounded() else {
         Issue.record("beginWriting on a hung app succeeded")
         return
     }
@@ -168,7 +168,7 @@ private final class Taken: Sendable {
     let read = Task { await s.readFrame(take: { $0 }) }
     await clock.waitForSleepers(1)
     await clock.advance(by: .milliseconds(500))
-    #expect(await read.value == .failure(.notResponding))
+    #expect(await read.bounded() == .failure(.notResponding))
 
     await fake.configure { $0.hung = [] }
     await s.end()
@@ -202,7 +202,7 @@ private final class Taken: Sendable {
     #expect(!owner.knows(w.handle))
 }
 
-@Test func eventsObservationAndUnobservedApps() async {
+@Test(.timeLimit(.minutes(1))) func eventsObservationAndUnobservedApps() async {
     let w = window(1, frame: rect(0, 0, 100, 100))
     let (fake, _) = await makeFake(w)
     _ = await fake.startObserving(notices: WindowOwner(adjustments: []))
@@ -277,7 +277,7 @@ private final class Taken: Sendable {
     await clock.advance(by: .milliseconds(499))
     #expect(finished.withLock { $0 } == false)
     await clock.advance(by: .milliseconds(1))
-    guard case .failure(let failure) = await attempt.value else {
+    guard case .failure(let failure) = await attempt.bounded() else {
         Issue.record("beginWriting on a hung app succeeded")
         return
     }
@@ -298,7 +298,7 @@ private final class Taken: Sendable {
     await clock.advance(by: .milliseconds(499))
     #expect(finished.withLock { $0 } == false)
     await clock.advance(by: .milliseconds(1))
-    await ending.value
+    await ending.bounded()
     #expect(await fake.callLog == ["begin", "end"])
 
     await fake.configure { $0.hung = [] }
@@ -349,7 +349,7 @@ private final class Admissions: Sendable {
     let hungAppsWrite = Task { await s.setPosition(ScreenPoint(x: 0, y: 25), admit: admit) }
     await clock.waitForSleepers(1)
     await clock.advance(by: .milliseconds(500))
-    #expect(await hungAppsWrite.value == .failure(.notResponding))
+    #expect(await hungAppsWrite.bounded() == .failure(.notResponding))
     #expect(admissions.count == 0)
 }
 

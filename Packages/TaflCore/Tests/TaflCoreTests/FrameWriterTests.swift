@@ -115,7 +115,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
 
 @Test func sizeThenPositionAcrossDisplays() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25))
-    let result = await rig.start(crossJob()).value
+    let result = await rig.start(crossJob()).bounded()
     #expect(result == .placed(crossTarget))
     #expect(await rig.log == crossLog)
     // Landing on the target needs no reapply.
@@ -126,7 +126,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25)) {
         $0.sizeRule = { _, asked in ScreenSize(width: asked.width - 1, height: asked.height) }
     }
-    let result = await rig.start(crossJob()).value
+    let result = await rig.start(crossJob()).bounded()
     #expect(result == .placed(rect(1000, 0, 1199, 900)))
     #expect(rig.clock.sleeperCount == 0)
 }
@@ -138,7 +138,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
     #expect(await rig.log == steppedLog)
 
     await rig.clock.advance(by: .milliseconds(25))
-    #expect(await task.value == .placed(steppedAchieved))
+    #expect(await task.bounded() == .placed(steppedAchieved))
     #expect(await rig.log.suffix(7) == ["begin", "read", "size 1210x900", "read", "size 1210x900", "read", "end"])
 }
 
@@ -146,7 +146,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
     let start = rect(600, 100, 300, 300)
     let target = rect(0, 25, 500, 775)
     let rig = await Rig(start: start, reapplyDelay: .milliseconds(25))
-    let result = await rig.start(job(start: start, target: target)).value
+    let result = await rig.start(job(start: start, target: target)).bounded()
     #expect(result == .placed(target))
     #expect(await rig.log == ["begin", "position 0,25", "read", "size 500x775", "read", "end"])
     #expect(rig.clock.sleeperCount == 0)
@@ -155,7 +155,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
 @Test func nothingIsWrittenForAWindowAlreadyAtTheTarget() async {
     let target = rect(0, 25, 500, 775)
     let rig = await Rig(start: target)
-    let result = await rig.start(job(start: target, target: target, firstWrite: FirstWrite(opensChainOn: displayA))).value
+    let result = await rig.start(job(start: target, target: target, firstWrite: FirstWrite(opensChainOn: displayA))).bounded()
     #expect(result == .placed(target))
     #expect(await rig.log == ["begin", "end"])
     // No write began, so no chain was opened.
@@ -171,7 +171,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
     let rig = await Rig(start: start) {
         $0.sizeRule = { window, asked in attempts.next() == 1 ? window.frame.size : asked }
     }
-    let result = await rig.start(job(start: start, target: target)).value
+    let result = await rig.start(job(start: start, target: target)).bounded()
     #expect(result == .placed(target))
     #expect(await rig.log.filter { $0.hasPrefix("size") } == ["size 500x775", "size 500x775"])
 }
@@ -182,7 +182,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
     let rig = await Rig(start: start) {
         $0.sizeRule = { window, asked in attempts.next() == 1 ? window.frame.size : asked }
     }
-    _ = await rig.start(job(start: start, target: rect(0, 25, 500, 775), minSize: ScreenSize(width: 600, height: 100))).value
+    _ = await rig.start(job(start: start, target: rect(0, 25, 500, 775), minSize: ScreenSize(width: 600, height: 100))).bounded()
     #expect(await rig.log.filter { $0.hasPrefix("size") } == ["size 500x775", "size 600x775"])
 }
 
@@ -191,7 +191,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
     let rig = await Rig(start: start) {
         $0.sizeRule = { _, asked in ScreenSize(width: max(asked.width, 600), height: asked.height) }
     }
-    let result = await rig.start(job(start: start, target: rect(0, 25, 500, 775), minSize: ScreenSize(width: 600, height: 100))).value
+    let result = await rig.start(job(start: start, target: rect(0, 25, 500, 775), minSize: ScreenSize(width: 600, height: 100))).bounded()
     #expect(result == .sizeRefused(rect(0, 25, 600, 775)))
     #expect(await rig.log == ["begin", "size 500x775", "read", "end"])
 }
@@ -203,7 +203,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
     let rig = await Rig(start: start) {
         $0.sizeRule = { _, asked in ScreenSize(width: min(asked.width, 600), height: asked.height) }
     }
-    let result = await rig.start(job(start: start, target: rect(0, 25, 1000, 775), visible: wide)).value
+    let result = await rig.start(job(start: start, target: rect(0, 25, 1000, 775), visible: wide)).bounded()
     #expect(result == .sizeRefused(rect(0, 25, 600, 775)))
 }
 
@@ -212,7 +212,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
     let rig = await Rig(start: start) {
         $0.sizeRule = { _, asked in ScreenSize(width: min(asked.width, 600), height: asked.height) }
     }
-    let result = await rig.start(job(start: start, target: v)).value
+    let result = await rig.start(job(start: start, target: v)).bounded()
     #expect(result == .sizeRefused(rect(200, 25, 600, 775)))
 }
 
@@ -223,7 +223,7 @@ private func moveOrigin(to point: ScreenPoint) -> @Sendable (inout WindowSnapsho
     let rig = await Rig(start: start) {
         $0.sizeRule = { _, asked in ScreenSize(width: min(asked.width, 400), height: asked.height) }
     }
-    let result = await rig.start(job(start: start, target: rect(500, 25, 500, 775))).value
+    let result = await rig.start(job(start: start, target: rect(500, 25, 500, 775))).bounded()
     #expect(result == .sizeRefused(rect(600, 25, 400, 775)))
     #expect(await rig.log.prefix(2) == ["begin", "position 500,25"])
 }
@@ -235,7 +235,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
         $0.sizeRule = { _, asked in ScreenSize(width: asked.width - shortfall, height: asked.height) }
     }
     let achieved = rect(0, 25, 500 - shortfall, 775)
-    let result = await rig.start(job(start: start, target: rect(0, 25, 500, 775))).value
+    let result = await rig.start(job(start: start, target: rect(0, 25, 500, 775))).bounded()
     #expect(result == (isSuccess ? .placed(achieved) : .sizeRefused(achieved)))
 }
 
@@ -244,7 +244,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     let rig = await Rig(start: start) {
         $0.sizeRule = { _, asked in ScreenSize(width: max(asked.width, 505), height: asked.height) }
     }
-    let result = await rig.start(job(start: start, target: rect(0, 25, 500, 775))).value
+    let result = await rig.start(job(start: start, target: rect(0, 25, 500, 775))).bounded()
     #expect(result == .sizeRefused(rect(0, 25, 505, 775)))
 }
 
@@ -253,7 +253,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     let rig = await Rig(start: start) {
         $0.positionRule = { window, _ in window.frame.origin }
     }
-    let result = await rig.start(job(start: start, target: rect(0, 25, 500, 775))).value
+    let result = await rig.start(job(start: start, target: rect(0, 25, 500, 775))).bounded()
     #expect(result == .positionRefused(rect(100, 100, 500, 775)))
 }
 
@@ -261,7 +261,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 
 @Test func userDragsBeforeTheReadBack() async {
     let rig = await Rig(start: crossStart) { $0.beforeCall[2] = moveOrigin(to: ScreenPoint(x: 400, y: 400)) }
-    let result = await rig.start(crossJob()).value
+    let result = await rig.start(crossJob()).bounded()
     #expect(result == .interrupted)
     #expect(await rig.log == ["begin", "size 1200x900", "read", "end"])
 }
@@ -269,7 +269,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 @Test func changeAfterReadBackIsReplaced() async {
     // The stated limit: a change to only the part the next write sets is overwritten.
     let rig = await Rig(start: crossStart) { $0.beforeCall[3] = moveOrigin(to: ScreenPoint(x: 1500, y: 700)) }
-    let result = await rig.start(crossJob()).value
+    let result = await rig.start(crossJob()).bounded()
     #expect(result == .placed(crossTarget))
     #expect(await rig.log == crossLog)
 }
@@ -282,7 +282,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 
     #expect(await rig.move(to: rect(400, 400, 1200, 900)) == .external)
     gate.open()
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
     #expect(await rig.log == ["begin", "size 1200x900", "read", "end"])
 }
 
@@ -296,7 +296,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.move(to: rect(100, 100, 1100, 900)) == .own)
     await rig.fake.configure { $0.windows[handle]?.frame = rect(100, 100, 1200, 900) }
     gate.open()
-    #expect(await task.value == .placed(crossTarget))
+    #expect(await task.bounded() == .placed(crossTarget))
 }
 
 @Test(.timeLimit(.minutes(1))) func aMoveWhileTheSessionBeginsStopsTheFirstWrite() async {
@@ -307,7 +307,7 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
 
     #expect(await rig.move(to: rect(400, 400, 400, 300)) == .external)
     gate.open()
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
     #expect(await rig.log == ["begin", "size 1200x900 interrupted", "end"])
 }
 
@@ -341,7 +341,7 @@ private func aReadingQueuedAheadOfAWriteThatFindsAnExternalChangeStopsTheWrite(_
     }
     #expect(await rig.move(to: usersFrame) == .external)
     gate.open()
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
     #expect(await rig.fake.windows[handle]?.frame == usersFrame)
     let write = part == .size ? "size 1200x900" : "position 0,25"
     #expect(await rig.log == ["begin", "\(write) interrupted", "end"])
@@ -383,7 +383,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     }
     gate.open()
 
-    #expect(await task.value == .cancelled(lastVerified: nil))
+    #expect(await task.bounded() == .cancelled(lastVerified: nil))
     #expect(await rig.fake.windows[handle]?.frame == started.start)
     let write = part == .size ? "size 1200x900" : "position 0,25"
     #expect(await rig.log == ["begin", "\(write) \(stop == .touch ? "declined" : "cancelled")", "end"])
@@ -395,7 +395,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     #expect(await rig.move(to: rect(400, 400, 400, 300)) == .first)
     #expect(await rig.move(to: crossStart) == .external)
 
-    #expect(await rig.start(crossJob()).value == .placed(crossTarget))
+    #expect(await rig.start(crossJob()).bounded() == .placed(crossTarget))
 }
 
 @Test func namedAdjustmentPasses() async {
@@ -408,10 +408,10 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
         $0.beforeCall[3] = clamp
     }
     let withAdjustment = await Rig(start: start, configure: setup)
-    #expect(await withAdjustment.start(job(start: start, target: v, crosses: true)).value == .placed(v))
+    #expect(await withAdjustment.start(job(start: start, target: v, crosses: true)).bounded() == .placed(v))
 
     let without = await Rig(start: start, adjustments: [], configure: setup)
-    #expect(await without.start(job(start: start, target: v, crosses: true)).value == .interrupted)
+    #expect(await without.start(job(start: start, target: v, crosses: true)).bounded() == .interrupted)
     #expect(await without.log == ["begin", "size 1000x775", "read", "position 0,25", "read", "end"])
 }
 
@@ -425,7 +425,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     await rig.fake.configure { $0.windows[handle]?.frame.origin = ScreenPoint(x: 1100, y: 50) }
 
     await rig.clock.advance(by: .milliseconds(25))
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
     #expect(await rig.log == steppedLog + ["begin", "read", "end"])
 }
 
@@ -439,7 +439,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     task.cancel()
     gate.open()
 
-    #expect(await task.value == .placed(steppedAchieved))
+    #expect(await task.bounded() == .placed(steppedAchieved))
     #expect(await rig.log == steppedLog + ["begin", "end"])
 }
 
@@ -450,7 +450,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     rig.owner.reconfigurationBegan()
 
     await rig.clock.advance(by: .milliseconds(25))
-    #expect(await task.value == .placed(steppedAchieved))
+    #expect(await task.bounded() == .placed(steppedAchieved))
     #expect(await rig.log == steppedLog)
 }
 
@@ -460,7 +460,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     await rig.clock.waitForSleepers(1)
     task.cancel()
 
-    #expect(await task.value == .placed(steppedAchieved))
+    #expect(await task.bounded() == .placed(steppedAchieved))
     #expect(await rig.log == steppedLog)
 }
 
@@ -472,7 +472,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     await rig.clock.waitForSleepers(1)
     #expect(rig.chain == RestoreRecord(frame: crossStart, display: displayA.identity, visibleFrame: v, chainOpen: true))
     await rig.clock.advance(by: .milliseconds(25))
-    #expect(await task.value == .placed(steppedAchieved))
+    #expect(await task.bounded() == .placed(steppedAchieved))
     #expect(rig.chain?.frame == crossStart)
 }
 
@@ -481,7 +481,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     #expect(await rig.read() == .first)
     rig.owner.touch(handle)
     let firstWrite = FirstWrite(opensChainOn: displayA, yieldsToTouch: true)
-    #expect(await rig.start(crossJob(firstWrite: firstWrite)).value == .cancelled(lastVerified: nil))
+    #expect(await rig.start(crossJob(firstWrite: firstWrite)).bounded() == .cancelled(lastVerified: nil))
     // Declined at Apply's first checkpoint: no session, so no Enhanced UI switch for nothing.
     #expect(await rig.log == [])
     #expect(await rig.fake.windows[handle]?.frame == crossStart)
@@ -497,7 +497,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     #expect(await rig.read() == .own)
 
     await rig.clock.advance(by: .milliseconds(25))
-    #expect(await task.value == .placed(steppedAchieved))
+    #expect(await task.bounded() == .placed(steppedAchieved))
     #expect(await rig.log.suffix(7) == ["begin", "read", "size 1210x900", "read", "size 1210x900", "read", "end"])
 }
 
@@ -508,7 +508,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     #expect(await rig.move(to: rect(1100, 50, 1200, 900)) == .external)
 
     await rig.clock.advance(by: .milliseconds(25))
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
     #expect(await rig.log == steppedLog)
 }
 
@@ -520,7 +520,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     #expect(await rig.move(to: rect(1500, 700, 1200, 900)) == .external)
     gate.open()
 
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
 }
 
 @Test(.timeLimit(.minutes(1))) func aReadingOfTheAchievedFrameWhileTheSessionEndsIsOwn() async {
@@ -531,7 +531,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     #expect(await rig.read() == .own)
     gate.open()
 
-    #expect(await task.value == .placed(crossTarget))
+    #expect(await task.bounded() == .placed(crossTarget))
 }
 
 @Test(.timeLimit(.minutes(1))) func aMoveDuringAnAttemptWithNothingToWriteInterruptsIt() async {
@@ -543,7 +543,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     #expect(await rig.move(to: rect(300, 300, 500, 775)) == .external)
     gate.open()
 
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
     #expect(await rig.log == ["begin", "end"])
 }
 
@@ -552,7 +552,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     // The first reading Tafl has of a window is no move.
     #expect(await rig.read() == .first)
 
-    #expect(await rig.start(crossJob()).value == .placed(crossTarget))
+    #expect(await rig.start(crossJob()).bounded() == .placed(crossTarget))
     // After the request, the achieved frame is Tafl's own and anything else is someone else's.
     #expect(await rig.read() == .own)
     #expect(await rig.move(to: rect(1000.5, 0, 1200, 899.5)) == .own)
@@ -594,7 +594,7 @@ private func aChangeWhileTheSessionBeginsIsJudgedBeforeTheFirstWrite(_ during: D
     }
     gate.open()
 
-    let result = await task.value
+    let result = await task.bounded()
     switch during {
     case .cancel:
         #expect(result == .cancelled(lastVerified: nil))
@@ -638,7 +638,7 @@ func aLimitedSizeIsPositionedAsIfItWereTheSizeAskedFor(target: ScreenRect) async
     // display and the next size write would be cut off by the room left below it.
     for configure in [screenLimited, displayLimited] {
         let rig = await Rig(start: crossStart, configure: configure)
-        let result = await rig.start(job(start: crossStart, target: target, visible: bVisible, crosses: true)).value
+        let result = await rig.start(job(start: crossStart, target: target, visible: bVisible, crosses: true)).bounded()
         let size = "size \(Int(target.width))x\(Int(target.height))"
         #expect(result == .placed(target))
         #expect(await rig.log == ["begin", size, "read", "position 1000,0", "read", size, "read", "end"])
@@ -659,11 +659,11 @@ func aLimitedSizeIsPositionedAsIfItWereTheSizeAskedFor(target: ScreenRect) async
     gapped.alignment = [.left, .top, .bottom]
     gapped.gap = 8
     let rig = await Rig(start: start, configure: capped)
-    #expect(await rig.start(gapped).value == .sizeRefused(rect(8, 33, 400, 759)))
+    #expect(await rig.start(gapped).bounded() == .sizeRefused(rect(8, 33, 400, 759)))
 
     // Without the cell's edges the target is taken to touch none, and the window is centred.
     let centred = await Rig(start: start, configure: capped)
-    #expect(await centred.start(job(start: start, target: target)).value == .sizeRefused(rect(54, 33, 400, 759)))
+    #expect(await centred.start(job(start: start, target: target)).bounded() == .sizeRefused(rect(54, 33, 400, 759)))
 }
 
 // MARK: Reconfigurations
@@ -678,19 +678,19 @@ func aLimitedSizeIsPositionedAsIfItWereTheSizeAskedFor(target: ScreenRect) async
     #expect(await rig.log == [])
     rig.owner.endRequest(stale.ticket)
 
-    #expect(await rig.start(crossJob()).value == .placed(crossTarget))
+    #expect(await rig.start(crossJob()).bounded() == .placed(crossTarget))
 }
 
 // MARK: Readings between any two calls
 
 /// Reads the window where it is while the call with index `call` is held, then releases it.
-private func readDuring(_ rig: Rig, call: Int, job: WriteJob) async -> (verdict: ReadingVerdict?, result: WriteResult) {
+private func readDuring(_ rig: Rig, call: Int, job: WriteJob) async -> (verdict: ReadingVerdict?, result: WriteResult?) {
     let gate = await rig.fake.pause(beforeCall: call)
     let task = rig.start(job)
     #expect(await pollUntil { gate.waiterCount == 1 })
     let verdict = await rig.read()
     gate.open()
-    return (verdict, await task.value)
+    return (verdict, await task.bounded())
 }
 
 @Test(.timeLimit(.minutes(1)), arguments: 1...5)
@@ -730,7 +730,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(await pollUntil { gate.waiterCount == 1 })
     #expect(await rig.move(to: rect(100, 100, 1100, 900)) == .external)
     gate.open()
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
 }
 
 // MARK: What triggers and ends a reapply
@@ -744,7 +744,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     let finished = Flag()
     let task = rig.start(steppedJob())
     let watched = Task {
-        let result = await task.value
+        let result = await task.bounded()
         finished.set()
         return result
     }
@@ -753,7 +753,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     let returned = await pollUntil { finished.isSet }
     if !returned { await rig.clock.advance(by: .milliseconds(25)) }
     #expect(returned)
-    #expect(await watched.value == .positionRefused(rect(100, 100, 1200, 900)))
+    #expect(await watched.bounded() == .positionRefused(rect(100, 100, 1200, 900)))
     #expect(await rig.log.filter { $0 == "begin" }.count == 1)
 }
 
@@ -765,7 +765,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     let slept = await pollUntil(timeout: .seconds(2)) { rig.clock.sleeperCount == 1 }
     #expect(slept)
     if slept { await rig.clock.advance(by: .milliseconds(25)) }
-    #expect(await task.value == .sizeRefused(rect(1000, 0, 1300, 900)))
+    #expect(await task.bounded() == .sizeRefused(rect(1000, 0, 1300, 900)))
     #expect(await rig.log.filter { $0 == "begin" }.count == 2)
 }
 
@@ -780,7 +780,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     await rig.fake.configure { $0.windows[handle] = nil }
     gate.open()
 
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
 }
 
 @Test func aReapplyWhoseBeginFailsKeepsTheEarlierResult() async {
@@ -793,7 +793,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     await rig.fake.configure { $0.windows[handle] = nil }
     gate.open()
 
-    #expect(await task.value == .placed(steppedAchieved))
+    #expect(await task.bounded() == .placed(steppedAchieved))
 }
 
 @Test func anAppThatRefusesTheSizeCannotSnapTheWindowBackUnnoticed() async {
@@ -805,7 +805,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(await pollUntil { gate.waiterCount == 1 })
     #expect(await rig.move(to: crossStart) == .external)
     gate.open()
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
     #expect(await rig.log.count == 8)
 }
 
@@ -817,7 +817,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     rig.owner.reconfigurationBegan()
     await rig.clock.advance(by: .milliseconds(25))
 
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
     #expect(await rig.log == steppedLog)
 }
 
@@ -828,7 +828,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(await rig.move(to: rect(300, 300, 1200, 900)) == .external)
     task.cancel()
 
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
     #expect(await rig.log == steppedLog)
 }
 
@@ -840,7 +840,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(500))
 
-    #expect(await task.value == .failed(.notResponding, lastVerified: nil))
+    #expect(await task.bounded() == .failed(.notResponding, lastVerified: nil))
     #expect(await rig.log == ["begin"])
     #expect(rig.chain == nil)
 }
@@ -858,13 +858,13 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(500))
 
-    #expect(await task.value == .failed(.notResponding, lastVerified: nil))
+    #expect(await task.bounded() == .failed(.notResponding, lastVerified: nil))
 }
 
 @Test(.timeLimit(.minutes(1))) func aMoveAfterAWriteFailedMidwayIsExternal() async {
     // Size lands, then the position write fails, with nothing verified since.
     let rig = await Rig(start: crossStart) { $0.beforeCall = [2: { $0.canMove = false }] }
-    #expect(await rig.start(crossJob()).value == .failed(.cannotMove, lastVerified: nil))
+    #expect(await rig.start(crossJob()).bounded() == .failed(.cannotMove, lastVerified: nil))
     // Where the size left the window is still Tafl's own; the user then drags it elsewhere.
     #expect(await rig.read() == .own)
     #expect(await rig.move(to: rect(400, 400, 400, 300)) == .external)
@@ -878,7 +878,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     task.cancel()
     gate.open()
 
-    #expect(await task.value == .cancelled(lastVerified: rect(100, 100, 1200, 900)))
+    #expect(await task.bounded() == .cancelled(lastVerified: rect(100, 100, 1200, 900)))
     #expect(await rig.log == ["begin", "size 1200x900", "read", "end"])
 }
 
@@ -901,7 +901,7 @@ private func aRequestCancelledMidSequenceStillJudgesAMove(_ cancellation: Cancel
     // Someone moves the window while the size's read-back is in flight.
     #expect(await rig.move(to: rect(400, 400, 1200, 900)) == .external)
     gate.open()
-    #expect(await task.value == .interrupted)
+    #expect(await task.bounded() == .interrupted)
     #expect(await rig.log == ["begin", "size 1200x900", "read", "end"])
 }
 
@@ -913,7 +913,7 @@ private func aRequestCancelledMidSequenceStillJudgesAMove(_ cancellation: Cancel
     task.cancel()
     gate.open()
 
-    #expect(await task.value == .cancelled(lastVerified: nil))
+    #expect(await task.bounded() == .cancelled(lastVerified: nil))
     #expect(await rig.log == ["begin", "end"])
     #expect(rig.chain == nil)
 }
@@ -939,7 +939,7 @@ private func sessionEndsOnEveryExit(_ exit: Exit) async {
         gate.open()
     }
 
-    let result = await task.value
+    let result = await task.bounded()
     switch exit {
     case .interruption: #expect(result == .interrupted)
     case .cancellation, .reconfiguration: #expect(result == .cancelled(lastVerified: rect(100, 100, 1200, 900)))

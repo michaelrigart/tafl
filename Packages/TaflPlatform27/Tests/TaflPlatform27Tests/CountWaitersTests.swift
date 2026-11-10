@@ -7,7 +7,7 @@ import Testing
     _ = await pollUntil { waiters.waiterCount == 1 }
     waiters.increment()
     waiters.increment()
-    await waiting.value
+    await waiting.bounded()
     #expect(waiters.waiterCount == 0)
 }
 
@@ -17,7 +17,7 @@ import Testing
         let waiting = Task { await waiters.wait(for: 3) }
         _ = await pollUntil { waiters.waiterCount == 1 }
         waiting.cancel()
-        await waiting.value
+        await waiting.bounded()
     }
     #expect(waiters.waiterCount == 0)
 }
@@ -29,7 +29,7 @@ import Testing
             withUnsafeCurrentTask { $0?.cancel() }
             await waiters.wait(for: 1)
         }
-        await waiting.value
+        await waiting.bounded()
     }
 }
 

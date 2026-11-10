@@ -38,8 +38,8 @@ func forgettingWaitsForWorkAlreadyOnTheQueue() async {
     #expect(queue.queueCount == 1)
     #expect(order.withLock { $0 }.isEmpty)
     release.signal()
-    await work.value
-    await forgetting.value
+    await work.bounded()
+    await forgetting.bounded()
     #expect(order.withLock { $0 } == ["work finished", "forgotten"])
     #expect(queue.queueCount == 0)
 }
