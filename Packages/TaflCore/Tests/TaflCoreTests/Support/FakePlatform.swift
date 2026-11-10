@@ -117,6 +117,7 @@ actor FakePlatform: WindowPlatform {
     private let clock: any TaflClock
     private var callCount = 0
     private var gates: [Int: FakeGate] = [:]
+    private var beginGates: [WindowHandle: FakeGate] = [:]
     private var busyPids: Set<Int32> = []
     private var waiters: [Int32: [CheckedContinuation<Void, Never>]] = [:]
 
@@ -190,6 +191,14 @@ actor FakePlatform: WindowPlatform {
     func pauseVisibleWindowsResult(at index: Int) -> FakeGate {
         let gate = FakeGate()
         visibleWindowsResultGates[index] = gate
+        return gate
+    }
+
+    /// Holds the `beginWriting` call for this window until the returned gate opens: before it takes
+    /// its app's session slot, and without a call index.
+    func pauseBeginning(_ handle: WindowHandle) -> FakeGate {
+        let gate = FakeGate()
+        beginGates[handle] = gate
         return gate
     }
 
@@ -276,6 +285,7 @@ actor FakePlatform: WindowPlatform {
     }
 
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> {
+        if let gate = beginGates.removeValue(forKey: handle) { await gate.wait() }
         await acquireSlot(handle.pid)
         if await enter(handle, "begin") {
             releaseSlot(handle.pid)

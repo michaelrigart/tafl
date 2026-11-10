@@ -447,12 +447,18 @@ private final class Rig: Sendable {
 }
 
 @Test(.timeLimit(.minutes(1))) func aLayoutRunThatAReconfigurationStoppedRaisesNothing() async {
-    let desk = layout("Desk", [slot(.rightHalf)])
-    let rig = await Rig(windows: [window(1, frame: start)])
+    // One app's two windows run one after the other: the first is placed, so the run has something to
+    // raise, before the second's write is held while the reconfiguration begins. Only the guards
+    // stand between the run and the raise.
+    let first = window(1, frame: start, pid: 100, bundleID: "com.a")
+    let second = window(2, frame: start, pid: 100, bundleID: "com.a")
+    let desk = layout("Desk", [slot(.leftHalf, app: "com.a")])
+    let rig = await Rig(windows: [first, second], focused: nil)
     await rig.engine.start(config: config(layouts: [desk]))
-    let gate = await rig.fake.pause(beforeCall: 0)
+    let gate = await rig.fake.pauseBeginning(second.handle)
     let applying = Task { await rig.engine.applyLayout(named: "Desk") }
     await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    #expect(await rig.frame(of: first.handle) == leftHalfA)
     await rig.emit(.reconfigurationBegan)
     await rig.waitForEvents(1)
     gate.open()
