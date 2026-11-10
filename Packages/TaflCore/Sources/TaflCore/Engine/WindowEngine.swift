@@ -53,10 +53,23 @@ struct RunFailure: Sendable {
 
 /// What events said about apps while observation restarted. It is newer than a restart's answer,
 /// so it is laid over it: an app learned meanwhile adds what it is missing, and an app that quit
-/// meanwhile is gone whatever the answer says.
+/// meanwhile is gone whatever the answer says. It also holds what was unobservable when the restart
+/// was asked for, so a failure that events report while the restart waits is not taken for one that
+/// was there before.
 struct RestartJournal {
+    private let before: [Int32: Set<ObservedEvent>]
     private var learned: [Int32: Set<ObservedEvent>] = [:]
     private var gone: Set<Int32> = []
+
+    init(before: [Int32: Set<ObservedEvent>]) {
+        self.before = before
+    }
+
+    /// The apps the result finds unobservable that were not before the restart: a failure that may
+    /// come only from a transient, such as a wake.
+    func newlyUnobservable(in result: [Int32: Set<ObservedEvent>]) -> Set<Int32> {
+        Set(result.filter { !$0.value.isEmpty && (before[$0.key]?.isEmpty ?? true) }.keys)
+    }
 
     mutating func learn(pid: Int32, missing: Set<ObservedEvent>) {
         learned[pid, default: []].formUnion(missing)
@@ -284,7 +297,8 @@ public actor WindowEngine {
         let generation = restarts.begin()
         observeRetryTask?.cancel()
         observeRetryTask = nil
-        if restartJournal == nil { restartJournal = RestartJournal() }
+        // The baseline is taken before any registration work, which events may report on meanwhile.
+        if restartJournal == nil { restartJournal = RestartJournal(before: unobservable) }
         let previous = restartTask
         let task = Task {
             await previous?.value
@@ -302,15 +316,13 @@ public actor WindowEngine {
         guard restarts.isCurrent(generation), !isStopping, let journal = restartJournal else { return }
         var answer: [Int32: Set<ObservedEvent>] = [:]
         for app in apps { answer[app.pid, default: []].formUnion(app.missing) }
-        let before = unobservable
         unobservable = journal.applied(to: answer)
         restartJournal = nil
         for app in apps where unobservable[app.pid] != nil {
             if reportedUnobservable.insert(app.pid).inserted { report(.unobservable(bundleID: app.bundleID)) }
         }
         // An app that was observable before may have failed only because of a transient (a wake).
-        let transient = Set(unobservable.filter { !$0.value.isEmpty && (before[$0.key]?.isEmpty ?? true) }.keys)
-        scheduleObserveRetries(for: transient, after: generation)
+        scheduleObserveRetries(for: journal.newlyUnobservable(in: unobservable), after: generation)
     }
 
     // MARK: Retrying unobservable apps

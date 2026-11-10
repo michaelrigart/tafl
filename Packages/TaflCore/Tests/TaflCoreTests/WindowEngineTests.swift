@@ -1763,6 +1763,27 @@ private func wakeRig() async -> Rig {
     #expect(await rig.fake.observeAgainCalls == [[200], [200]])
 }
 
+@Test(.timeLimit(.minutes(1))) func anAppThatFailsWhileTheRestartWaitsIsStillRetried() async {
+    let app = window(2, frame: leftHalfB, pid: 200, bundleID: "com.b")
+    let rig = await Rig(displays: bothDisplays, windows: [app], timing: retryTiming)
+    await rig.engine.start(config: config())
+    // A registration that an event started claims the app first and fails in the transient; the
+    // restart's own answer then leaves the app out.
+    let gate = FakeGate()
+    await rig.fake.configure { $0.startObservingGate = gate }
+    let restarting = Task { await rig.engine.restartObserving() }
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.moved, .resized]))
+    await rig.waitForEvents(1)
+    gate.open()
+    await restarting.bounded()
+    #expect(await rig.engine.unobservable == [200: [.moved, .resized]])
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: .seconds(3))
+    await waitForUnobservable(rig, [:])
+    #expect(await rig.fake.observeAgainCalls == [[200]])
+}
+
 @Test(.timeLimit(.minutes(1))) func anAppThatWasUnobservableBeforeTheRestartIsNotRetried() async {
     let before = FakePlatform.UnobservedApp(pid: 100, bundleID: "com.a", missing: [.created])
     let app = window(2, frame: leftHalfB, pid: 200, bundleID: "com.b")
