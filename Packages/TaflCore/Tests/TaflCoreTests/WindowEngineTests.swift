@@ -739,8 +739,8 @@ private func finishSettling(_ rig: Rig) async {
     await rig.engine.rulesTask?.bounded()
 }
 
-private func displayChangesHandled(_ rig: Rig) -> Int {
-    rig.reports.filter { if case .displayChangeHandled = $0 { true } else { false } }.count
+private func displayChangesHandled(_ rig: Rig) async -> Int {
+    await rig.reportsUpToNow().filter { if case .displayChangeHandled = $0 { true } else { false } }.count
 }
 
 /// Docked with the Dock layout active and a window where the layout put it.
@@ -762,7 +762,7 @@ private func dockedRig() async -> Rig {
     #expect(await rig.frame() == frame)
     #expect(await rig.engine.activeLayoutName == "Dock")
     #expect(await rig.engine.memory.read().lastDisplays == bothDisplays)
-    #expect(displayChangesHandled(rig) == 0)
+    #expect(await displayChangesHandled(rig) == 0)
 }
 
 @Test(.timeLimit(.minutes(1))) func theRealSetupAfterAPlaceholderRunsTheRulesAsBefore() async {
@@ -786,7 +786,7 @@ private func dockedRig() async -> Rig {
     await rig.waitForReportsUpToNow()
     #expect(await rig.log == before)
     #expect(await rig.engine.activeLayoutName == "Dock")
-    #expect(displayChangesHandled(rig) == 0)
+    #expect(await displayChangesHandled(rig) == 0)
 }
 
 @Test(.timeLimit(.minutes(1))) func startingOnAPlaceholderMovesNothingAndTheRealSetupIsHandledAsUsual() async throws {
@@ -837,7 +837,7 @@ private func startingOnAPlaceholderWithNothingRememberedRecordsAndStoresNothingA
     // A first setup: recorded and remembered, with no rule run against a placeholder.
     #expect(await rig.log.isEmpty)
     #expect(await rig.frame() == start)
-    #expect(displayChangesHandled(rig) == 0)
+    #expect(await displayChangesHandled(rig) == 0)
     #expect(await rig.engine.knownDisplays == [displayA])
     #expect(await rig.engine.memory.read().lastDisplays == [displayA])
 }

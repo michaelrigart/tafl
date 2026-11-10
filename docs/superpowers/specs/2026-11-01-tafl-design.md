@@ -159,6 +159,9 @@ moves end within 0.5 s of the end callback.
   would settle as a new setup, so Tafl never settles on a setup that holds one (see "Display
   changes"). Known limit: a real display that reports no name with vendor "unkn" and model
   "virt" would look like the placeholder, and Tafl would never settle on a setup that holds it.
+  Known limit: if Tafl quits while no display is connected and starts again with one, it
+  treats that display as a first setup, because the saved memory cannot tell "no displays"
+  from "nothing remembered".
 - **Enhanced UI.** Switching it off returns -25208 in a Gecko browser, yet it works. Tafl
   always attempts it and ignores the status. Skipping the switch failed in 3 of 3 runs in Zen
   (the position write reverted the size, and the frame ended 900 pt off), which is why Tafl
