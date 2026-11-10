@@ -466,6 +466,40 @@ private final class Rig: Sendable {
     #expect(await rig.fake.raiseCalls.isEmpty)
 }
 
+@Test(.timeLimit(.minutes(1))) func aRaiseThatANewerLayoutOvertookRaisesNothingMore() async {
+    let a = window(1, frame: start, pid: 100, bundleID: "com.a")
+    let b = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let c = window(3, frame: start, pid: 300, bundleID: "com.c")
+    let first = layout("First", [slot(.leftHalf, app: "com.a"), slot(.rightHalf, app: "com.b")])
+    let second = layout("Second", [slot(.topHalf, app: "com.c")])
+    let rig = await Rig(windows: [a, b, c], focused: nil)
+    await rig.engine.start(config: config(layouts: [first, second]))
+    // First raises b, then a; it is held before a while Second is applied and raises c.
+    let gate = await rig.fake.pauseRaise(call: 0, beforeStep: 1)
+    let applyingFirst = Task { await rig.engine.applyLayout(named: "First") }
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.engine.applyLayout(named: "Second")
+    gate.open()
+    await applyingFirst.bounded()
+    #expect(await rig.fake.raised == [b.handle, c.handle])
+}
+
+@Test(.timeLimit(.minutes(1))) func aRaiseThatAReconfigurationStoppedRaisesNothingMore() async {
+    let a = window(1, frame: start, pid: 100, bundleID: "com.a")
+    let b = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let desk = layout("Desk", [slot(.leftHalf, app: "com.a"), slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [a, b], focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    let gate = await rig.fake.pauseRaise(call: 0, beforeStep: 1)
+    let applying = Task { await rig.engine.applyLayout(named: "Desk") }
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.emit(.reconfigurationBegan)
+    await rig.waitForEvents(1)
+    gate.open()
+    await applying.bounded()
+    #expect(await rig.fake.raised == [b.handle])
+}
+
 @Test(.timeLimit(.minutes(1))) func aLayoutRunThatANewerApplicationOvertookRaisesNothing() async {
     let placed = window(1, frame: start, pid: 100, bundleID: "com.a")
     let slow = window(3, frame: start, pid: 50, bundleID: "com.c")

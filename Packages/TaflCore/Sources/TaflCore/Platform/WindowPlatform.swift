@@ -85,8 +85,11 @@ public protocol WindowPlatform: Sendable {
     /// ended with `end()`: until it is, the app's next session waits and its Enhanced UI stays off.
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure>
     /// Brings the windows to the front one after the other, so the last one ends on top and its app
-    /// is frontmost. A window that cannot be raised is logged and skipped: nothing fails.
-    func raise(_ windows: [WindowHandle]) async
+    /// is frontmost. A window that cannot be raised is logged and skipped: nothing fails. `admit` is
+    /// asked in the same serial work for the window's app that makes each step, immediately before
+    /// it (each raise, each frontmost write and the activation fallback); once it answers false the
+    /// platform makes no further step.
+    func raise(_ windows: [WindowHandle], admit: @escaping @Sendable () -> Bool) async
     func pointerDisplay() async -> DisplayIdentity?
     func tilingSettings() async -> TilingSettings
     func isAccessibilityGranted() async -> Bool

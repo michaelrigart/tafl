@@ -153,9 +153,12 @@ final class Platform27: WindowPlatform {
     }
 
     /// One window after another, each on its app's queue, so the last ends on top. A window that is
-    /// not registered, or that cannot be raised, is logged and skipped.
-    func raise(_ windows: [WindowHandle]) async {
+    /// not registered, or that cannot be raised, is logged and skipped. `admit` is asked on the app's
+    /// queue immediately before each raise and each frontmost write, and before the activation
+    /// fallback; once it answers false nothing more is raised.
+    func raise(_ windows: [WindowHandle], admit: @escaping @Sendable () -> Bool) async {
         for handle in windows {
+            guard admit() else { return }
             guard let element = registry.element(for: handle) else {
                 PlatformLog.windows.notice("Raise skipped: the window is not registered")
                 continue
@@ -163,14 +166,21 @@ final class Platform27: WindowPlatform {
             let pid = handle.pid
             let outcome = await axQueue.run(pid: pid) {
                 Raise27.bringForward(
+                    admit: admit,
                     raise: { AXWindowAccess.raise(element.element) },
                     makeFrontmost: { AXWindowAccess.setFrontmost(app: pid) })
             }
             switch outcome {
             case .raised: break
+            case .stopped: return
             case .raisedWithoutFrontmost:
                 PlatformLog.windows.notice("Raise: the app refused to come forward, activating it")
-                await MainActor.run { _ = NSRunningApplication(processIdentifier: pid)?.activate() }
+                let admitted = await MainActor.run { () -> Bool in
+                    guard admit() else { return false }
+                    _ = NSRunningApplication(processIdentifier: pid)?.activate()
+                    return true
+                }
+                if !admitted { return }
             case .failed(let code):
                 PlatformLog.windows.notice("Raise failed, Accessibility error \(code.rawValue, privacy: .private)")
             }

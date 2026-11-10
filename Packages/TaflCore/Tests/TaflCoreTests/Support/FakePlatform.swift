@@ -82,6 +82,14 @@ actor FakePlatform: WindowPlatform {
     private(set) var callLog: [String] = []
     /// The windows each `raise(_:)` call was given, in order. Not part of `callLog`.
     private(set) var raiseCalls: [[WindowHandle]] = []
+    /// The windows actually raised, in order, across every `raise(_:admit:)` call: the last is on top.
+    private(set) var raised: [WindowHandle] = []
+    private struct RaiseStep: Hashable {
+        var call: Int
+        var step: Int
+    }
+    private var raiseGates: [RaiseStep: FakeGate] = [:]
+    private var beginGates: [WindowHandle: FakeGate] = [:]
     /// Holds the next `displays()` call until the gate opens.
     var displaysGate: FakeGate?
     /// Holds the next `visibleWindows()` call until the gate opens.
@@ -117,7 +125,6 @@ actor FakePlatform: WindowPlatform {
     private let clock: any TaflClock
     private var callCount = 0
     private var gates: [Int: FakeGate] = [:]
-    private var beginGates: [WindowHandle: FakeGate] = [:]
     private var busyPids: Set<Int32> = []
     private var waiters: [Int32: [CheckedContinuation<Void, Never>]] = [:]
 
@@ -298,8 +305,23 @@ actor FakePlatform: WindowPlatform {
         return .success(FakeSession(platform: self, handle: handle))
     }
 
-    func raise(_ windows: [WindowHandle]) async {
+    /// Each window is one step: it waits for its gate, asks `admit` in the same step, and is raised
+    /// only when `admit` allows it. A refused step ends the call.
+    func raise(_ windows: [WindowHandle], admit: @escaping @Sendable () -> Bool) async {
+        let call = raiseCalls.count
         raiseCalls.append(windows)
+        for (step, window) in windows.enumerated() {
+            if let gate = raiseGates.removeValue(forKey: RaiseStep(call: call, step: step)) { await gate.wait() }
+            guard admit() else { return }
+            raised.append(window)
+        }
+    }
+
+    /// Holds the `raise` call with this index, counted from 0, before its step with this index.
+    func pauseRaise(call: Int, beforeStep step: Int) -> FakeGate {
+        let gate = FakeGate()
+        raiseGates[RaiseStep(call: call, step: step)] = gate
+        return gate
     }
 
     func pointerDisplay() async -> DisplayIdentity? { pointer }

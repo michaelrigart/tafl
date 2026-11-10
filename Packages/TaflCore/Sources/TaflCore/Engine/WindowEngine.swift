@@ -500,7 +500,8 @@ public actor WindowEngine {
     }
 
     /// Last, so the overlay does not wait on an app that does not answer. A newer layout application
-    /// raises its own windows, and an older run must not cover them.
+    /// raises its own windows, and an older run must not cover them: the platform asks `admit` before
+    /// each step of the raise, so a run that is overtaken or stopped midway raises nothing more.
     private func bringToFront(
         _ placed: Set<WindowHandle>,
         of definition: LayoutDefinition,
@@ -510,7 +511,12 @@ public actor WindowEngine {
     ) async {
         guard !isStopping, reconfigurations.isCurrent(since), layoutApplications.isCurrent(application) else { return }
         let order = LayoutPlanner.raiseOrder(definition, windows: windows, among: placed)
-        if !order.isEmpty { await platform.raise(order) }
+        guard !order.isEmpty else { return }
+        let reconfigurations = reconfigurations
+        let layoutApplications = layoutApplications
+        await platform.raise(order, admit: {
+            reconfigurations.isCurrent(since) && layoutApplications.isCurrent(application)
+        })
     }
 
     /// In one step of the engine: the count stops the runs planned before it, and the owner stops

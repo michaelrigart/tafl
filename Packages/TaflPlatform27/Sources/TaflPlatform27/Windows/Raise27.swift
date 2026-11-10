@@ -10,12 +10,17 @@ enum Raise27 {
         case raisedWithoutFrontmost
         /// The window could not be raised, so its app was not asked to come forward.
         case failed(AXError)
+        /// `admit` refused a step, and no step after it was made.
+        case stopped
     }
 
-    /// Blocks on Accessibility: call it only on the app's `AXQueue`.
-    static func bringForward(raise: () -> AXError, makeFrontmost: () -> AXError) -> Outcome {
+    /// Blocks on Accessibility: call it only on the app's `AXQueue`. `admit` is asked immediately
+    /// before the raise and again before the frontmost write.
+    static func bringForward(admit: () -> Bool, raise: () -> AXError, makeFrontmost: () -> AXError) -> Outcome {
+        guard admit() else { return .stopped }
         let raised = raise()
         guard raised == .success else { return .failed(raised) }
+        guard admit() else { return .stopped }
         return makeFrontmost() == .success ? .raised : .raisedWithoutFrontmost
     }
 }

@@ -26,7 +26,7 @@ final class UnsupportedPlatform: WindowPlatform {
     func appName(pid: Int32) async -> String? { nil }
     func launchDates(of pids: Set<Int32>) async -> [Int32: Date] { [:] }
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> { .failure(.noWindow) }
-    func raise(_ windows: [WindowHandle]) async {}
+    func raise(_ windows: [WindowHandle], admit: @escaping @Sendable () -> Bool) async {}
     func pointerDisplay() async -> DisplayIdentity? { nil }
     func tilingSettings() async -> TilingSettings {
         TilingSettings(edgeDrag: nil, optionAccelerator: nil, topEdgeDrag: nil, tiledMargins: nil)
