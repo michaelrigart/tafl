@@ -39,3 +39,18 @@ import Testing
     let pid = try #require(pid_t(text))
     #expect(kill(pid, 0) == -1 && errno == ESRCH)
 }
+
+@Test(.timeLimit(.minutes(1))) func aChildThatIgnoresTerminateIsKilledSoonAfterTheTimeout() async throws {
+    let pidFile = FileManager.default.temporaryDirectory.appending(path: "tafl-child-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: pidFile) }
+    let check = ChildExitStatus(
+        executable: URL(filePath: "/bin/sh"),
+        arguments: ["-c", "echo $$ > \"$1\"; trap '' TERM; while :; do /bin/sleep 0.05; done", "sh", pidFile.path],
+        timeout: 0.5)
+    let start = ContinuousClock.now
+    #expect(await check.run() == nil)
+    #expect(ContinuousClock.now - start < .seconds(3))
+    let text = try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+    let pid = try #require(pid_t(text))
+    #expect(kill(pid, 0) == -1 && errno == ESRCH)
+}

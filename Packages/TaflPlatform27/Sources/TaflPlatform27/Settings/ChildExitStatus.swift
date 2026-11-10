@@ -2,12 +2,15 @@ import Dispatch
 import Foundation
 
 /// Runs an executable and reads its exit status as a yes or no: 0 is true, 1 is false. A child that
-/// fails to start, ends any other way, or does not exit within `timeout` seconds (it is terminated)
-/// answers nil. It waits on a background queue, never the caller's thread.
+/// fails to start, ends any other way, or does not exit within `timeout` seconds answers nil. A child
+/// still running at the timeout is terminated, and killed when it has not exited 0.5 s later, so the
+/// wait always ends. It waits on a background queue, never the caller's thread.
 struct ChildExitStatus: Sendable {
     let executable: URL
     let arguments: [String]
     let timeout: TimeInterval
+
+    private static let graceAfterTerminate: TimeInterval = 0.5
 
     func run() async -> Bool? {
         await withCheckedContinuation { continuation in
@@ -29,7 +32,10 @@ struct ChildExitStatus: Sendable {
         do { try process.run() } catch { return nil }
         if exited.wait(timeout: .now() + timeout) == .timedOut {
             process.terminate()
-            exited.wait()
+            if exited.wait(timeout: .now() + Self.graceAfterTerminate) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                exited.wait()
+            }
             return nil
         }
         guard process.terminationReason == .exit else { return nil }
