@@ -39,7 +39,8 @@ enum Probe {
         case "displays-watch": await displaysWatch(seconds: seconds)
         case "tiling": await tiling(seconds: seconds)
         case "keys": await keys(seconds: seconds)
-        default: ProbeLog.write("unknown subcommand; use windows|apply|displays|displays-watch|tiling|keys")
+        case "raise": await raise(Array(arguments.dropFirst()))
+        default: ProbeLog.write("unknown subcommand; use windows|apply|raise|displays|displays-watch|tiling|keys")
         }
     }
 
@@ -176,6 +177,36 @@ enum Probe {
         if restoreEnhancedUI {
             ProbeLog.write("apply: restoring Enhanced UI, status=\(AXWindowAccess.setEnhancedUserInterface(app: pid, true).rawValue)")
         }
+    }
+
+    // MARK: raise
+
+    /// Raises the first window of each app, in the order given, then logs the window server's order
+    /// (front to back) and the frontmost app: the last app should be in front and frontmost.
+    private static func raise(_ bundleIDs: [String]) async {
+        guard !bundleIDs.isEmpty else {
+            ProbeLog.write("usage: raise <bundle-id> [<bundle-id> ...]  (the last one ends on top)")
+            return
+        }
+        var raised: Set<pid_t> = []
+        for bundleID in bundleIDs {
+            guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
+                ProbeLog.write("raise: \(bundleID) is not running")
+                continue
+            }
+            let pid = app.processIdentifier
+            let statuses = await queue.run(pid: pid) { () -> String in
+                guard let window = AXWindowAccess.windows(of: pid).first else { return "no window" }
+                let raise = AXWindowAccess.raise(window).rawValue
+                let frontmost = AXWindowAccess.setFrontmost(app: pid).rawValue
+                return "raise=\(raise) frontmost=\(frontmost)"
+            }
+            raised.insert(pid)
+            ProbeLog.write("raise: bundle=\(bundleID) pid=\(pid) \(statuses)")
+        }
+        let order = WindowIDResolver.windowList().filter { $0.layer == 0 && raised.contains($0.pid) }
+        ProbeLog.write("raise: front to back \(order.map { "pid=\($0.pid) id=\($0.id)" }.joined(separator: ", "))")
+        ProbeLog.write("raise: frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil")")
     }
 
     // MARK: displays

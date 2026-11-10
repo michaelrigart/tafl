@@ -105,6 +105,9 @@ Subcommands (`[seconds]` is how long to keep logging):
 - `apply <x> <y> <w> <h> [size-first|position-first] [keep-enhanced-ui]`: after Continue, move
   the focused window to the frame (Accessibility coordinates) and log each write and read-back.
   It moves a real window.
+- `raise <bundle-id> [<bundle-id> ...]`: raise each app's first window in the order given and
+  make its app frontmost through Accessibility, then log the window server's order and the
+  frontmost app. The last app should end on top. It reorders real windows.
 - `displays`: the displays and the Dock's frame before and after you change the Dock.
 - `displays-watch [seconds]`: log each display reconfiguration and window moves around it.
 - `tiling [seconds]`: macOS's tiling settings, then window moves and resizes against the
