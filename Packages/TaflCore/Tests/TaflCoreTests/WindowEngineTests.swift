@@ -2542,16 +2542,15 @@ func aNewWindowMovedBeforeItsPlacementReadsItKeepsTheMovedFrame(eventReadFirst: 
     #expect(memory.lastKnown(handle, setup: DisplaySetup([displayA]))?.relative == rightHalfA.relative(to: v))
 }
 
-/// A window a read finds gone ends through the same notice and event as its destruction: the
-/// platform delivers the end from whichever path takes the window out of its registry. The owner
-/// and the engine forget it, so a new window that gets its id is placed at creation.
-@Test(.timeLimit(.minutes(1))) func aWindowAReadFindsGoneIsForgottenAndANewWindowWithItsIDIsPlacedAtCreation() async {
+/// A window's destruction, which the platform delivers as its end, makes the owner and the engine forget
+/// it, so a new window that gets its id is placed at creation.
+@Test(.timeLimit(.minutes(1))) func aDestroyedWindowIsForgottenAndANewWindowWithItsIDIsPlacedAtCreation() async {
     let desk = layout("Desk", [slot(.rightHalf)])
     let rig = await Rig(windows: [window(1, frame: start)], focused: nil)
     await rig.engine.start(config: config(layouts: [desk]))
     await rig.engine.applyLayout(named: "Desk")
     #expect(await rig.engine.memory.read().placed[handle] != nil)
-    // The window is gone: a frame read finds no window, and the platform delivers its end.
+    // The window is destroyed: a frame read finds no window, and the platform delivers its end.
     await rig.fake.configure { $0.windows[handle] = nil }
     await rig.emit(.windowMoved(handle))
     await rig.waitForEvents(1)
@@ -2569,6 +2568,30 @@ func aNewWindowMovedBeforeItsPlacementReadsItKeepsTheMovedFrame(eventReadFirst: 
     await rig.emit(.windowCreated(created))
     await rig.waitForFrame(rightHalfA)
     #expect(await !rig.isTouched())
+}
+
+/// Around a wake the platform fails reads of live windows for about 2 s and delivers no end for them.
+/// A failed frame read changes nothing the engine or the owner holds, and the next good read is
+/// judged against the placed record as before.
+@Test(.timeLimit(.minutes(1))) func aFailedFrameReadKeepsTheWindowsRecordsForTheNextRead() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(windows: [window(1, frame: start)], focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    let placed = await rig.engine.memory.read().placed[handle]
+    #expect(placed != nil)
+    let touchedBefore = await rig.isTouched()
+    await rig.fake.configure { $0.windows[handle] = nil }
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(1)
+    #expect(await rig.engine.owner.knows(handle))
+    #expect(await rig.engine.memory.read().placed[handle] == placed)
+    await rig.fake.configure { $0.windows[handle] = window(1, frame: rightHalfA) }
+    await rig.emit(.windowMoved(handle))
+    await rig.waitForEvents(2)
+    #expect(await rig.engine.owner.knows(handle))
+    #expect(await rig.engine.memory.read().placed[handle] == placed)
+    #expect(await rig.isTouched() == touchedBefore)
 }
 
 @Test(.timeLimit(.minutes(1))) func aFirstNotificationAtTheSeededFrameKeepsAPlacedRecordFromDisk() async throws {

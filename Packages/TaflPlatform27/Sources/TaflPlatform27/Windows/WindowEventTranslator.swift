@@ -6,8 +6,7 @@ import TaflCore
 /// are handled one at a time and in order, including the reads for a window the registry does not
 /// know yet, and a slow app delays only its own lane. Nothing is read on the hub thread. A window's
 /// announcement reaches the notices inside the read that found it, and its end on its app's queue,
-/// after the reads already there, through `WindowEnds`; a snapshot that finds the window gone first
-/// delivers the end instead.
+/// after the reads already there, through `WindowEnds`.
 final class WindowEventTranslator: Sendable {
     private let registry: WindowRegistry
     private let reader: WindowReader27

@@ -329,6 +329,19 @@ func aCatchUpAnnouncesAWindowAQueryRegisteredFirst() async {
     #expect(await harness.next() == .reconfigurationEnded)
 }
 
+/// A window's end is its destruction or its app's quit, never a failed read: the quit takes every
+/// registration of the app and tells the notices and the core.
+@Test(.timeLimit(.minutes(1)))
+func anAppsQuitEndsItsRegisteredWindows() async {
+    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]])
+    let window = harness.registry.handle(
+        for: windowBox(5001), pid: 4242, windowID: ResolvedWindowID(id: 5001, by: .privateSymbol))
+    await harness.observation.appQuit(pid: 4242)
+    #expect(await harness.next() == .appQuit(pid: 4242))
+    #expect(harness.registry.element(for: window) == nil)
+    #expect(harness.notices.all == [.quit(4242)])
+}
+
 @Test(.timeLimit(.minutes(1)))
 func aCatchUpForAnAppThatQuitMeanwhilePublishesAndKeepsNothing() async {
     let gate = CatchUpGate()

@@ -12,7 +12,6 @@ final class Platform27: WindowPlatform {
     private let registry = WindowRegistry()
     private let leases = WriteLeases()
     private let notices = NoticeRelay()
-    private let ends: WindowEnds
     private let catalog: WindowCatalog27
     private let observation: WindowObservation27
     private let watcher = Mutex<WorkspaceWatcher27?>(nil)
@@ -28,10 +27,6 @@ final class Platform27: WindowPlatform {
         let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream(bufferingPolicy: .unbounded)
         events = stream
         eventContinuation = continuation
-        let axQueue = axQueue
-        ends = WindowEnds(
-            registry: registry, events: continuation, notices: notices,
-            afterReads: { pid, work in axQueue.enqueue(pid: pid, work) })
         catalog = WindowCatalog27(registry: registry, axQueue: axQueue)
         observation = WindowObservation27(
             axQueue: axQueue, registry: registry, catalog: catalog, events: continuation, notices: notices
@@ -134,7 +129,7 @@ final class Platform27: WindowPlatform {
         guard let app = AppInfo27.running(pid: handle.pid) else { return .failure(.noWindow) }
         let pid = handle.pid
         let axQueue = axQueue
-        let read = await Self.readRegistered(handle, ends: ends) { element in
+        let read = await Self.readRegistered(handle, registry: registry) { element in
             await axQueue.run(pid: pid) {
                 Windows27.read(element.element, pid: pid, resolveID: false).map {
                     take(Windows27.snapshot(handle: handle, app: app, attributes: $0.attributes))
@@ -144,21 +139,17 @@ final class Platform27: WindowPlatform {
         return read?.mapError { Windows27.failure(for: $0.code) } ?? .failure(.noWindow)
     }
 
-    /// Reads the element registered for `handle`, or nil when none is. A window found gone is ended as
-    /// the pair this read used (`WindowEnds`): if another read registered a new element for the handle
-    /// while this one was in flight, that registration stays, and if the window's destruction ended it
-    /// meanwhile, its end is not delivered again.
+    /// Reads the element registered for `handle`, or nil when none is. A read that fails, an invalid
+    /// element included, fails only itself and keeps the registration: Accessibility answers "invalid"
+    /// for live windows for about 2 s around a wake. Only the window's destroyed notification and its
+    /// app's quit end a window (`WindowEnds`, `WindowObservation27.appQuit`).
     static func readRegistered<T: Sendable>(
         _ handle: WindowHandle,
-        ends: WindowEnds,
+        registry: WindowRegistry,
         read: (AXElementBox) async -> Result<T, AXFailure>
     ) async -> Result<T, AXFailure>? {
-        guard let element = ends.registry.element(for: handle) else { return nil }
-        let result = await read(element)
-        if case .failure(let failure) = result, failure.code == .invalidUIElement {
-            ends.end(handle, element)
-        }
-        return result
+        guard let element = registry.element(for: handle) else { return nil }
+        return await read(element)
     }
 
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> {
