@@ -187,7 +187,13 @@ public actor WindowEngine {
         // Apps that failed to register are known before any rule or seed looks at a window.
         learn(await platform.startObserving(notices: owner))
         let current = await platform.displays()
-        if let lastSetup = remembered.lastSetup, lastSetup != DisplaySetup(current) {
+        if remembered.lastSetup != nil, current.contains(where: \.isPlaceholder) {
+            // A placeholder display is no setup (see `settle`): nothing moves and recording stays frozen
+            // on the last real setup, which the next real setup is compared with.
+            owner.freezeLastKnown(on: remembered.lastDisplays)
+            changeOrigin = remembered.lastDisplays
+            listen()
+        } else if let lastSetup = remembered.lastSetup, lastSetup != DisplaySetup(current) {
             owner.freezeLastKnown(on: remembered.lastDisplays)
             changeOrigin = remembered.lastDisplays
             // From here a reconfiguration freezes and stops the run below.

@@ -673,6 +673,90 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
     #expect(await rig.engine.activeLayoutName == nil)
 }
 
+// MARK: A placeholder display (DarkWake)
+
+/// What macOS 27.2 showed for 1.29 s during a DarkWake (probe log 20): no name, 1920 x 1080.
+private let placeholder = Display(
+    identity: DisplayIdentity(name: "", vendor: 1_970_170_734, model: 1_986_622_068, serial: 0),
+    frame: rect(0, 0, 1920, 1080), visibleFrame: rect(0, 0, 1920, 1080), isPlaceholder: true
+)
+
+/// Waits for the rules task the settled change started, and for it to finish.
+private func finishSettling(_ rig: Rig) async {
+    let begun = ContinuousClock.now
+    while await rig.engine.rulesTask == nil {
+        if begun.duration(to: .now) > .seconds(2) {
+            Issue.record("The change never settled")
+            return
+        }
+        await Task.yield()
+    }
+    await rig.engine.rulesTask?.value
+}
+
+private func displayChangesHandled(_ rig: Rig) -> Int {
+    rig.reports.filter { if case .displayChangeHandled = $0 { true } else { false } }.count
+}
+
+/// Docked with the Dock layout active and a window where the layout put it.
+private func dockedRig() async -> Rig {
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: start)])
+    await rig.engine.start(config: config(layouts: [dock]))
+    await rig.engine.applyLayout(named: "Dock")
+    return rig
+}
+
+@Test(.timeLimit(.minutes(1))) func aPlaceholderSetupThatStaysPastTheQuietPeriodMovesNothingAndKeepsTheLayout() async {
+    let rig = await dockedRig()
+    let before = await rig.log
+    let frame = await rig.frame()
+    await rig.changeDisplays(to: [placeholder], eventsHandledAfter: 2)
+    await finishSettling(rig)
+    #expect(await rig.log == before)
+    #expect(await rig.frame() == frame)
+    #expect(await rig.engine.activeLayoutName == "Dock")
+    #expect(await rig.engine.memory.read().lastDisplays == bothDisplays)
+    #expect(displayChangesHandled(rig) == 0)
+}
+
+@Test(.timeLimit(.minutes(1))) func theRealSetupAfterAPlaceholderRunsTheRulesAsBefore() async {
+    let rig = await dockedRig()
+    await rig.changeDisplays(to: [placeholder], eventsHandledAfter: 2)
+    await finishSettling(rig)
+    // Undocked: the change is compared with the setup before the placeholder.
+    await rig.changeDisplays(to: [displayA], eventsHandledAfter: 4)
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
+    #expect(await rig.engine.activeLayoutName == nil)
+    #expect(await rig.engine.memory.read().lastDisplays == [displayA])
+}
+
+@Test(.timeLimit(.minutes(1))) func theSameSetupAfterAPlaceholderMovesNothingAndResumesRecording() async {
+    let rig = await dockedRig()
+    let before = await rig.log
+    await rig.changeDisplays(to: [placeholder], eventsHandledAfter: 2)
+    await finishSettling(rig)
+    await rig.changeDisplays(to: bothDisplays, eventsHandledAfter: 4)
+    await rig.waitUntilChangeIsSettled()
+    #expect(await rig.log == before)
+    #expect(await rig.engine.activeLayoutName == "Dock")
+    #expect(displayChangesHandled(rig) == 0)
+}
+
+@Test(.timeLimit(.minutes(1))) func startingOnAPlaceholderMovesNothingAndTheRealSetupIsHandledAsUsual() async throws {
+    let (store, directory) = try storeHolding(WindowMemory(lastDisplays: [displayA], savedAt: saveDate))
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let rig = await Rig(displays: [placeholder], windows: [window(1, frame: start)], store: store) {
+        $0.launched = [100: saveDate.addingTimeInterval(-60)]
+    }
+    await rig.engine.start(config: config())
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.engine.memory.read().lastDisplays == [displayA])
+    await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
+    await rig.waitUntilChangeIsSettled()
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.frame() == start)
+}
+
 /// A resolution change leaves the setup the same and moves no window: the window keeps its points,
 /// so its relative frame changes with nothing to announce it. Recording that frame is the change's
 /// job; a stale one comes back as a wrong frame when another display connects and leaves.

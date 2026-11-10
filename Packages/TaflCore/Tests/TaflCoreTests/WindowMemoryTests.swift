@@ -18,6 +18,13 @@ struct WindowMemoryTests {
         )
     }
 
+    @Test func aPlaceholderFlagIsNeverStoredSoTheFileFormatStaysTheSame() throws {
+        let placeholder = Display(identity: displayA.identity, frame: displayA.frame, visibleFrame: v, isPlaceholder: true)
+        let data = try JSONEncoder().encode(placeholder)
+        #expect(!String(decoding: data, as: UTF8.self).contains("laceholder"))
+        #expect(try JSONDecoder().decode(Display.self, from: data).isPlaceholder == false)
+    }
+
     @Test func chainStartsOnceAndSurvivesTaflPlacements() {
         var memory = WindowMemory()
         memory.openChain(w1, before: rect(100, 100, 400, 300), on: displayA)

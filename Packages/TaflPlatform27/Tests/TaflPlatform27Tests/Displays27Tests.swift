@@ -30,6 +30,22 @@ private func raw(
     #expect(display.visibleFrame == ScreenRect(x: 0, y: 25, width: 1440, height: 805))
 }
 
+@Test func theDarkWakePlaceholderDisplayIsMarked() {
+    // Log 20 of the feasibility probe: no name, identifier 1970170734-1986622068-0, 1920 x 1080.
+    let frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+    let placeholder = Displays27.display(from: raw(name: "", vendor: 1_970_170_734, model: 1_986_622_068, frame: frame), dock: nil)
+    #expect(placeholder.isPlaceholder)
+    #expect(placeholder.identity.identifier == "1970170734-1986622068-0")
+}
+
+@Test func aRealDisplayIsNotAPlaceholder() {
+    let frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+    // A display with the placeholder's ids but a name, and a nameless one with other ids, are real.
+    #expect(!Displays27.display(from: raw(name: "Studio", vendor: 1_970_170_734, model: 1_986_622_068, frame: frame), dock: nil).isPlaceholder)
+    #expect(!Displays27.display(from: raw(name: "", vendor: 1552, model: 1_986_622_068, frame: frame), dock: nil).isPlaceholder)
+    #expect(!Displays27.display(from: raw(name: "", vendor: 1_970_170_734, model: 41033, frame: frame), dock: nil).isPlaceholder)
+}
+
 @Test func theSafeAreaIsTheNotchInset() {
     let frame = CGRect(x: 0, y: 0, width: 1512, height: 982)
     let display = Displays27.display(from: raw(frame: frame, safeAreaTop: 38), dock: nil)

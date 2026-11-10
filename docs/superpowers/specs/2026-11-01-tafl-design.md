@@ -151,10 +151,12 @@ moves end within 0.5 s of the end callback.
 - **macOS restores windows itself** to their per-setup frames when a known setup returns
   (replug, lid, wake), within about 100 ms.
 - **Wake.** For about 2 s around wake, Accessibility reads of live windows fail with -25202
-  (invalid element). A DarkWake shows a placeholder display (no name, "unkn" and "virt",
-  1920 x 1080) for about 1.3 s. So only a window's destroyed notification and its app's quit
-  end a window; a read that finds the element invalid fails that read only and keeps the
-  registration.
+  (invalid element). So only a window's destroyed notification and its app's quit end a
+  window; a read that finds the element invalid fails that read only and keeps the
+  registration. A DarkWake shows a placeholder display (no name, "unkn" and "virt",
+  1920 x 1080) for about 1.3 s, shorter than the 1.5 s quiet period. One that lasted longer
+  would settle as a new setup, so Tafl never settles on a setup that holds one (see "Display
+  changes").
 - **Enhanced UI.** Switching it off returns -25208 in a Gecko browser, yet it works. Tafl
   always attempts it and ignores the status. Skipping the switch failed in 3 of 3 runs in Zen
   (the position write reverted the size, and the frame ended 900 pt off), which is why Tafl
@@ -469,7 +471,11 @@ action put it. `repeat` in the config file sets what a repeat does:
   change. So:
   - a display that drops out briefly and returns, on wake or when a monitor sleeps, moves
     nothing;
-  - a change of resolution, arrangement or main display moves nothing.
+  - a change of resolution, arrangement or main display moves nothing;
+  - a setup that holds a placeholder display (no name, vendor "unkn" and model "virt", which
+    macOS shows briefly during a DarkWake) is never a setup: the rules do not run for it, nothing
+    moves, the active layout and the last-known setup stay, and the next real setup is handled
+    as usual, compared with the setup before the placeholder.
 
 When the display setup changes, each visible window (on any display's current Space) is
 handled by the first rule that applies:

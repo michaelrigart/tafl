@@ -21,7 +21,13 @@ public enum Displays27 {
         return Display(
             identity: DisplayIdentity(name: raw.name, vendor: raw.vendor, model: raw.model, serial: raw.serial),
             frame: screenRect(raw.frame),
-            visibleFrame: screenRect(visible))
+            visibleFrame: screenRect(visible),
+            isPlaceholder: isPlaceholder(raw))
+    }
+
+    /// The display macOS shows during a DarkWake (27.2): no name, vendor "unkn" and model "virt".
+    static func isPlaceholder(_ raw: RawDisplay27) -> Bool {
+        raw.name.isEmpty && raw.vendor == 0x756e_6b6e && raw.model == 0x7669_7274
     }
 
     private static func screenRect(_ rect: Coordinates27.AXRect) -> ScreenRect {

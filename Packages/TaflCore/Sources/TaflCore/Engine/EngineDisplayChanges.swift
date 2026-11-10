@@ -75,6 +75,10 @@ extension WindowEngine {
         guard reconfigurations.isCurrent(began) else { return }
         let new = await platform.displays()
         guard reconfigurations.isCurrent(began) else { return }
+        // A placeholder display (macOS wakes in the dark with one) is no setup: nothing moves, the
+        // active layout and the last-known setup stay, and recording stays frozen from `changeOrigin`,
+        // so the next real setup is compared with the one before the placeholder.
+        guard !new.contains(where: \.isPlaceholder) else { return }
         let old = changeOrigin ?? knownDisplays
         if DisplaySetup(old) == DisplaySetup(new), !rulesStarted {
             // A display that dropped out and came back, or a change of geometry: nothing moves, but
