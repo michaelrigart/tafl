@@ -1959,6 +1959,20 @@ private func wakeRig() async -> Rig {
     #expect(await rig.engine.unobservable.isEmpty)
 }
 
+@Test(.timeLimit(.minutes(1))) func aNewProcessOnAQuitAppsPidIsNotRetriedByTheNextRestart() async {
+    let rig = await wakeRig()
+    await rig.clock.waitForSleepers(1)
+    await rig.emit(.appQuit(pid: 200))
+    // A new process takes the pid and is unobservable before the next restart, which is not a wake failure.
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.moved, .resized]))
+    await rig.waitForEvents(2)
+    await rig.engine.restartObserving()
+    #expect(rig.clock.sleeperCount == 0)
+    await rig.clock.advance(by: .seconds(60))
+    #expect(await rig.fake.observeAgainCalls.isEmpty)
+    #expect(await rig.engine.unobservable == [200: [.moved, .resized]])
+}
+
 @Test(.timeLimit(.minutes(1))) func stoppingEndsThePendingRetries() async {
     let rig = await wakeRig()
     await rig.clock.waitForSleepers(1)
