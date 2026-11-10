@@ -1,13 +1,11 @@
 import AppKit
 import Synchronization
+import TaflPlatform27
 
-/// Starts a new copy of Tafl and quits this one. The new copy starts only after this process has
-/// exited and LaunchServices no longer lists it (for at most 5 s), so it never meets this one and
-/// hands over to it, and `open` never finds the old copy still registered: either would leave no
-/// copy running.
+/// Starts a new copy of Tafl and quits this one. The helper it starts (`RelaunchHelper`) stays until a
+/// new copy is confirmed running: it waits for this process to exit and for LaunchServices to drop it,
+/// opens Tafl, and opens it again when no new copy appears, so a relaunch never leaves two copies or none.
 enum Relaunch {
-    private static let script = #"while kill -0 "$1" 2>/dev/null; do sleep 0.1; done; i=0; while [ -n "$(/usr/bin/lsappinfo find bundleid="$3")" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done; exec /usr/bin/open "$2""#
-
     private static let started = Mutex(false)
 
     /// Returns false, and leaves Tafl running, when the new copy could not be scheduled. The quit is
@@ -18,9 +16,12 @@ enum Relaunch {
     static func perform() -> Bool {
         guard started.withLock({ !$0 }) else { return true }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.michaelrigart.tafl"
-        process.arguments = ["-c", script, "sh", String(ProcessInfo.processInfo.processIdentifier), Bundle.main.bundleURL.path, bundleID]
+        let command = RelaunchHelper().invocation(
+            oldPID: ProcessInfo.processInfo.processIdentifier,
+            bundlePath: Bundle.main.bundleURL.path,
+            bundleID: Bundle.main.bundleIdentifier ?? "com.michaelrigart.tafl")
+        process.executableURL = command.executable
+        process.arguments = command.arguments
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

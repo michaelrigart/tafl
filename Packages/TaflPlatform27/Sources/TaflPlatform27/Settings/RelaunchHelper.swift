@@ -1,0 +1,91 @@
+import Foundation
+
+/// The shell command that starts a new copy of Tafl after this process has exited, and stays until a
+/// new copy is confirmed running. A relaunch never leaves two copies or none, so it:
+///
+/// 1. waits for the old pid to exit;
+/// 2. waits (at most `dropPolls` polls) for LaunchServices to stop listing the old copy, so `open`
+///    never finds it still registered;
+/// 3. runs `open`, then looks for up to `confirmPolls` polls for a copy of the bundle that LaunchServices
+///    lists with a pid other than the old one that is alive, and that stays so for `stablePolls`
+///    polls in a row (a new copy that hands over to a still-listed old one exits at once);
+/// 4. when none is confirmed, tries again from step 2, up to `attempts` in all, then gives up.
+///
+/// A copy counts only by its pid, never by the LaunchServices listing alone, so a stale listing of the
+/// old copy is not mistaken for the new one. The commands and the timing are arguments so a test can
+/// run the real script with fake commands.
+public struct RelaunchHelper: Sendable {
+    public struct Timing: Sendable {
+        /// Seconds between polls.
+        public var pollInterval: Double
+        public var dropPolls: Int
+        public var confirmPolls: Int
+        public var stablePolls: Int
+        public var attempts: Int
+
+        public init(pollInterval: Double, dropPolls: Int, confirmPolls: Int, stablePolls: Int, attempts: Int) {
+            self.pollInterval = pollInterval
+            self.dropPolls = dropPolls
+            self.confirmPolls = confirmPolls
+            self.stablePolls = stablePolls
+            self.attempts = attempts
+        }
+
+        /// Polls every 0.1 s: up to 10 s for the old copy to drop, 5 s to confirm a new one (which has
+        /// to stay up for 1 s), 5 attempts.
+        public static let standard = Timing(pollInterval: 0.1, dropPolls: 100, confirmPolls: 50, stablePolls: 10, attempts: 5)
+    }
+
+    public let open: String
+    public let lsappinfo: String
+    public let timing: Timing
+
+    public init(open: String = "/usr/bin/open", lsappinfo: String = "/usr/bin/lsappinfo", timing: Timing = .standard) {
+        self.open = open
+        self.lsappinfo = lsappinfo
+        self.timing = timing
+    }
+
+    /// Exits 0 once a new copy is confirmed, 1 when it gave up.
+    private static let script = #"""
+    old=$1; app=$2; bid=$3; open=$4; lsapp=$5; tick=$6; dropmax=$7; confmax=$8; stablemax=$9; shift 9; attempts=$1
+    newcopy() {
+      for asn in $("$lsapp" find bundleid="$bid" | /usr/bin/grep -Eo 'ASN:0x[0-9a-fA-F]+-0x[0-9a-fA-F]+'); do
+        pid=$("$lsapp" info -only pid "$asn" | /usr/bin/sed -n 's/.*pid"\{0,1\} *= *\([0-9][0-9]*\).*/\1/p' | /usr/bin/head -n 1)
+        if [ -n "$pid" ] && [ "$pid" != "$old" ] && kill -0 "$pid" 2>/dev/null; then return 0; fi
+      done
+      return 1
+    }
+    while kill -0 "$old" 2>/dev/null; do sleep "$tick"; done
+    n=0
+    while [ "$n" -lt "$attempts" ]; do
+      if newcopy; then exit 0; fi
+      i=0
+      while [ -n "$("$lsapp" find bundleid="$bid")" ] && [ "$i" -lt "$dropmax" ]; do sleep "$tick"; i=$((i+1)); done
+      "$open" "$app"
+      i=0; stable=0
+      while [ "$i" -lt "$confmax" ]; do
+        if newcopy; then
+          stable=$((stable+1))
+          if [ "$stable" -ge "$stablemax" ]; then exit 0; fi
+        else
+          stable=0
+        fi
+        sleep "$tick"; i=$((i+1))
+      done
+      n=$((n+1))
+    done
+    exit 1
+    """#
+
+    /// The executable and arguments that run the script for the copy with `oldPID`, which relaunches
+    /// the bundle at `bundlePath` (identifier `bundleID`).
+    public func invocation(oldPID: Int32, bundlePath: String, bundleID: String) -> (executable: URL, arguments: [String]) {
+        let arguments = [
+            "-c", Self.script, "sh", String(oldPID), bundlePath, bundleID, open, lsappinfo,
+            String(timing.pollInterval), String(timing.dropPolls), String(timing.confirmPolls),
+            String(timing.stablePolls), String(timing.attempts),
+        ]
+        return (URL(fileURLWithPath: "/bin/sh"), arguments)
+    }
+}
