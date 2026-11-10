@@ -8,35 +8,6 @@ private final class Flag: Sendable {
     var isSet: Bool { value.withLock { $0 } }
 }
 
-/// Parks callers in a checked continuation, which cancellation does not resume, until `release()`.
-private final class Hold: Sendable {
-    private struct State {
-        var released = false
-        var parked: [CheckedContinuation<Void, Never>] = []
-    }
-
-    private let state = Mutex(State())
-
-    func wait() async {
-        await withCheckedContinuation { continuation in
-            let resumeNow = state.withLock { state in
-                if !state.released { state.parked.append(continuation) }
-                return state.released
-            }
-            if resumeNow { continuation.resume() }
-        }
-    }
-
-    func release() {
-        let parked = state.withLock { state in
-            state.released = true
-            defer { state.parked = [] }
-            return state.parked
-        }
-        for continuation in parked { continuation.resume() }
-    }
-}
-
 private struct Failure: Error, Equatable {}
 
 @Test(.timeLimit(.minutes(1))) func aTaskThatEndsInTimeGivesItsValue() async {
@@ -44,34 +15,25 @@ private struct Failure: Error, Equatable {}
     #expect(await task.bounded() == 7)
 }
 
-@Test(.timeLimit(.minutes(1))) func aTaskThatIgnoresCancellationEndsTheWaitAtTheBound() async {
-    let release = Flag()
-    // Spins until released and never looks at cancellation.
+/// A held call ignores cancellation and is parked in a continuation: the two things a time limit
+/// cannot end.
+@Test(.gated, .timeLimit(.minutes(1))) func aTaskThatIgnoresCancellationEndsTheWaitAtTheBound() async {
+    let gate = Gate()
     let stuck = Task {
-        while !release.isSet { await Task.yield() }
+        await gate.hold()
         return 7
     }
     await withKnownIssue("a wait that passes its bound records an issue") {
         #expect(await stuck.bounded(timeout: .milliseconds(100)) == nil)
     }
-    release.set()
+    // The failed wait opened the test's gates.
     #expect(await stuck.bounded() == 7)
-}
-
-@Test(.timeLimit(.minutes(1))) func aTaskParkedInAContinuationEndsTheWaitAtTheBound() async {
-    let hold = Hold()
-    let stuck = Task { await hold.wait() }
-    await withKnownIssue("a wait that passes its bound records an issue") {
-        await stuck.bounded(timeout: .milliseconds(100))
-    }
-    hold.release()
-    await stuck.bounded()
 }
 
 @Test(.timeLimit(.minutes(1))) func aTimedOutWaitCancelsTheTask() async {
     let sawCancellation = Flag()
     let task = Task {
-        while !Task.isCancelled { await Task.yield() }
+        await waitUntil("the bounded wait to cancel the task", timeout: .seconds(30)) { Task.isCancelled }
         sawCancellation.set()
     }
     await withKnownIssue("a wait that passes its bound records an issue") {
@@ -91,9 +53,9 @@ private struct Failure: Error, Equatable {}
     #expect(try await task.bounded() == 3)
 }
 
-@Test(.timeLimit(.minutes(1))) func aCallerCancelledBeforeTheTaskEndsStopsWaiting() async {
-    let hold = Hold()
-    let stuck = Task { await hold.wait() }
+@Test(.gated, .timeLimit(.minutes(1))) func aCallerCancelledBeforeTheTaskEndsStopsWaiting() async {
+    let gate = Gate()
+    let stuck = Task { await gate.hold() }
     let waiting = Task {
         await withKnownIssue("a cancelled wait records an issue") {
             await stuck.bounded(timeout: .seconds(30))
@@ -101,6 +63,6 @@ private struct Failure: Error, Equatable {}
     }
     waiting.cancel()
     await waiting.bounded()
-    hold.release()
+    gate.open()
     await stuck.bounded()
 }

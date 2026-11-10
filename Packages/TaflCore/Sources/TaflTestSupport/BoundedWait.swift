@@ -73,11 +73,11 @@ public func awaitBounded<Success: Sendable>(
         return value
     case .boundPassed:
         cancel()
-        Issue.record("A task did not finish within \(timeout)", sourceLocation: sourceLocation)
+        waitFailed("A task did not finish within \(timeout)", sourceLocation: sourceLocation)
         return nil
     case .callerCancelled:
         cancel()
-        Issue.record("The wait for a task was cancelled before the task finished", sourceLocation: sourceLocation)
+        waitFailed("The wait for a task was cancelled before the task finished", sourceLocation: sourceLocation)
         return nil
     }
 }
@@ -85,7 +85,7 @@ public func awaitBounded<Success: Sendable>(
 extension Task where Failure == Never {
     /// The task's value, or nil with a recorded issue when it has not finished within `timeout`.
     @discardableResult
-    public func bounded(timeout: Duration = .seconds(5), sourceLocation: SourceLocation = #_sourceLocation) async -> Success? {
+    public func bounded(timeout: Duration = defaultWaitBound, sourceLocation: SourceLocation = #_sourceLocation) async -> Success? {
         await awaitBounded(timeout: timeout, cancelling: { self.cancel() }, sourceLocation: sourceLocation) {
             await self.value
         }
@@ -96,7 +96,7 @@ extension Task where Failure == any Error {
     /// The task's result, or nil with a recorded issue when it has not finished within `timeout`; a
     /// task that ends by throwing rethrows its error.
     @discardableResult
-    public func bounded(timeout: Duration = .seconds(5), sourceLocation: SourceLocation = #_sourceLocation) async throws -> Success? {
+    public func bounded(timeout: Duration = defaultWaitBound, sourceLocation: SourceLocation = #_sourceLocation) async throws -> Success? {
         let result = await awaitBounded(timeout: timeout, cancelling: { self.cancel() }, sourceLocation: sourceLocation) {
             await self.result
         }
