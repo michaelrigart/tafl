@@ -6,7 +6,7 @@ import Synchronization
 /// hands over to it, and `open` never finds the old copy still registered: either would leave no
 /// copy running.
 enum Relaunch {
-    private static let script = #"while kill -0 "$1" 2>/dev/null; do sleep 0.1; done; SECONDS=0; while [ -n "$(/usr/bin/lsappinfo find bundleid="$3")" ] && [ "$SECONDS" -lt 5 ]; do sleep 0.1; done; exec /usr/bin/open "$2""#
+    private static let script = #"while kill -0 "$1" 2>/dev/null; do sleep 0.1; done; i=0; while [ -n "$(/usr/bin/lsappinfo find bundleid="$3")" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done; exec /usr/bin/open "$2""#
 
     private static let started = Mutex(false)
 
