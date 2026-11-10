@@ -1,4 +1,3 @@
-import ApplicationServices
 import Dispatch
 import Foundation
 import Synchronization
@@ -27,15 +26,17 @@ public final class Permission27: @unchecked Sendable { // reason: `observer` is 
 
     private let read: @Sendable () -> Bool
 
-    /// The one trust rule: `AXIsProcessTrusted()` alone. A real Accessibility call is no substitute:
-    /// macOS still answers one in a process that was trusted and then switched off.
+    /// The one trust rule: tccd's answer through `TCCAccessPreflight`. `AXIsProcessTrusted()` caches its
+    /// answer and refills the cache before macOS stores a change, so it can keep the old value; it is the
+    /// fallback when the symbol is missing. A real Accessibility call is no substitute: macOS still
+    /// answers one in a process that was trusted and then switched off.
     public var isTrusted: Bool { read() }
 
     public convenience init() {
         self.init(
             center: DistributedNotificationCenter.default(),
             name: Notification.Name("com.apple.accessibility.api"),
-            read: { AXIsProcessTrusted() })
+            read: { AccessibilityTrust.read() })
     }
 
     /// The notification can arrive before the change takes effect, so each one is read at once, on the

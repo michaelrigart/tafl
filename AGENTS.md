@@ -64,8 +64,10 @@ points at Xcode, and don't change `xcode-select`.
   it on in System Settings, Privacy & Security, Device Control and Data Access (the Accessibility
   permission). The onboarding window's button opens that page, and Tafl relaunches itself once it
   sees a grant it did not start with (observing started in that process right after the grant can
-  fail for every app). If the window stays open, Reopen Tafl does the same by hand: macOS 27.2.1
-  can keep answering "not granted" to a running Tafl. Whether a
+  fail for every app). Tafl reads the grant from tccd through `TCCAccessPreflight`, because
+  `AXIsProcessTrusted()` caches its answer in the process and keeps the old value after a switch
+  (it is the fallback when the symbol is missing), so it notices a switch within about 2 seconds.
+  Reopen Tafl in the onboarding window stays as the manual fallback. Whether a
   renewed certificate (yearly) keeps the grant is unconfirmed.
 - Paths: the config is `~/.config/tafl/config.toml` (it may be a symlink; Tafl writes it only
   as a starter file when none exists, on request); the window memory is `~/.local/state/tafl/memory.json`.

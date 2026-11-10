@@ -71,7 +71,10 @@ final class Platform27: WindowPlatform {
     func capabilities() async -> [CapabilityState] {
         let symbol = WindowIDResolver.privateSymbolAvailable
         let list = symbol || !WindowIDResolver.windowList().isEmpty
-        return [Self.windowIdentityCapability(privateSymbol: symbol, windowList: list)]
+        return [
+            Self.windowIdentityCapability(privateSymbol: symbol, windowList: list),
+            AccessibilityTrust.capability(preflightAvailable: AccessibilityTrust.preflightAvailable),
+        ]
     }
 
     static func windowIdentityCapability(privateSymbol: Bool, windowList: Bool) -> CapabilityState {
