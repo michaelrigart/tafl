@@ -23,7 +23,7 @@ enum Relaunch {
             return false
         }
         Log.app.notice("Relaunching Tafl")
-        RunLoop.main.perform(inModes: [.common]) { NSApp.terminate(nil) }
+        RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { NSApp.terminate(nil) } }
         return true
     }
 }
