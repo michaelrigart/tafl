@@ -15,7 +15,9 @@ import Foundation
 /// A copy counts only by its pid, never by the LaunchServices listing alone, so a stale listing of the
 /// old copy is not mistaken for the new one. A copy is accepted only after the same stable polls
 /// wherever it is found: after `open`, and when a retry begins. The commands and the timing are
-/// arguments so a test can run the real script with fake commands.
+/// arguments so a test can run the real script with fake commands. Each `lsappinfo find` carries the
+/// step that issued it in `TAFL_RELAUNCH_STEP` (`entry`, `drop` or `confirm`, then the attempt's
+/// number), which the real command ignores and a fake can read.
 public struct RelaunchHelper: Sendable {
     public struct Timing: Sendable {
         /// Seconds between polls.
@@ -57,6 +59,7 @@ public struct RelaunchHelper: Sendable {
     private static let script = #"""
     old=$1; app=$2; bid=$3; open=$4; lsapp=$5; logger=$6; tick=$7; dropmax=$8; confmax=$9; shift 9
     stablemax=$1; attempts=$2
+    TAFL_RELAUNCH_STEP=""; export TAFL_RELAUNCH_STEP
     newcopy() {
       for asn in $("$lsapp" find bundleid="$bid" | /usr/bin/grep -Eo 'ASN:0x[0-9a-fA-F]+-0x[0-9a-fA-F]+'); do
         pid=$("$lsapp" info -only pid "$asn" | /usr/bin/sed -n 's/.*pid"\{0,1\} *= *\([0-9][0-9]*\).*/\1/p' | /usr/bin/head -n 1)
@@ -76,10 +79,13 @@ public struct RelaunchHelper: Sendable {
     while kill -0 "$old" 2>/dev/null; do sleep "$tick"; done
     n=0
     while [ "$n" -lt "$attempts" ]; do
+      TAFL_RELAUNCH_STEP="entry $((n+1))"
       if newcopy && stays 1; then exit 0; fi
+      TAFL_RELAUNCH_STEP="drop $((n+1))"
       i=0
       while [ -n "$("$lsapp" find bundleid="$bid")" ] && [ "$i" -lt "$dropmax" ]; do sleep "$tick"; i=$((i+1)); done
       "$open" "$app"
+      TAFL_RELAUNCH_STEP="confirm $((n+1))"
       if stays 0; then exit 0; fi
       n=$((n+1))
     done

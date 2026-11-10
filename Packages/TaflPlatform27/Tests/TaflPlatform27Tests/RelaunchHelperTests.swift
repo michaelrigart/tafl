@@ -12,7 +12,8 @@ private let fastTiming = RelaunchHelper.Timing(pollInterval: 0.02, dropPolls: 10
 /// starts nothing, as when a new copy hands over to it, and does not use up a result. A started copy
 /// is this test process, which is alive and has another pid than the old copy. `lsappinfo` lists a
 /// stale entry for the old copy while `stale-polls` is above 0 (each `find` uses one; `forever` never
-/// runs out) and the new copy once started. A `blip` lists a copy at one numbered `find` only. The
+/// runs out) and the new copy once started. A `blip` lists a copy at the first `find` of one step only
+/// (the step the script names in `TAFL_RELAUNCH_STEP`, such as `entry 2`) and records that step. The
 /// `logger` records its arguments.
 private final class Fakes: Sendable {
     let directory: URL
@@ -22,17 +23,18 @@ private final class Fakes: Sendable {
     var logger: String { directory.appending(path: "logger").path }
     var openLog: [String] { lines("open.log") }
     var loggerLog: [String] { lines("logger.log") }
+    /// The steps whose `find` listed a blip.
+    var blips: [String] { lines("blips.log") }
 
-    /// `blipAt` is the number of the `find` call, counted from 1, that lists a copy once; `isRunning`
-    /// means a new copy is running and listed from the start.
-    init(oldPID: Int32, openResults: [String] = [], stalePolls: String = "0", blipAt: Int? = nil, isRunning: Bool = false) throws {
+    /// `blipStep` is the step whose first `find` lists a copy once; `isRunning` means a new copy is
+    /// running and listed from the start.
+    init(oldPID: Int32, openResults: [String] = [], stalePolls: String = "0", blipStep: String? = nil, isRunning: Bool = false) throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "relaunch-\(UUID().uuidString)")
         self.oldPID = oldPID
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try openResults.map { $0 + "\n" }.joined().write(to: directory.appending(path: "open-results"), atomically: true, encoding: .utf8)
         try stalePolls.write(to: directory.appending(path: "stale-polls"), atomically: true, encoding: .utf8)
-        try "0".write(to: directory.appending(path: "finds"), atomically: true, encoding: .utf8)
-        try blipAt.map(String.init)?.write(to: directory.appending(path: "blip-at"), atomically: true, encoding: .utf8)
+        try blipStep?.write(to: directory.appending(path: "blip-step"), atomically: true, encoding: .utf8)
         let newPID = ProcessInfo.processInfo.processIdentifier
         if isRunning { try String(newPID).write(to: directory.appending(path: "new-pid"), atomically: true, encoding: .utf8) }
         try write("open", """
@@ -55,11 +57,12 @@ private final class Fakes: Sendable {
             d="\(directory.path)"
             case "$1" in
               find)
-                finds=$(( $(cat "$d/finds") + 1 )); echo $finds > "$d/finds"
                 polls=$(cat "$d/stale-polls")
                 if [ "$polls" = forever ]; then echo 'ASN:0x0-0x1-"Tafl":'
                 elif [ "$polls" -gt 0 ]; then echo 'ASN:0x0-0x1-"Tafl":'; echo $((polls-1)) > "$d/stale-polls"; fi
-                if [ -f "$d/blip-at" ] && [ "$finds" = "$(cat "$d/blip-at")" ]; then echo 'ASN:0x0-0x3-"Tafl":'; fi
+                if [ -f "$d/blip-step" ] && [ "$TAFL_RELAUNCH_STEP" = "$(cat "$d/blip-step")" ]; then
+                  echo 'ASN:0x0-0x3-"Tafl":'; echo "$TAFL_RELAUNCH_STEP" >> "$d/blips.log"; rm "$d/blip-step"
+                fi
                 if [ -f "$d/new-pid" ]; then
                   if [ ! -f "$d/new-lives" ]; then echo 'ASN:0x0-0x2-"Tafl":'
                   elif [ "$(cat "$d/new-lives")" -gt 0 ]; then echo 'ASN:0x0-0x2-"Tafl":'; echo $(( $(cat "$d/new-lives") - 1 )) > "$d/new-lives"; fi
@@ -142,11 +145,11 @@ private func exitedPID() throws -> Int32 {
 }
 
 @Test(.timeLimit(.minutes(1))) func aCopyListedAtOnePollWhenARetryBeginsIsNotConfirmed() async throws {
-    // Polls of the first attempt: the entry check, the drop wait's single listing, then `confirmPolls`
-    // while it waits for the copy `open` never started. The retry's entry check is the next one.
-    let retryEntry = 3 + fastTiming.confirmPolls
-    let fakes = try Fakes(oldPID: exitedPID(), openResults: ["none", "ok"], blipAt: retryEntry)
+    // The first attempt's `open` starts nothing; a copy is listed once when the second attempt begins.
+    let fakes = try Fakes(oldPID: exitedPID(), openResults: ["none", "ok"], blipStep: "entry 2")
     #expect(await fakes.run() == true)
+    // The blip landed on the retry's entry check, and one listing did not confirm it: `open` ran again.
+    #expect(fakes.blips == ["entry 2"])
     #expect(fakes.openLog.count == 2)
 }
 
