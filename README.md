@@ -178,8 +178,10 @@ Rectangle's source and Apple's documentation; the only item below that has been 
 macOS 27.2 is the first one.
 
 - **A shortcut another app holds may not reach Tafl, and Tafl isn't told.** Registering a
-  key another app already holds gives Tafl no error (measured on 27.2). Where the key press
-  goes was not recorded, so quit Rectangle or any other app that uses the same keys.
+  key another app already holds gives Tafl no error (measured on 27.2). With Rectangle
+  running, Tafl's registration took 45 of 45 presses and Rectangle's same chords stopped
+  working. Other apps were not tried, so quit Rectangle or any other app that uses the same
+  keys.
 - **No Spaces.** macOS has no public API for them, so Tafl doesn't move windows between
   Spaces and has no per-Space layouts. Layouts and display-change rules reach the windows
   of the current Space; windows on other Spaces stay where macOS put them.

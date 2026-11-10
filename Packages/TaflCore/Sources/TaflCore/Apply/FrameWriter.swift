@@ -111,7 +111,7 @@ public struct FrameWriter: Sendable {
         platform: any WindowPlatform,
         clock: any TaflClock,
         owner: WindowOwner,
-        reapplyDelay: Duration? = .milliseconds(25)
+        reapplyDelay: Duration?
     ) {
         self.platform = platform
         self.clock = clock

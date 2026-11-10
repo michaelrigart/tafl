@@ -32,18 +32,20 @@ private func clamp(
 }
 
 @Test func theClampIsToTheDisplayTheWindowLandedOn() {
-    // Landing on B, whose visible frame is larger, a width of 1000 is not a clamp of 1200.
+    // Landing on B, whose visible frame is larger, a width of 1000 is not a clamp of 1200. The width
+    // clamp itself is inferred; no width clamp was observed on 27.2.
     #expect(!MacOSAdjustment.sizeClampedToDisplay.explains(clamp(before: rect(100, 100, 1200, 775), after: rect(1000, 0, 1000, 775))))
     #expect(MacOSAdjustment.sizeClampedToDisplay.explains(clamp(before: rect(100, 100, 500, 1700), after: rect(1000, 0, 500, 1550))))
 }
 
 @Test func aWindowTallerThanTheNewDisplayEndsAtItsVisibleBottom() {
-    // Measured on 27.2: a height of 1410 became 1130 at the visible top, ending at the visible bottom.
+    // Measured on 27.2: a height of 1410 became 1130 at the visible top (5 of 5 apps), where ending at
+    // the visible bottom and taking the visible height agree. The y 300 case is inferred, not measured.
     #expect(MacOSAdjustment.sizeClampedToDisplay.explains(clamp(before: rect(1100, 0, 500, 1550), after: rect(0, 25, 500, 775))))
     #expect(MacOSAdjustment.sizeClampedToDisplay.explains(clamp(before: rect(1100, 0, 500, 1550), after: rect(0, 300, 500, 500))))
 }
 
 @Test func aHeightPastTheVisibleBottomIsNotExplained() {
-    // At y 300 the full visible height would end 275 points below the display.
+    // Inferred, not measured: at y 300 the full visible height would end 275 points below the display.
     #expect(!MacOSAdjustment.sizeClampedToDisplay.explains(clamp(before: rect(1100, 0, 500, 1550), after: rect(0, 300, 500, 775))))
 }

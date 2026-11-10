@@ -28,10 +28,13 @@ public struct MacOSAdjustment: Sendable {
         self.explains = explains
     }
 
-    /// A position write moved the window onto another display (measured on macOS 27.2). A width
-    /// wider than that display's visible frame became its visible width. A height taller than the
+    /// A position write moved the window onto another display (macOS 27.2). A height taller than the
     /// visible frame became the height that ends at the visible bottom; a window that already fits
     /// keeps its height.
+    ///
+    /// What was measured: five clamps, all at the visible top, where "ends at the visible bottom" and
+    /// "the visible height" agree. The bottom form (a clamp at any other y) and the width clamp (a
+    /// width wider than the visible frame becoming its visible width) are inferred; none was observed.
     public static let sizeClampedToDisplay = MacOSAdjustment(name: "sizeClampedToDisplay") { adjustment in
         guard adjustment.written == .position,
               let before = DisplayLocator.display(containing: adjustment.before, in: adjustment.displays),

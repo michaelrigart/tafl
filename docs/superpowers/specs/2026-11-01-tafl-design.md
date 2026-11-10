@@ -115,12 +115,18 @@ before macOS moves any window; macOS's own restore matches rule 2 stepping aside
 moves end within 0.5 s of the end callback.
 
 - **The named macOS adjustment.** A position write that moves a window onto a display whose
-  visible frame is shorter than the window clamps its height so it ends at the destination's
-  visible bottom: 1410 became 1130 at the visible top, in 5 of 5 apps. Moving onto a taller
-  display never changed the size. A size write is clamped by the app at the window's current
-  origin, to the bottom of the display it is on; that is the written part, and
-  size-position-size recovers it. Every cross-display and single-display run ended on the
-  target frame (shortfall 0) except the 1 pt below.
+  visible frame is shorter than the window clamps its height: 1410 became 1130, in 5 of 5
+  apps. All five clamps landed at the visible top (y 39), where "the height that ends at the
+  destination's visible bottom" and "the destination's visible height" agree. Tafl's
+  adjustment uses the bottom form; that form for a window below the visible top, and a width
+  clamp (a width wider than the destination's visible frame becoming its visible width), were
+  not observed and are inferred. Moving onto a taller display never changed the size. A size
+  write is clamped by the app at the window's current origin, to the bottom of the display it
+  is on; that is the written part, and size-position-size recovers it. Cross-display and
+  single-display runs ended on the target frame (shortfall 0) except the 1 pt below, Zen with
+  Enhanced UI left on (900 pt off in 3 of 3 runs, see Enhanced UI) and a target at y 0, which
+  ended 39 pt lower because macOS keeps windows below the menu bar; Tafl never targets above
+  the visible frame.
 - **Reapply.** Nothing changed 25 ms after the last read-back in 45 of 45 runs, on one display
   and across displays. On 27.2 there is no reapply (`reapplyDelay` is nil); the mechanism stays
   for a later macOS.
@@ -150,9 +156,11 @@ moves end within 0.5 s of the end callback.
   end a window; a read that finds the element invalid fails that read only and keeps the
   registration.
 - **Enhanced UI.** Switching it off returns -25208 in a Gecko browser, yet it works. Tafl
-  always attempts it and ignores the status.
-- **Timing.** Reads take 0.06 to 0.7 ms (up to 168 ms right after a cross-display write);
-  writes take 0.1 to 38 ms.
+  always attempts it and ignores the status. Skipping the switch failed in 3 of 3 runs in Zen
+  (the position write reverted the size, and the frame ended 900 pt off), which is why Tafl
+  always attempts it.
+- **Timing.** Reads take 0.06 to 0.7 ms (up to 168 ms right after a cross-display write, and
+  22 to 36 ms right after a size write on a single display); writes take 0.1 to 38 ms.
 
 ## Success
 
@@ -487,9 +495,9 @@ Adding a display that no layout claims and that hasn't been seen before moves no
   restart. It is runtime state, not configuration. It also records which layout is active.
 - **Window matching:** an entry matches by window id, checked against the owning process,
   because titles change. Entries for closed windows are dropped.
-- **macOS's own behaviour comes first.** If the feasibility check shows that macOS 27.2
-  already restores windows when a known setup returns, rule 2 steps aside for the windows
-  macOS restored.
+- **macOS's own behaviour comes first.** macOS 27.2 restores windows itself when a known setup
+  returns (see "Measured on macOS 27.2"), so rule 2 steps aside for a window macOS restored to
+  its last frame.
 
 ### Layouts
 
