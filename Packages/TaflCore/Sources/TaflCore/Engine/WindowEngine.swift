@@ -56,9 +56,10 @@ struct RunFailure: Sendable {
 
 /// What events said about apps while observation restarted. It is newer than a restart's answer,
 /// so it is laid over it: an app learned meanwhile adds what it is missing, and an app that quit
-/// meanwhile is gone whatever the answer says. It also holds what was unobservable when the restart
-/// was asked for, so a failure that events report while the restart waits is not taken for one that
-/// was there before.
+/// meanwhile is gone whatever the answer says. It also holds what was unobservable when the first
+/// pending restart was asked for, less the apps whose retries were still pending then, so a failure
+/// that events report while the restart waits is not taken for one that was there before, and an app
+/// still being retried counts as one that failed in the transient.
 struct RestartJournal {
     private let before: [Int32: Set<ObservedEvent>]
     private var learned: [Int32: Set<ObservedEvent>] = [:]
