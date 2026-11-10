@@ -28,7 +28,7 @@ final class CompositionRoot {
     private var recentFailures: [String] = []
     private var platformInfoTask: Task<Void, Never>?
 
-    private lazy var onboarding = OnboardingWindow { [unowned self] in syncPermission() }
+    private let onboarding = OnboardingWindow()
     private let settingsModel = SettingsModel()
     private lazy var settingsActions = SettingsActions(
         model: settingsModel,
@@ -182,7 +182,9 @@ final class CompositionRoot {
     /// Reads the Accessibility grant and acts on a change: starts the engine, or on a regain
     /// restarts observing and activates the shortcuts, or on a loss removes them.
     func syncPermission() {
-        let granted = permission.isTrusted
+        let observation = permission.observe()
+        Log.app.notice("Accessibility check: \(observation.summary, privacy: .public)")
+        let granted = observation.isTrusted
         let regained = granted && !trusted
         trusted = granted
         defer { refreshMenu() }
