@@ -6,17 +6,25 @@ import TaflTestSupport
 
 /// A clock that moves only when a test calls `advance(by:)`.
 ///
-/// `advance(by:)` steps time: it moves `now` to each due sleeper's deadline in turn, so a
-/// woken task reads its own deadline and a sleep it starts next counts from there. It does not
-/// promise that a woken task has finished its work when it returns. Tests wait on an observable
-/// condition (a log entry, `waitForSleepers`, or `task.bounded()`), never on a yield budget.
+/// `advance(by:)` steps time: it moves `now` to each due sleeper's deadline in turn, so a woken
+/// task reads its own deadline and a sleep it starts next counts from there. A sleeper that is one
+/// of the engine's tasks (`EngineActivity`) stops counting as the engine's work while it sleeps, and
+/// counts again before it is woken; `advance` waits for such a task to sleep again or end before it
+/// moves on, so a sleep it starts next is due in the same advance when it falls in range. Any other
+/// woken task is not waited for. Tests wait on an observable condition (the engine's
+/// `quiescent()`, `waitForSleepers` or `task.bounded()`), never on a yield budget.
 final class ManualClock: TaflClock {
     private struct Sleeper {
         let id: Int
-        /// The task that called `sleep(for:)`.
-        let owner: Int
         let deadline: Duration
         let continuation: CheckedContinuation<Void, any Error>
+        /// The engine's task that sleeps, when one does.
+        let parked: EngineActivity.Parked?
+
+        func wake(with result: Result<Void, any Error>) {
+            parked?.unpark()
+            continuation.resume(with: result)
+        }
     }
 
     private struct State {
@@ -25,72 +33,78 @@ final class ManualClock: TaflClock {
         var sleepers: [Sleeper] = []
     }
 
-    /// How long a woken task gets, in wall-clock time, to start its next sleep before
-    /// `advance(by:)` moves on. A task that is done never does.
-    private static let wakeGrace: Duration = .milliseconds(50)
-
     private let state = Mutex(State())
 
     var now: Duration { state.withLock { $0.now } }
 
-    /// How many tasks are suspended in `sleep(for:)`.
+    /// How many tasks are suspended in `sleep(for:)` or `sleepIgnoringCancellation(for:)`.
     var sleeperCount: Int { state.withLock { $0.sleepers.count } }
 
     func sleep(for duration: Duration) async throws {
-        let id = state.withLock { state -> Int in
-            defer { state.nextID += 1 }
-            return state.nextID
-        }
-        let owner = withUnsafeCurrentTask { $0?.hashValue ?? 0 }
+        let id = nextID()
         try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                let outcome: Result<Void, any Error>? = state.withLock { state in
-                    if Task.isCancelled { return .failure(CancellationError()) }
-                    let deadline = state.now + duration
-                    if deadline <= state.now { return .success(()) }
-                    state.sleepers.append(Sleeper(id: id, owner: owner, deadline: deadline, continuation: continuation))
-                    return nil
-                }
-                if let outcome { continuation.resume(with: outcome) }
-            }
+            try await park(id: id, for: duration, cancellable: true)
         } onCancel: {
             let cancelled = state.withLock { state -> Sleeper? in
                 guard let index = state.sleepers.firstIndex(where: { $0.id == id }) else { return nil }
                 return state.sleepers.remove(at: index)
             }
-            cancelled?.continuation.resume(throwing: CancellationError())
+            cancelled?.wake(with: .failure(CancellationError()))
         }
     }
 
+    /// A sleep that cancellation does not cut short, as a call in flight to an app that does not
+    /// answer takes its whole timeout.
+    func sleepIgnoringCancellation(for duration: Duration) async {
+        try? await park(id: nextID(), for: duration, cancellable: false)
+    }
+
     /// Moves time forward to `now + duration`, waking sleepers in deadline order. For each one
-    /// `now` is set to its deadline first; when time remains, the woken task gets a short
-    /// wall-clock grace to start its next sleep, which is then due in turn if it falls in range.
-    /// Only a sleep by that same task ends the grace, so other tasks' sleeps cannot cut it short.
-    func advance(by duration: Duration) async {
+    /// `now` is set to its deadline first; when time remains and the sleeper is one of the engine's
+    /// tasks, `advance` waits for that task to sleep again or end, and a sleep it starts that falls in
+    /// range is due in turn.
+    func advance(by duration: Duration, sourceLocation: SourceLocation = #_sourceLocation) async {
         let target = state.withLock { $0.now + duration }
         while let sleeper = takeNextSleeper(due: target) {
-            sleeper.continuation.resume()
-            guard sleeper.deadline < target else { continue }
-            _ = await pollUntil(timeout: Self.wakeGrace) {
-                state.withLock { state in state.sleepers.contains { $0.owner == sleeper.owner } }
+            sleeper.wake(with: .success(()))
+            guard sleeper.deadline < target, let parked = sleeper.parked else { continue }
+            await waitUntil("the engine's task woken at \(sleeper.deadline) to sleep again or end", sourceLocation: sourceLocation) {
+                !parked.isRunning
             }
         }
         state.withLock { $0.now = max($0.now, target) }
     }
 
-    /// Waits for `count` tasks to be suspended in `sleep(for:)`, so a test advances only after
-    /// the sleeper it started has registered. Records an issue after `timeout` of wall-clock time.
+    /// Waits for `count` tasks to be suspended in a sleep, so a test advances only after the sleeper
+    /// it started has registered.
     func waitForSleepers(
         _ count: Int,
-        timeout: Duration = .seconds(2),
+        timeout: Duration = defaultWaitBound,
         sourceLocation: SourceLocation = #_sourceLocation
     ) async {
-        let arrived = await pollUntil(timeout: timeout) { sleeperCount >= count }
-        if !arrived {
-            Issue.record(
-                "Timed out waiting for \(count) sleepers; \(sleeperCount) registered",
-                sourceLocation: sourceLocation
-            )
+        await waitUntil("\(count) sleeper\(count == 1 ? "" : "s") on the clock", timeout: timeout, sourceLocation: sourceLocation) {
+            sleeperCount >= count
+        }
+    }
+
+    private func nextID() -> Int {
+        state.withLock { state in
+            defer { state.nextID += 1 }
+            return state.nextID
+        }
+    }
+
+    private func park(id: Int, for duration: Duration, cancellable: Bool) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            let outcome: Result<Void, any Error>? = state.withLock { state in
+                if cancellable, Task.isCancelled { return .failure(CancellationError()) }
+                let deadline = state.now + duration
+                if deadline <= state.now { return .success(()) }
+                let parked = EngineActivity.parkCurrentTask()
+                state.sleepers.append(Sleeper(id: id, deadline: deadline, continuation: continuation, parked: parked))
+                return nil
+            }
+            if let outcome { continuation.resume(with: outcome) }
         }
     }
 

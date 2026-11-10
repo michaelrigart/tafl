@@ -161,6 +161,8 @@ public actor WindowEngine {
     var nextBackgroundID = 0
     /// How many platform events have been dealt with, for tests to wait on.
     var eventsHandled = 0
+    /// The engine's work in progress, for tests to wait until there is none (`quiescent`).
+    let activity = EngineActivity()
     /// Set once `stopPlacing` begins: no new request starts, and nothing but `stop` saves.
     var isStopping = false
 
@@ -203,6 +205,8 @@ public actor WindowEngine {
     /// Loads the memory, starts observing and, when the display setup differs from the one
     /// the memory last saw, runs the display change rules. Call it once.
     public func start(config: Config) async {
+        activity.enter()
+        defer { activity.leave() }
         self.config = config
         let load = await memory.load()
         report(.memory(load))
@@ -254,6 +258,8 @@ public actor WindowEngine {
     /// A layout application still running finishes against the config in force then: a layout the
     /// reload removed does not become active.
     public func update(config: Config) async {
+        activity.enter()
+        defer { activity.leave() }
         self.config = config
         activeLayout.reconcile(with: config)
         let layout = activeLayout.name
@@ -261,6 +267,8 @@ public actor WindowEngine {
     }
 
     public func save() async {
+        activity.enter()
+        defer { activity.leave() }
         guard !isStopping else { return }
         await writeMemory()
     }
@@ -275,6 +283,8 @@ public actor WindowEngine {
     /// nothing more, and nothing saves but `stop`. Quit calls it before it waits for startup and a
     /// restart, which a slow app can hold up. Idempotent.
     public func stopPlacing() async {
+        activity.enter()
+        defer { activity.leave() }
         isStopping = true
         stops.begin()
         eventTask?.cancel()
@@ -294,6 +304,8 @@ public actor WindowEngine {
     /// Stops placing, waits until each request has ended its session and recorded what it did,
     /// stops observing and saves the memory. The engine does not start again.
     public func stop() async {
+        activity.enter()
+        defer { activity.leave() }
         await stopPlacing()
         await queue.stop()
         await platform.stopObserving()
@@ -305,6 +317,8 @@ public actor WindowEngine {
     /// time, and only the newest commits: it lays what events said since the first pending one
     /// was asked for over its answer.
     public func restartObserving() async {
+        activity.enter()
+        defer { activity.leave() }
         let generation = restarts.begin()
         observeRetryTask?.cancel()
         observeRetryTask = nil
@@ -346,16 +360,19 @@ public actor WindowEngine {
         let delays = timing.observeRetryDelays
         pendingRetries = delays.isEmpty ? [] : pids
         guard !pendingRetries.isEmpty else { return }
+        let unit = activity.startingTask()
         observeRetryTask = Task { [clock] in
-            var pending = pids
-            var elapsed = Duration.zero
-            for delay in delays {
-                do { try await clock.sleep(for: delay - elapsed) } catch { return }
-                elapsed = delay
-                pending = await self.observeAgain(pending, after: generation)
-                if pending.isEmpty { return }
+            await unit.run {
+                var pending = pids
+                var elapsed = Duration.zero
+                for delay in delays {
+                    do { try await clock.sleep(for: delay - elapsed) } catch { return }
+                    elapsed = delay
+                    pending = await self.observeAgain(pending, after: generation)
+                    if pending.isEmpty { return }
+                }
+                self.endRetries(after: generation)
             }
-            self.endRetries(after: generation)
         }
     }
 
@@ -413,6 +430,8 @@ public actor WindowEngine {
     // MARK: Actions
 
     public func perform(_ action: Action) async {
+        activity.enter()
+        defer { activity.leave() }
         guard !isStopping else { return }
         guard await platform.isAccessibilityGranted() else {
             report(.failure(.permissionMissing, display: nil))
@@ -478,6 +497,8 @@ public actor WindowEngine {
     /// window order, to it. The windows it placed come to the front when it ends; a layout applied
     /// on a display change does not (`run` is shared, the raising is not).
     public func applyLayout(named name: String) async {
+        activity.enter()
+        defer { activity.leave() }
         guard !isStopping else { return }
         guard await platform.isAccessibilityGranted() else {
             report(.failure(.permissionMissing, display: nil))
@@ -619,9 +640,12 @@ public actor WindowEngine {
     func track(_ work: @escaping @Sendable () async -> Void) -> Task<Void, Never> {
         let id = nextBackgroundID
         nextBackgroundID += 1
+        let unit = activity.startingTask()
         let task = Task {
-            await work()
-            self.finishTracked(id)
+            await unit.run {
+                await work()
+                self.finishTracked(id)
+            }
         }
         background[id] = task
         return task
@@ -630,5 +654,12 @@ public actor WindowEngine {
     private func finishTracked(_ id: Int) {
         background[id] = nil
         eventsHandled += 1
+    }
+
+    /// For tests: returns once the engine has received `events` platform events in all and none of
+    /// its work can go on without new input or a clock advance (`EngineActivity`). Events the
+    /// platform has sent are not seen until received, so a test passes how many it sent.
+    nonisolated func quiescent(afterEvents events: Int = 0) async {
+        await activity.quiet(afterEvents: events)
     }
 }

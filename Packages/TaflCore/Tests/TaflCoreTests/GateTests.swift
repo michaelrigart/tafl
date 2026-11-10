@@ -70,8 +70,8 @@ private final class Steps: Sendable {
     #expect(steps.all == ["parked", "woken", "went on"])
 }
 
-@Test(.timeLimit(.minutes(1))) func aGateOutsideAGatedTestIsAnIssue() async {
-    await withKnownIssue("nothing would open it when the test ends") {
+@Test func aGateOutsideAGatedTestIsAnIssue() {
+    withKnownIssue("nothing would open it when the test ends") {
         _ = Gate()
     }
 }

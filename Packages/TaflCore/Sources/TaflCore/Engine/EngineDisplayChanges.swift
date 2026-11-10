@@ -38,7 +38,8 @@ extension WindowEngine {
             settleTask = nil
             return
         }
-        settleTask = Task { await self.awaitSettle() }
+        let unit = activity.startingTask()
+        settleTask = Task { await unit.run { await self.awaitSettle() } }
     }
 
     private func awaitSettle() async {
@@ -65,7 +66,8 @@ extension WindowEngine {
             // Taken here, with the decision: a reconfiguration that begins before the task first
             // runs must still be seen to have moved the count.
             let began = reconfigurations.current
-            rulesTask = Task { await self.settle(since: began) }
+            let unit = activity.startingTask()
+            rulesTask = Task { await unit.run { await self.settle(since: began) } }
         } else {
             armSettle()
         }

@@ -6,6 +6,7 @@ extension WindowEngine {
         eventTask = Task { [platform] in
             for await event in platform.events {
                 await self.handle(event)
+                self.activity.receivedEvent()
             }
         }
     }
