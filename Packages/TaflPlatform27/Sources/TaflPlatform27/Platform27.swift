@@ -53,7 +53,7 @@ final class Platform27: WindowPlatform {
     }
 
     func isAccessibilityGranted() async -> Bool {
-        AXIsProcessTrusted()
+        AccessibilityTrust.read()
     }
 
     func appName(pid: Int32) async -> String? {
