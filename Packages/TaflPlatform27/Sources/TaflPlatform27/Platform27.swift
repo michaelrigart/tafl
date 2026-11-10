@@ -194,6 +194,17 @@ final class Platform27: WindowPlatform {
         return unobservable
     }
 
+    func observeAgain(pids: Set<Int32>) async -> [UnobservableApp] {
+        let observation = observation
+        let apps = pids.compactMap(AppInfo27.running(pid:))
+        return await withTaskGroup(of: UnobservableApp?.self) { group in
+            for app in apps { group.addTask { await observation.observeAgain(app) } }
+            var failed: [UnobservableApp] = []
+            for await result in group { if let result { failed.append(result) } }
+            return failed.sorted { $0.pid < $1.pid }
+        }
+    }
+
     func stopObserving() async {
         observation.end()
         let installed = watcher.withLock { $0.take() }

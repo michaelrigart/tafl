@@ -102,6 +102,8 @@ actor FakePlatform: WindowPlatform {
     var waitingSessionCount: Int { waiters.values.reduce(0) { $0 + $1.count } }
     private(set) var startObservingCount = 0
     private(set) var stopObservingCount = 0
+    /// The pids each `observeAgain(pids:)` call was given, in order.
+    private(set) var observeAgainCalls: [Set<Int32>] = []
     /// What the last `startObserving(notices:)` was given.
     private var notices: (any WindowNotices)?
 
@@ -298,6 +300,13 @@ actor FakePlatform: WindowPlatform {
             await gate.wait()
         }
         return unobserved.map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
+    }
+
+    /// Answers from `unobserved`, as `startObserving` does: a test changes it to say what a retry finds.
+    func observeAgain(pids: Set<Int32>) async -> [UnobservableApp] {
+        observeAgainCalls.append(pids)
+        return unobserved.filter { pids.contains($0.pid) }
+            .map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
     }
 
     func stopObserving() async { stopObservingCount += 1 }

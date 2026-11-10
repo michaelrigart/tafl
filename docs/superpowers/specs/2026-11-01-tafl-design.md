@@ -153,7 +153,8 @@ moves end within 0.5 s of the end callback.
 - **Wake.** For about 2 s around wake, Accessibility reads of live windows fail with -25202
   (invalid element). So only a window's destroyed notification and its app's quit end a
   window; a read that finds the element invalid fails that read only and keeps the
-  registration. A DarkWake shows a placeholder display (no name, "unkn" and "virt",
+  registration. An app that fails to register in that window is tried again (see "After wake
+  or a user switch"). A DarkWake shows a placeholder display (no name, "unkn" and "virt",
   1920 x 1080) for about 1.3 s, shorter than the 1.5 s quiet period. One that lasted longer
   would settle as a new setup, so Tafl never settles on a setup that holds one (see "Display
   changes"). Known limit: a real display that reports no name with vendor "unkn" and model
@@ -714,7 +715,12 @@ Settings shows the configuration in plain language and never edits it.
   new windows, so the display-change rules and an active layout leave the app's windows
   alone. Each such app is logged, and the count is in Copy Diagnostics.
 - **After wake or a user switch,** Tafl re-registers its hotkeys and re-creates its
-  observers.
+  observers. An app that observed fine before, and fails to register during the wake
+  transient, is tried again 3 s and 10 s after the restart: one that registers then is
+  observed again, and takes part in the display-change rules and the active layout; one that
+  still fails after the last try stays unobservable. An app that was already unobservable
+  before the restart is not tried again, and a newer restart, a quit or Tafl stopping ends
+  the tries for it.
 
 ### Menu bar icon
 

@@ -93,6 +93,11 @@ public protocol WindowPlatform: Sendable {
     /// and of each app's quit, in the app's order. The apps whose events could not be observed are
     /// the result; one that fails later arrives as a `.unobservable` event.
     func startObserving(notices: any WindowNotices) async -> [UnobservableApp]
+    /// Registers these apps' observers once more, as `startObserving` did, for apps that failed to
+    /// register during a transient. The apps still unobservable are the result; a pid that is not
+    /// running, or that observing has not claimed, is left alone and is not in it. Everything else
+    /// stays as it is.
+    func observeAgain(pids: Set<Int32>) async -> [UnobservableApp]
     /// Stops observing. `events` stays open: the engine keeps consuming it across a restart.
     func stopObserving() async
 }

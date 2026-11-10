@@ -152,6 +152,31 @@ final class WindowObservation27: Sendable {
         return (.unobservable(Self.unobservable(app, failures)), claim)
     }
 
+    /// Registers an app this run already claimed once more, after a registration that failed (for
+    /// about 2 s around a wake, Accessibility calls on live apps fail). The old claim ends, so
+    /// nothing still in flight under it does anything. The app is the result when its events still
+    /// cannot be observed; nil when they can, or when the app is gone or was never claimed. Each
+    /// outcome is logged.
+    func observeAgain(_ app: AppInfo27) async -> UnobservableApp? {
+        let wasClaimed = state.withLock { state in
+            state.isActive && state.claims.removeValue(forKey: app.pid) != nil
+        }
+        guard wasClaimed else { return nil }
+        let attempt = await claimedAttempt(app)
+        guard attempt.claim != nil else { return nil }
+        switch attempt.outcome {
+        case .unobservable(let unobservable):
+            PlatformLog.windows.notice("Cannot observe \(app.bundleID ?? "an app", privacy: .public)")
+            return unobservable
+        case .observed:
+            PlatformLog.windows.notice("Observing \(app.bundleID ?? "an app", privacy: .public) again after wake")
+            return nil
+        case .retrying:
+            // Still launching: the retry's outcome arrives as an event.
+            return nil
+        }
+    }
+
     /// Meets an app a query found: observes it if this run has not. A query never announces windows.
     func discover(_ app: AppInfo27) async {
         await observeReporting(app)

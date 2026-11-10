@@ -245,6 +245,37 @@ func aRetryThatFailsAgainReportsTheAppUnobservable() async {
     #expect(harness.registrations.count == 1)
 }
 
+@Test func anAppThatFailedToRegisterIsRegisteredAgainAndObservedWhenTheTransientIsOver() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout, [:]])
+    guard case .unobservable = await harness.observation.attempt(launching) else {
+        Issue.record("expected unobservable")
+        return
+    }
+    #expect(await harness.observation.observeAgain(launching) == nil)
+    #expect(harness.registrations.count == 2)
+    // It holds a claim again: a query does not register it a third time.
+    _ = await harness.observation.attempt(launching)
+    #expect(harness.registrations.count == 2)
+}
+
+@Test func anAppThatFailsAgainIsStillUnobservable() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout])
+    _ = await harness.observation.attempt(launching)
+    let again = await harness.observation.observeAgain(launching)
+    #expect(again == UnobservableApp(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
+    #expect(harness.registrations.count == 2)
+}
+
+@Test func anAppTheRunNeverClaimedOrThatIsGoneIsNotRegisteredAgain() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]])
+    #expect(await harness.observation.observeAgain(launching) == nil)
+    #expect(harness.registrations.count == 0)
+    _ = await harness.observation.attempt(launching)
+    harness.isRunning.isSet = false
+    #expect(await harness.observation.observeAgain(launching) == nil)
+    #expect(harness.registrations.count == 1)
+}
+
 @Test func anAppIsRegisteredOncePerRunAndNeverForTaflItself() async {
     let harness = ObservationHarness(outcomes: [[:]])
     _ = await harness.observation.attempt(launching)

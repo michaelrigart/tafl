@@ -126,6 +126,8 @@ public actor WindowEngine {
     var restartJournal: RestartJournal?
     /// The latest restart; the next one waits for it.
     var restartTask: Task<Void, Never>?
+    /// The schedule of tries for the apps the latest restart could not observe.
+    var observeRetryTask: Task<Void, Never>?
     var eventTask: Task<Void, Never>?
     /// The wait for the quiet period. An input replaces it; the rules run is not part of it.
     var settleTask: Task<Void, Never>?
@@ -255,6 +257,8 @@ public actor WindowEngine {
         settleTask?.cancel()
         rulesTask?.cancel()
         for task in background.values { task.cancel() }
+        observeRetryTask?.cancel()
+        observeRetryTask = nil
         eventTask = nil
         settleTask = nil
         rulesTask = nil
@@ -278,6 +282,8 @@ public actor WindowEngine {
     /// was asked for over its answer.
     public func restartObserving() async {
         let generation = restarts.begin()
+        observeRetryTask?.cancel()
+        observeRetryTask = nil
         if restartJournal == nil { restartJournal = RestartJournal() }
         let previous = restartTask
         let task = Task {
@@ -296,11 +302,54 @@ public actor WindowEngine {
         guard restarts.isCurrent(generation), !isStopping, let journal = restartJournal else { return }
         var answer: [Int32: Set<ObservedEvent>] = [:]
         for app in apps { answer[app.pid, default: []].formUnion(app.missing) }
+        let before = unobservable
         unobservable = journal.applied(to: answer)
         restartJournal = nil
         for app in apps where unobservable[app.pid] != nil {
             if reportedUnobservable.insert(app.pid).inserted { report(.unobservable(bundleID: app.bundleID)) }
         }
+        // An app that was observable before may have failed only because of a transient (a wake).
+        let transient = Set(unobservable.filter { !$0.value.isEmpty && (before[$0.key]?.isEmpty ?? true) }.keys)
+        scheduleObserveRetries(for: transient, after: generation)
+    }
+
+    // MARK: Retrying unobservable apps
+
+    /// Tries the apps again at each of the timing's delays, measured from the restart, until none is
+    /// left. A newer restart, a stop and an app's quit end the tries for the apps they concern.
+    private func scheduleObserveRetries(for pids: Set<Int32>, after generation: Int) {
+        let delays = timing.observeRetryDelays
+        guard !pids.isEmpty, !delays.isEmpty else { return }
+        observeRetryTask = Task { [clock] in
+            var pending = pids
+            var elapsed = Duration.zero
+            for delay in delays {
+                do { try await clock.sleep(for: delay - elapsed) } catch { return }
+                elapsed = delay
+                pending = await self.observeAgain(pending, after: generation)
+                if pending.isEmpty { return }
+            }
+        }
+    }
+
+    /// The apps still unobservable after trying these again. Whatever has happened meanwhile (a newer
+    /// restart, a stop, an app's quit) is respected: nothing changes for the apps it concerns.
+    private func observeAgain(_ pids: Set<Int32>, after generation: Int) async -> Set<Int32> {
+        guard restarts.isCurrent(generation), !isStopping else { return [] }
+        let candidates = pids.filter { !(unobservable[$0]?.isEmpty ?? true) }
+        guard !candidates.isEmpty else { return [] }
+        let still = await platform.observeAgain(pids: candidates)
+        guard restarts.isCurrent(generation), !isStopping else { return [] }
+        var remaining: Set<Int32> = []
+        for pid in candidates where unobservable[pid] != nil {
+            if let app = still.first(where: { $0.pid == pid }) {
+                unobservable[pid] = app.missing
+                remaining.insert(pid)
+            } else {
+                unobservable[pid] = nil
+            }
+        }
+        return remaining
     }
 
     // MARK: Unobservable apps
