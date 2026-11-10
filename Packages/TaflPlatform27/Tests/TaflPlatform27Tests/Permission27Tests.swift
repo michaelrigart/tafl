@@ -61,6 +61,11 @@ private final class Scheduled: Sendable {
         work.withLock { $0.append(body) }
     }
 
+    func runNext() {
+        let next = work.withLock { items in items.isEmpty ? nil : items.removeFirst() }
+        next?()
+    }
+
     func runAll() {
         let pending = work.withLock { items in
             defer { items = [] }
@@ -72,18 +77,21 @@ private final class Scheduled: Sendable {
 
 private func permission(
     initial: Bool = false, center: NotificationCenter = NotificationCenter(), scheduled: Scheduled = Scheduled(),
-    check: @escaping @Sendable () async -> Bool?
+    check: @escaping @Sendable () async -> Bool?, fallback: (@Sendable () -> Bool)? = nil
 ) -> Permission27 {
-    Permission27(center: center, name: name, initial: { initial }, check: check, after: scheduled.schedule)
+    Permission27(
+        center: center, name: name, initial: { initial }, check: check, fallback: fallback ?? { initial },
+        after: scheduled.schedule)
 }
 
 @MainActor
 @Test(.timeLimit(.minutes(1))) func aChangedResultIsEmittedOnceAndBecomesTheValue() async {
-    let script = ScriptedCheck([true, true, false])
+    let script = ScriptedCheck([true, false])
     let center = NotificationCenter()
     let scheduled = Scheduled()
     let permission = permission(center: center, scheduled: scheduled, check: script.call)
     center.post(name: name, object: nil)
+    await script.waitForCalls(1)
     scheduled.runAll()
     #expect(await collect(permission.changes, count: 2) == [true, false])
     #expect(!permission.isTrusted)
@@ -114,7 +122,9 @@ private func permission(
     await script.waitForCalls(1)
     #expect(scheduled.delays.withLock { $0 } == [.milliseconds(500), .seconds(2)])
     #expect(script.callCount == 1)
-    scheduled.runAll()
+    scheduled.runNext()
+    await script.waitForCalls(2)
+    scheduled.runNext()
     await script.waitForCalls(3)
     #expect(script.callCount == 3)
     withExtendedLifetime(permission) {}
@@ -137,15 +147,46 @@ private func permission(
 }
 
 @MainActor
-@Test(.timeLimit(.minutes(1))) func aFailedCheckChangesNothing() async {
+@Test(.timeLimit(.minutes(1))) func aFailedCheckAnswersWithTheFallback() async {
     let script = ScriptedCheck([nil, nil, nil])
     let scheduled = Scheduled()
     let center = NotificationCenter()
-    let permission = permission(initial: true, center: center, scheduled: scheduled, check: script.call)
+    let permission = permission(
+        initial: true, center: center, scheduled: scheduled, check: script.call, fallback: { false })
     center.post(name: name, object: nil)
     scheduled.runAll()
-    await script.waitForCalls(3)
-    #expect(permission.isTrusted)
+    #expect(await collect(permission.changes, count: 1) == [false])
+    #expect(!permission.isTrusted)
+}
+
+@MainActor
+@Test(.timeLimit(.minutes(1))) func aCheckThatAnswersIsNotReplacedByTheFallback() async {
+    let script = ScriptedCheck([false, false, false])
+    let center = NotificationCenter()
+    let permission = permission(initial: true, center: center, check: script.call, fallback: { true })
+    center.post(name: name, object: nil)
+    #expect(await collect(permission.changes, count: 1) == [false])
+    #expect(!permission.isTrusted)
+}
+
+@MainActor
+@Test(.timeLimit(.minutes(1))) func requestsDuringACheckLeadToExactlyOneMoreCheck() async {
+    let (gate, release) = AsyncStream<Void>.makeStream()
+    let script = ScriptedCheck([true, false, false, false], holdingCall: 1, until: gate)
+    let scheduled = Scheduled()
+    let center = NotificationCenter()
+    var held: Permission27? = permission(center: center, scheduled: scheduled, check: script.call)
+    var changes = held!.changes.makeAsyncIterator()
+    center.post(name: name, object: nil)
+    await script.waitForCalls(1)
+    for _ in 0..<4 { center.post(name: name, object: nil) }
+    scheduled.runAll()
+    release.finish()
+    #expect(await changes.next() == true)
+    #expect(await changes.next() == false)
+    held = nil
+    #expect(await changes.next() == nil)
+    #expect(script.callCount == 2)
 }
 
 @MainActor

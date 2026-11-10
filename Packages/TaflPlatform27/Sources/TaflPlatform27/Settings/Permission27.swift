@@ -47,23 +47,27 @@ public final class Permission27: @unchecked Sendable { // reason: `observer` is 
             let child = ChildExitStatus(executable: executable, arguments: [Self.checkArgument], timeout: 1)
             check = { await child.run() }
         } else {
-            check = { AXIsProcessTrusted() }
+            check = { nil }
         }
         self.init(
             center: DistributedNotificationCenter.default(),
             name: Notification.Name("com.apple.accessibility.api"),
             initial: { AXIsProcessTrusted() },
-            check: check)
+            check: check,
+            fallback: { AXIsProcessTrusted() })
     }
 
     /// The notification can arrive before the change takes effect, so each one asks for a check at once
     /// and again 0.5 s and 2 s later (`after` runs the later ones). Checks run one at a time, in the
-    /// order asked, so a late answer never overwrites a later one. A result that differs from the value
-    /// held replaces it and is emitted; nil, a check that failed, changes nothing. `initial` reads the
-    /// first value, which a fresh process gets right.
+    /// order asked, so a late answer never overwrites a later one; requests that arrive while a check
+    /// runs coalesce into one more check after it. A result that differs from the value held replaces
+    /// it and is emitted. A check that answers nil (it did not start, timed out or ended oddly) is
+    /// replaced by `fallback`, the process's own answer, so a revoke is not lost when the child cannot
+    /// run. `initial` reads the first value, which a fresh process gets right.
     init(
         center: NotificationCenter, name: Notification.Name, initial: @Sendable () -> Bool,
         check: @escaping @Sendable () async -> Bool?,
+        fallback: @escaping @Sendable () -> Bool,
         after: @escaping @Sendable (Duration, @escaping @Sendable () -> Void) -> Void = Permission27.afterOnMain
     ) {
         self.center = center
@@ -71,11 +75,11 @@ public final class Permission27: @unchecked Sendable { // reason: `observer` is 
         self.current = current
         let (stream, continuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .unbounded)
         changes = stream
-        let (checkRequests, requests) = AsyncStream<Void>.makeStream(bufferingPolicy: .unbounded)
+        let (checkRequests, requests) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         self.requests = requests
         Task {
             for await _ in checkRequests {
-                guard let result = await check() else { continue }
+                let result = await check() ?? fallback()
                 if current.set(result) { continuation.yield(result) }
             }
             continuation.finish()
