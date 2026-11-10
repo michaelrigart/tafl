@@ -205,7 +205,12 @@ enum Probe {
                     raise: { AXWindowAccess.raise(window) },
                     makeFrontmost: { AXWindowAccess.setFrontmost(app: pid) })
             }
-            var line = "raise: bundle=\(bundleID) pid=\(pid) outcome=\(outcome.map { "\($0)" } ?? "no window")"
+            let outcomeText = switch outcome {
+            case nil: "no window"
+            case .failed(let code)?: "failed(\(code.rawValue))"
+            case let other?: "\(other)"
+            }
+            var line = "raise: bundle=\(bundleID) pid=\(pid) outcome=\(outcomeText)"
             if outcome == .raisedWithoutFrontmost {
                 let activated = Raise27.activate(pid: pid, admit: { true })
                 line += " activated=\(activated)"
