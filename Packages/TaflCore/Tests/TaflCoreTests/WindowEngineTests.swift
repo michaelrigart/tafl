@@ -134,20 +134,32 @@ private final class Rig: Sendable {
     }
 
     /// Waits until every report sent so far has been collected: the engine sends a marker after them
-    /// and reports keep their order, so a test can say that none of a kind was sent. Works on a
-    /// stopped engine too.
+    /// and reports keep their order, so a test can say that none of a kind was sent. Each drain sends
+    /// a marker of its own and waits for that one, so a second drain on the rig never matches the
+    /// marker of an earlier one. Works on a stopped engine too.
     func waitForReportsUpToNow(sourceLocation: SourceLocation = #_sourceLocation) async {
-        await engine.report(Self.marker)
-        await waitForReport(sourceLocation: sourceLocation) { $0 == Self.marker }
+        let number = nextMarker.withLock { count in
+            count += 1
+            return count
+        }
+        let marker = EngineReport.layoutApplied(name: "\(Self.markerPrefix)\(number)", placed: 0, failed: 0)
+        await engine.report(marker)
+        await waitForReport(sourceLocation: sourceLocation) { $0 == marker }
     }
 
-    private static let marker = EngineReport.layoutApplied(name: "marker", placed: 0, failed: 0)
+    private static let markerPrefix = "marker-"
+    private let nextMarker = Mutex(0)
 
-    /// Every report sent so far, without the marker that `waitForReportsUpToNow` sends: what a test
+    private static func isMarker(_ report: EngineReport) -> Bool {
+        if case .layoutApplied(let name, 0, 0) = report { return name.hasPrefix(markerPrefix) }
+        return false
+    }
+
+    /// Every report sent so far, without the markers that `waitForReportsUpToNow` sends: what a test
     /// reads to say that none of a kind was sent, or what the exact list was, or how many there were.
     func reportsUpToNow(sourceLocation: SourceLocation = #_sourceLocation) async -> [EngineReport] {
         await waitForReportsUpToNow(sourceLocation: sourceLocation)
-        return reports.filter { $0 != Self.marker }
+        return reports.filter { !Self.isMarker($0) }
     }
 
     /// Waits until `count` display changes have been handled in all.
@@ -358,6 +370,20 @@ private final class Rig: Sendable {
         .layoutApplied(name: "Work", placed: 0, failed: 2),
         .failure(.cannotMove, display: displayA.identity),
     ])
+}
+
+@Test func aSecondDrainOnOneRigCollectsTheReportsSentAfterTheFirst() async {
+    let rig = await Rig(windows: [], focused: nil)
+    await rig.engine.start(config: config())
+    #expect(await rig.reportsUpToNow() == [.memory(.fresh)])
+    // Collection runs beside the test, so one round may win the race by luck; many do not.
+    var expected: [EngineReport] = [.memory(.fresh)]
+    for _ in 0..<50 {
+        let stray = EngineReport.failure(.permissionMissing, display: nil)
+        expected.append(stray)
+        await rig.engine.report(stray)
+        #expect(await rig.reportsUpToNow() == expected)
+    }
 }
 
 @Test func aLayoutWithoutPermissionIsReportedAndMovesNothing() async {
