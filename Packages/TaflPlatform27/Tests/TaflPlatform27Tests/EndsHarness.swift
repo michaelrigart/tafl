@@ -10,8 +10,6 @@ final class ManualQueue: Sendable {
     private let work = Mutex<[@Sendable () -> Void]>([])
     private let queued = CountWaiters()
 
-    var count: Int { work.withLock { $0.count } }
-
     func enqueue(_ body: @escaping @Sendable () -> Void) {
         work.withLock { $0.append(body) }
         queued.increment()

@@ -2655,26 +2655,35 @@ func aNewWindowMovedBeforeItsPlacementReadsItKeepsTheMovedFrame(eventReadFirst: 
 }
 
 /// Around a wake the platform fails reads of live windows for about 2 s and delivers no end for them.
-/// A failed frame read changes nothing the engine or the owner holds, and the next good read is
-/// judged against the placed record as before.
+/// A failed frame read changes nothing the engine or the owner holds: the placed record, the restore
+/// chain and the last-known frames stay as they were, and the next good read is judged against the
+/// placed record as before. This pins the core's side; that the platform ends no window on a failed
+/// read is pinned by RegisteredReadTests and WindowEndsTests.
 @Test(.timeLimit(.minutes(1))) func aFailedFrameReadKeepsTheWindowsRecordsForTheNextRead() async {
     let desk = layout("Desk", [slot(.rightHalf)])
     let rig = await Rig(windows: [window(1, frame: start)], focused: nil)
     await rig.engine.start(config: config(layouts: [desk]))
     await rig.engine.applyLayout(named: "Desk")
-    let placed = await rig.engine.memory.read().placed[handle]
-    #expect(placed != nil)
+    let before = await rig.engine.memory.read()
+    #expect(before.placed[handle] != nil)
+    #expect(before.restore[handle] != nil)
+    #expect(!before.lastKnown.isEmpty)
     let touchedBefore = await rig.isTouched()
     await rig.fake.configure { $0.windows[handle] = nil }
     await rig.emit(.windowMoved(handle))
     await rig.waitForEvents(1)
     #expect(await rig.engine.owner.knows(handle))
-    #expect(await rig.engine.memory.read().placed[handle] == placed)
+    var after = await rig.engine.memory.read()
+    #expect(after.placed == before.placed)
+    #expect(after.restore == before.restore)
+    #expect(after.lastKnown == before.lastKnown)
     await rig.fake.configure { $0.windows[handle] = window(1, frame: rightHalfA) }
     await rig.emit(.windowMoved(handle))
     await rig.waitForEvents(2)
     #expect(await rig.engine.owner.knows(handle))
-    #expect(await rig.engine.memory.read().placed[handle] == placed)
+    after = await rig.engine.memory.read()
+    #expect(after.placed == before.placed)
+    #expect(after.restore == before.restore)
     #expect(await rig.isTouched() == touchedBefore)
 }
 

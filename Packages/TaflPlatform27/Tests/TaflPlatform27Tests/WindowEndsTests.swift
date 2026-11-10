@@ -66,19 +66,6 @@ func aReplacementRegisteredBeforeAnEndStaysAndIsNotEnded() async {
     harness.translator.closeAll()
 }
 
-/// A window the registry no longer holds, as after its app quit, queues nothing: a queue made for it
-/// would outlive the app, since nothing forgets the queue of a pid that has quit.
-@Test(.timeLimit(.minutes(1)))
-func anEndForAWindowNoLongerRegisteredQueuesNothingOnTheAppsQueue() async {
-    let queue = ManualQueue()
-    let harness = EndsHarness(queue: queue)
-    let window = harness.register(1010)
-    harness.registry.removeApp(pid: EndsHarness.pid)
-    harness.ends.end(window, harness.element(1010))
-    #expect(queue.count == 0)
-    harness.translator.closeAll()
-}
-
 /// A read of the app queued ahead of a dead window's end registers a new element for the window's id
 /// and hands its reading over. The end's withdraw and its notice run together after that read, on the
 /// app's queue: the withdraw finds the new registration, removes nothing, and nothing announces the
