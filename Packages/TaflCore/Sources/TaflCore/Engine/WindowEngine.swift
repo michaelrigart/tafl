@@ -111,6 +111,10 @@ public actor WindowEngine {
     /// True once the rules have started for the change in progress: the next settle runs them
     /// again even when the setup is back to where it began, since windows may be half way.
     var rulesStarted = false
+    /// True from a start on a placeholder with no setup remembered until the first real setup is
+    /// recorded: that one is a first setup, with no rule to run. A settled change to no displays is
+    /// no such start; it is a setup, and the one after it is compared with it.
+    var awaitingFirstSetup = false
     /// Apps whose events macOS would not deliver, and which events those are. The owner records no
     /// last-known frame for an app whose moves or resizes are among them.
     var unobservable: [Int32: Set<ObservedEvent>] = [:] {
@@ -193,6 +197,7 @@ public actor WindowEngine {
             // is compared with; with none remembered the next real setup is a first setup.
             owner.freezeLastKnown(on: remembered.lastDisplays)
             changeOrigin = remembered.lastDisplays
+            awaitingFirstSetup = remembered.lastSetup == nil
             listen()
         } else if let lastSetup = remembered.lastSetup, lastSetup != DisplaySetup(current) {
             owner.freezeLastKnown(on: remembered.lastDisplays)

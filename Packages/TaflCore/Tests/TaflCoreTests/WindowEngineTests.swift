@@ -806,6 +806,22 @@ private func startingOnAPlaceholderWithNothingRememberedRecordsAndStoresNothingA
     #expect(await rig.engine.memory.read().lastDisplays == [displayA])
 }
 
+@Test(.timeLimit(.minutes(1))) func aDisplayPluggedBackInAfterASettledUnplugToNoDisplaysRunsTheRulesAndAppliesTheClaimingLayout() async {
+    // Only an external display, which a layout claims: a settled change to no displays is a setup
+    // too, so the next one is compared with it and is no first setup.
+    let desk = layout("Desk only", displays: ["Desk"], [slot(.leftHalf, display: "Desk")])
+    let rig = await Rig(displays: [displayB], windows: [window(1, frame: rect(1100, 100, 400, 300))])
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.changeDisplays(to: [], eventsHandledAfter: 2)
+    await rig.waitForChanges(1)
+    #expect(await rig.engine.activeLayoutName == nil)
+
+    await rig.changeDisplays(to: [displayB], eventsHandledAfter: 4)
+    await rig.waitForChanges(2)
+    #expect(await rig.engine.activeLayoutName == "Desk only")
+    #expect(await rig.frame() == leftHalfB)
+}
+
 /// A second display that is a placeholder, where the second display of `bothDisplays` is.
 private let placeholderB = Display(
     identity: displayB.identity, frame: displayB.frame, visibleFrame: displayB.visibleFrame, isPlaceholder: true
