@@ -30,12 +30,14 @@ func forgettingWaitsForWorkAlreadyOnTheQueue() async {
         }
     }
     for await _ in started { break }
+    let (queued, didQueue) = AsyncStream<Void>.makeStream()
     let forgetting = Task {
-        await queue.forget(pid: 7)
+        await queue.forget(pid: 7, whenQueued: { didQueue.yield() })
         order.withLock { $0.append("forgotten") }
     }
-    // While the work is still running, the queue must still be registered and forget must not have returned.
-    for _ in 0..<50 { await Task.yield() }
+    // Once forget has queued its drop behind the work, which is still running, the queue must still
+    // be registered and forget must not have returned. A forget that never queues one fails the bound.
+    await Task { for await _ in queued { break } }.bounded(timeout: .seconds(2))
     #expect(queue.queueCount == 1)
     #expect(order.withLock { $0 }.isEmpty)
     release.signal()

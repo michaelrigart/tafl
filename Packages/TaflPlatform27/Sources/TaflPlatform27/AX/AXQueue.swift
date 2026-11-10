@@ -24,12 +24,19 @@ public final class AXQueue: Sendable {
 
     /// Drops the pid's queue once the work already on it has run, so a quit app leaves nothing behind.
     public func forget(pid: pid_t) async {
+        await forget(pid: pid, whenQueued: {})
+    }
+
+    /// `whenQueued` runs once the drop is on the app's queue behind the work already there, so a test
+    /// knows `forget` has reached its drain boundary.
+    func forget(pid: pid_t, whenQueued: @Sendable () -> Void) async {
         guard let queue = queues.withLock({ $0[pid] }) else { return }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             queue.async {
                 self.queues.withLock { if $0[pid] === queue { $0[pid] = nil } }
                 continuation.resume()
             }
+            whenQueued()
         }
     }
 

@@ -100,7 +100,7 @@ private final class Taken: Sendable {
         return result
     }
     let otherApp = try await session(fake, other.handle)
-    for _ in 0..<100 { await Task.yield() }
+    await fake.waitUntil { $0.waitingSessionCount == 1 }
     #expect(secondReturned.withLock { $0 } == false)
     #expect(await fake.callLog == ["begin", "begin"])
 
@@ -128,7 +128,7 @@ private final class Taken: Sendable {
     let gate = await fake.pause(beforeCall: 1)
     let s = try await session(fake, w.handle)
     let write = Task { await s.setSize(ScreenSize(width: 500, height: 400), admit: admitted) }
-    for _ in 0..<100 { await Task.yield() }
+    #expect(await pollUntil { gate.waiterCount == 1 })
     #expect(await fake.callLog == ["begin"])
     #expect(await fake.windows[w.handle]?.frame == rect(0, 0, 100, 100))
 
@@ -252,7 +252,8 @@ private final class Taken: Sendable {
     let write = Task { await s.setSize(ScreenSize(width: 500, height: 400), admit: admitted) }
     #expect(await pollUntil { gate.waiterCount == 1 })
     write.cancel()
-    for _ in 0..<100 { await Task.yield() }
+    // A gate that let a cancelled caller go would drop it from the gate inside `cancel()`.
+    #expect(gate.waiterCount == 1)
     #expect(await fake.callLog == ["begin"])
 
     gate.open()
@@ -272,9 +273,9 @@ private final class Taken: Sendable {
     }
     await clock.waitForSleepers(1)
     attempt.cancel()
-    for _ in 0..<100 { await Task.yield() }
-    #expect(finished.withLock { $0 } == false)
+    // A wait that cancellation cut short would leave the clock inside `cancel()`.
     #expect(clock.sleeperCount == 1)
+    #expect(finished.withLock { $0 } == false)
 
     await clock.advance(by: .milliseconds(499))
     #expect(finished.withLock { $0 } == false)
