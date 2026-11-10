@@ -9,11 +9,13 @@ import Foundation
 /// 3. runs `open`, then looks for up to `confirmPolls` polls for a copy of the bundle that LaunchServices
 ///    lists with a pid other than the old one that is alive, and that stays so for `stablePolls`
 ///    polls in a row (a new copy that hands over to a still-listed old one exits at once);
-/// 4. when none is confirmed, tries again from step 2, up to `attempts` in all, then gives up.
+/// 4. when none is confirmed, tries again from step 2, up to `attempts` in all, then gives up and
+///    logs one line to the unified log, so the failure can be seen.
 ///
 /// A copy counts only by its pid, never by the LaunchServices listing alone, so a stale listing of the
-/// old copy is not mistaken for the new one. The commands and the timing are arguments so a test can
-/// run the real script with fake commands.
+/// old copy is not mistaken for the new one. A copy is accepted only after the same stable polls
+/// wherever it is found: after `open`, and when a retry begins. The commands and the timing are
+/// arguments so a test can run the real script with fake commands.
 public struct RelaunchHelper: Sendable {
     public struct Timing: Sendable {
         /// Seconds between polls.
@@ -38,17 +40,23 @@ public struct RelaunchHelper: Sendable {
 
     public let open: String
     public let lsappinfo: String
+    public let logger: String
     public let timing: Timing
 
-    public init(open: String = "/usr/bin/open", lsappinfo: String = "/usr/bin/lsappinfo", timing: Timing = .standard) {
+    public init(
+        open: String = "/usr/bin/open", lsappinfo: String = "/usr/bin/lsappinfo", logger: String = "/usr/bin/logger",
+        timing: Timing = .standard
+    ) {
         self.open = open
         self.lsappinfo = lsappinfo
+        self.logger = logger
         self.timing = timing
     }
 
     /// Exits 0 once a new copy is confirmed, 1 when it gave up.
     private static let script = #"""
-    old=$1; app=$2; bid=$3; open=$4; lsapp=$5; tick=$6; dropmax=$7; confmax=$8; stablemax=$9; shift 9; attempts=$1
+    old=$1; app=$2; bid=$3; open=$4; lsapp=$5; logger=$6; tick=$7; dropmax=$8; confmax=$9; shift 9
+    stablemax=$1; attempts=$2
     newcopy() {
       for asn in $("$lsapp" find bundleid="$bid" | /usr/bin/grep -Eo 'ASN:0x[0-9a-fA-F]+-0x[0-9a-fA-F]+'); do
         pid=$("$lsapp" info -only pid "$asn" | /usr/bin/sed -n 's/.*pid"\{0,1\} *= *\([0-9][0-9]*\).*/\1/p' | /usr/bin/head -n 1)
@@ -56,25 +64,26 @@ public struct RelaunchHelper: Sendable {
       done
       return 1
     }
+    stays() {
+      stable=$1; i=0
+      while [ "$stable" -lt "$stablemax" ]; do
+        [ "$i" -lt "$confmax" ] || return 1
+        sleep "$tick"; i=$((i+1))
+        if newcopy; then stable=$((stable+1)); else stable=0; fi
+      done
+      return 0
+    }
     while kill -0 "$old" 2>/dev/null; do sleep "$tick"; done
     n=0
     while [ "$n" -lt "$attempts" ]; do
-      if newcopy; then exit 0; fi
+      if newcopy && stays 1; then exit 0; fi
       i=0
       while [ -n "$("$lsapp" find bundleid="$bid")" ] && [ "$i" -lt "$dropmax" ]; do sleep "$tick"; i=$((i+1)); done
       "$open" "$app"
-      i=0; stable=0
-      while [ "$i" -lt "$confmax" ]; do
-        if newcopy; then
-          stable=$((stable+1))
-          if [ "$stable" -ge "$stablemax" ]; then exit 0; fi
-        else
-          stable=0
-        fi
-        sleep "$tick"; i=$((i+1))
-      done
+      if stays 0; then exit 0; fi
       n=$((n+1))
     done
+    "$logger" -t Tafl "Relaunch gave up: no new copy after $attempts attempts"
     exit 1
     """#
 
@@ -82,7 +91,7 @@ public struct RelaunchHelper: Sendable {
     /// the bundle at `bundlePath` (identifier `bundleID`).
     public func invocation(oldPID: Int32, bundlePath: String, bundleID: String) -> (executable: URL, arguments: [String]) {
         let arguments = [
-            "-c", Self.script, "sh", String(oldPID), bundlePath, bundleID, open, lsappinfo,
+            "-c", Self.script, "sh", String(oldPID), bundlePath, bundleID, open, lsappinfo, logger,
             String(timing.pollInterval), String(timing.dropPolls), String(timing.confirmPolls),
             String(timing.stablePolls), String(timing.attempts),
         ]

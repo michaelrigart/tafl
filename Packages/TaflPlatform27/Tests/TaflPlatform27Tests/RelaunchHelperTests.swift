@@ -4,38 +4,50 @@ import Testing
 
 private let fastTiming = RelaunchHelper.Timing(pollInterval: 0.02, dropPolls: 10, confirmPolls: 10, stablePolls: 2, attempts: 3)
 
-/// Fake `open` and `lsappinfo` in a temporary directory, with state in files. `open` logs each call and
-/// takes its outcome from the first line of `open-results` (`ok` starts a copy, `fail` exits 1, `none`
-/// exits 0 but starts nothing; an empty file means `ok`). A started copy is this test process, which is
-/// alive and has another pid than the old copy. `lsappinfo` lists a stale entry for the old copy while
-/// `stale-polls` is above 0 (each `find` uses one; `forever` never runs out) and the new copy once started.
-private struct Fakes {
+/// Fake `open`, `lsappinfo` and `logger` in a temporary directory, with state in files; the directory
+/// is removed when the fakes go. `open` logs each call and takes its outcome from the first line of
+/// `open-results`: `ok` starts a copy that stays, `brief` starts one that LaunchServices lists for one
+/// `find` only (a new copy that hands over to a running one and exits), `fail` exits 1, `none` exits 0
+/// but starts nothing; an empty file means `ok`. An `open` sent while the old copy is still listed
+/// starts nothing, as when a new copy hands over to it, and does not use up a result. A started copy
+/// is this test process, which is alive and has another pid than the old copy. `lsappinfo` lists a
+/// stale entry for the old copy while `stale-polls` is above 0 (each `find` uses one; `forever` never
+/// runs out) and the new copy once started. A `blip` lists a copy at one numbered `find` only. The
+/// `logger` records its arguments.
+private final class Fakes: Sendable {
     let directory: URL
     let oldPID: Int32
     var open: String { directory.appending(path: "open").path }
     var lsappinfo: String { directory.appending(path: "lsappinfo").path }
-    var openLog: [String] {
-        ((try? String(contentsOf: directory.appending(path: "open.log"), encoding: .utf8)) ?? "")
-            .split(separator: "\n").map(String.init)
-    }
+    var logger: String { directory.appending(path: "logger").path }
+    var openLog: [String] { lines("open.log") }
+    var loggerLog: [String] { lines("logger.log") }
 
-    init(oldPID: Int32, openResults: [String] = [], stalePolls: String = "0") throws {
+    /// `blipAt` is the number of the `find` call, counted from 1, that lists a copy once; `isRunning`
+    /// means a new copy is running and listed from the start.
+    init(oldPID: Int32, openResults: [String] = [], stalePolls: String = "0", blipAt: Int? = nil, isRunning: Bool = false) throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "relaunch-\(UUID().uuidString)")
         self.oldPID = oldPID
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try openResults.map { $0 + "\n" }.joined().write(to: directory.appending(path: "open-results"), atomically: true, encoding: .utf8)
         try stalePolls.write(to: directory.appending(path: "stale-polls"), atomically: true, encoding: .utf8)
+        try "0".write(to: directory.appending(path: "finds"), atomically: true, encoding: .utf8)
+        try blipAt.map(String.init)?.write(to: directory.appending(path: "blip-at"), atomically: true, encoding: .utf8)
         let newPID = ProcessInfo.processInfo.processIdentifier
+        if isRunning { try String(newPID).write(to: directory.appending(path: "new-pid"), atomically: true, encoding: .utf8) }
         try write("open", """
             #!/bin/sh
             d="\(directory.path)"
             echo "$@" >> "$d/open.log"
+            polls=$(cat "$d/stale-polls")
+            if [ "$polls" = forever ] || [ "$polls" -gt 0 ]; then exit 0; fi
             result=$(head -n 1 "$d/open-results")
             tail -n +2 "$d/open-results" > "$d/open-results.next"; mv "$d/open-results.next" "$d/open-results"
             case "$result" in
               fail) exit 1 ;;
               none) exit 0 ;;
-              *) echo \(newPID) > "$d/new-pid" ;;
+              brief) echo \(newPID) > "$d/new-pid"; echo 1 > "$d/new-lives" ;;
+              *) echo \(newPID) > "$d/new-pid"; rm -f "$d/new-lives" ;;
             esac
             """)
         try write("lsappinfo", """
@@ -43,17 +55,34 @@ private struct Fakes {
             d="\(directory.path)"
             case "$1" in
               find)
+                finds=$(( $(cat "$d/finds") + 1 )); echo $finds > "$d/finds"
                 polls=$(cat "$d/stale-polls")
                 if [ "$polls" = forever ]; then echo 'ASN:0x0-0x1-"Tafl":'
                 elif [ "$polls" -gt 0 ]; then echo 'ASN:0x0-0x1-"Tafl":'; echo $((polls-1)) > "$d/stale-polls"; fi
-                if [ -f "$d/new-pid" ]; then echo 'ASN:0x0-0x2-"Tafl":'; fi ;;
+                if [ -f "$d/blip-at" ] && [ "$finds" = "$(cat "$d/blip-at")" ]; then echo 'ASN:0x0-0x3-"Tafl":'; fi
+                if [ -f "$d/new-pid" ]; then
+                  if [ ! -f "$d/new-lives" ]; then echo 'ASN:0x0-0x2-"Tafl":'
+                  elif [ "$(cat "$d/new-lives")" -gt 0 ]; then echo 'ASN:0x0-0x2-"Tafl":'; echo $(( $(cat "$d/new-lives") - 1 )) > "$d/new-lives"; fi
+                fi ;;
               info)
                 case "$4" in
                   ASN:0x0-0x1) echo '"pid"=\(oldPID)' ;;
                   ASN:0x0-0x2) echo "\\"pid\\"=$(cat "$d/new-pid")" ;;
+                  ASN:0x0-0x3) echo '"pid"=\(newPID)' ;;
                 esac ;;
             esac
             """)
+        try write("logger", """
+            #!/bin/sh
+            echo "$@" >> "\(directory.path)/logger.log"
+            """)
+    }
+
+    deinit { try? FileManager.default.removeItem(at: directory) }
+
+    private func lines(_ name: String) -> [String] {
+        ((try? String(contentsOf: directory.appending(path: name), encoding: .utf8)) ?? "")
+            .split(separator: "\n").map(String.init)
     }
 
     private func write(_ name: String, _ text: String) throws {
@@ -63,7 +92,7 @@ private struct Fakes {
     }
 
     func helper(timing: RelaunchHelper.Timing = fastTiming) -> RelaunchHelper {
-        RelaunchHelper(open: open, lsappinfo: lsappinfo, timing: timing)
+        RelaunchHelper(open: open, lsappinfo: lsappinfo, logger: logger, timing: timing)
     }
 
     func run(timing: RelaunchHelper.Timing = fastTiming) async -> Bool? {
@@ -97,6 +126,34 @@ private func exitedPID() throws -> Int32 {
     let fakes = try Fakes(oldPID: exitedPID(), openResults: ["none", "none", "none", "none", "none"])
     #expect(await fakes.run() == false)
     #expect(fakes.openLog.count == fastTiming.attempts)
+    #expect(fakes.loggerLog == ["-t Tafl Relaunch gave up: no new copy after \(fastTiming.attempts) attempts"])
+}
+
+@Test(.timeLimit(.minutes(1))) func aRelaunchThatSucceedsLogsNothing() async throws {
+    let fakes = try Fakes(oldPID: exitedPID(), openResults: ["fail", "ok"])
+    #expect(await fakes.run() == true)
+    #expect(fakes.loggerLog.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func aNewCopyThatExitsBeforeItIsStableIsNotConfirmedAndOpenIsSentAgain() async throws {
+    let fakes = try Fakes(oldPID: exitedPID(), openResults: ["brief", "ok"])
+    #expect(await fakes.run() == true)
+    #expect(fakes.openLog.count == 2)
+}
+
+@Test(.timeLimit(.minutes(1))) func aCopyListedAtOnePollWhenARetryBeginsIsNotConfirmed() async throws {
+    // Polls of the first attempt: the entry check, the drop wait's single listing, then `confirmPolls`
+    // while it waits for the copy `open` never started. The retry's entry check is the next one.
+    let retryEntry = 3 + fastTiming.confirmPolls
+    let fakes = try Fakes(oldPID: exitedPID(), openResults: ["none", "ok"], blipAt: retryEntry)
+    #expect(await fakes.run() == true)
+    #expect(fakes.openLog.count == 2)
+}
+
+@Test(.timeLimit(.minutes(1))) func aCopyAlreadyRunningThatStaysIsConfirmedWithoutAnOpen() async throws {
+    let fakes = try Fakes(oldPID: exitedPID(), isRunning: true)
+    #expect(await fakes.run() == true)
+    #expect(fakes.openLog.isEmpty)
 }
 
 @Test(.timeLimit(.minutes(1))) func aListingOfTheOldCopyAloneIsNotANewCopy() async throws {
