@@ -5,7 +5,9 @@ import AppKit
 enum Relaunch {
     private static let script = #"while kill -0 "$1" 2>/dev/null; do sleep 0.1; done; exec /usr/bin/open "$2""#
 
-    /// Returns false, and leaves Tafl running, when the new copy could not be scheduled.
+    /// Returns false, and leaves Tafl running, when the new copy could not be scheduled. The quit is
+    /// scheduled on the run loop, not made in the caller's main-queue job, so the shutdown can run
+    /// while AppKit waits for it.
     @discardableResult
     static func perform() -> Bool {
         let process = Process()
@@ -21,7 +23,7 @@ enum Relaunch {
             return false
         }
         Log.app.notice("Relaunching Tafl")
-        NSApp.terminate(nil)
+        RunLoop.main.perform(inModes: [.common]) { NSApp.terminate(nil) }
         return true
     }
 }
