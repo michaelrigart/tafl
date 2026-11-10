@@ -732,8 +732,10 @@ Settings shows the configuration in plain language and never edits it.
   transient, is tried again 3 s and 10 s after the restart: one that registers then is
   observed again, and takes part in the display-change rules and the active layout; one that
   still fails after the last try stays unobservable. An app that was already unobservable
-  before the restart is not tried again, and a newer restart, a quit or Tafl stopping ends
-  the tries for it.
+  before the restart is not tried again. That baseline is what was unobservable when the first
+  pending restart began, less the apps whose tries are still pending, so a newer restart takes
+  over an earlier one's pending tries, while an app the tries gave up on is not tried by the
+  next restart. An app's quit or Tafl stopping ends its tries.
 
 ### Menu bar icon
 
