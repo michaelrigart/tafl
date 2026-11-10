@@ -12,7 +12,7 @@ final class WindowEventTranslator: Sendable {
     private let reader: WindowReader27
     private let events: AsyncStream<PlatformEvent>.Continuation
     private let notices: any WindowNotices
-    private let ends: WindowEnds
+    let ends: WindowEnds
     private struct Lanes {
         var open: [pid_t: AsyncStream<AXObserverHub.Event>.Continuation] = [:]
         /// Apps whose lane was closed: a late callback must not start a lane that nothing would end.

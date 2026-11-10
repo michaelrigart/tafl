@@ -295,7 +295,7 @@ final class WindowObservation27: Sendable {
     /// that found it. Only a catch-up whose every step ran under its current claim pays the launch's
     /// debt. A step under an ended claim (the app quit, or observing restarted) announces nothing and
     /// marks nothing. The catch-up's registrations stay while the app runs, for whoever adopts them;
-    /// once the app is gone it withdraws those it made itself.
+    /// when its claim has ended and the app is no longer running, it withdraws those it made itself.
     private func catchUp(_ app: AppInfo27, claim: Int) async {
         let registry = registry
         let found = await environment.windows(app) { entry in
@@ -303,8 +303,8 @@ final class WindowObservation27: Sendable {
         }
         if !found.contains(where: { $0.announcement == .refused }) { payDebt(of: app.pid, claim: claim) }
         if !isCurrent(pid: app.pid, claim: claim), !environment.isRunning(app.pid) {
-            // The app is gone, and its quit makes the core forget every window it had: what this
-            // removes needs no end of its own.
+            // Its claim ended and the app has exited. The withdraw delivers no end: the app's quit event,
+            // delivered or still to come, makes the core forget every window the app had.
             _ = registry.withdraw(found.map(\.entry).filter(\.isNew).map { ($0.snapshot.handle, $0.element) })
         }
     }

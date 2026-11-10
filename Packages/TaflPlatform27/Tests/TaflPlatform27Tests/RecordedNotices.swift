@@ -10,10 +10,19 @@ final class RecordedNotices: WindowNotices {
     }
 
     private let notices = Mutex<[Notice]>([])
+    private let received = CountWaiters()
 
     var all: [Notice] { notices.withLock { $0 } }
 
-    func announced(_ snapshot: WindowSnapshot) { notices.withLock { $0.append(.announced(snapshot.handle)) } }
-    func destroyed(_ window: WindowHandle) { notices.withLock { $0.append(.destroyed(window)) } }
-    func quit(pid: Int32) { notices.withLock { $0.append(.quit(pid)) } }
+    /// Waits until `count` notices have been received.
+    func waitForNotices(_ count: Int) async { await received.wait(for: count) }
+
+    func announced(_ snapshot: WindowSnapshot) { record(.announced(snapshot.handle)) }
+    func destroyed(_ window: WindowHandle) { record(.destroyed(window)) }
+    func quit(pid: Int32) { record(.quit(pid)) }
+
+    private func record(_ notice: Notice) {
+        notices.withLock { $0.append(notice) }
+        received.increment()
+    }
 }

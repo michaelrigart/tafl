@@ -36,7 +36,7 @@ func aDestructionHandledDuringAReadEndsTheWindowOnce() async {
     let marker = harness.register(2020)
     let result = await Platform27.readRegistered(window, registry: harness.registry) { _ in
         harness.notify(kAXUIElementDestroyedNotification, 1010)
-        #expect(await harness.waitForNotices(1))
+        await harness.notices.waitForNotices(1)
         return gone
     }
     #expect(result == gone)
@@ -46,11 +46,11 @@ func aDestructionHandledDuringAReadEndsTheWindowOnce() async {
     harness.translator.closeAll()
 }
 
-/// The translator has looked the destroyed element up when a read registers a new element for the
-/// window's id. The translator's withdraw, with the pair its lookup found, removes nothing: the new
-/// registration stays, and nothing is announced as destroyed.
+/// A replacement element is registered for the window's id after the destroyed element was looked up.
+/// The end, with the pair the lookup found, removes nothing: the new registration stays, and nothing
+/// is announced as destroyed.
 @Test(.timeLimit(.minutes(1)))
-func aReplacementRegisteredBetweenTheTranslatorsLookupAndItsWithdrawStaysAndIsNotEnded() async {
+func aReplacementRegisteredBeforeAnEndStaysAndIsNotEnded() async {
     var harness = EndsHarness()
     let window = harness.register(1010)
     let marker = harness.register(2020)
@@ -63,6 +63,19 @@ func aReplacementRegisteredBetweenTheTranslatorsLookupAndItsWithdrawStaysAndIsNo
     harness.notify(kAXWindowMovedNotification, 2020)
     #expect(await harness.events(through: .windowMoved(marker)) == [.windowMoved(marker)])
     #expect(harness.notices.all.isEmpty)
+    harness.translator.closeAll()
+}
+
+/// A window the registry no longer holds, as after its app quit, queues nothing: a queue made for it
+/// would outlive the app, since nothing forgets the queue of a pid that has quit.
+@Test(.timeLimit(.minutes(1)))
+func anEndForAWindowNoLongerRegisteredQueuesNothingOnTheAppsQueue() async {
+    let queue = ManualQueue()
+    let harness = EndsHarness(queue: queue)
+    let window = harness.register(1010)
+    harness.registry.removeApp(pid: EndsHarness.pid)
+    harness.ends.end(window, harness.element(1010))
+    #expect(queue.count == 0)
     harness.translator.closeAll()
 }
 
@@ -88,7 +101,7 @@ func aRegistrationForTheIDQueuedAheadOfAnEndKeepsItsState() async {
             isFullscreen: false, isSheet: false, isMinimized: false, isAppHidden: false))
     }
     harness.notify(kAXUIElementDestroyedNotification, 1010)
-    #expect(await queue.waitForCount(2))
+    await queue.waitForQueued(2)
     queue.drain()
     #expect(harness.registry.element(for: window) == harness.element(3030))
     harness.notify(kAXWindowMovedNotification, 2020)

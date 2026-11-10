@@ -20,6 +20,10 @@ struct WindowEnds: Sendable {
     /// runs ends nothing: an earlier end or the app's quit took it out, or a new element was registered
     /// for the handle first, and that registration stays and is not announced as destroyed.
     func end(_ handle: WindowHandle, _ element: AXElementBox) {
+        // A pair no longer registered, as after its app quit, queues nothing: a queue made now for a pid
+        // that has quit would never be forgotten. The block's own withdraw decides; this only keeps the
+        // common case off the queue, and a quit that lands between the check and the queue is not caught.
+        guard registry.element(for: handle) == element else { return }
         let registry = registry
         let notices = notices
         let events = events
