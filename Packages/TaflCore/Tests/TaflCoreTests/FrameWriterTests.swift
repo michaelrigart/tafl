@@ -275,11 +275,11 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.log == crossLog)
 }
 
-@Test(.timeLimit(.minutes(1))) func aMoveWhileTheSizeIsInFlightStopsBeforeTheNextWrite() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aMoveWhileTheSizeIsInFlightStopsBeforeTheNextWrite() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 2)
     let task = rig.start(crossJob())
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
 
     #expect(await rig.move(to: rect(400, 400, 1200, 900)) == .external)
     gate.open()
@@ -287,11 +287,11 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await rig.log == ["begin", "size 1200x900", "read", "end"])
 }
 
-@Test(.timeLimit(.minutes(1))) func aReadingDifferingOnlyInThePartInFlightIsOwn() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aReadingDifferingOnlyInThePartInFlightIsOwn() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 2)
     let task = rig.start(crossJob())
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
 
     // The window passes through another width on its way to the one written.
     #expect(await rig.move(to: rect(100, 100, 1100, 900)) == .own)
@@ -300,11 +300,11 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await task.bounded() == .placed(crossTarget))
 }
 
-@Test(.timeLimit(.minutes(1))) func aMoveWhileTheSessionBeginsStopsTheFirstWrite() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aMoveWhileTheSessionBeginsStopsTheFirstWrite() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 0)
     let task = rig.start(crossJob())
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
 
     #expect(await rig.move(to: rect(400, 400, 400, 300)) == .external)
     gate.open()
@@ -324,14 +324,14 @@ private enum UsersChange: CaseIterable {
 }
 
 /// Call 1 is the first write; the window's app has a reading of it queued ahead of that write.
-@Test(.timeLimit(.minutes(1)), arguments: FirstPart.allCases, UsersChange.allCases)
+@Test(.gated, .timeLimit(.minutes(1)), arguments: FirstPart.allCases, UsersChange.allCases)
 private func aReadingQueuedAheadOfAWriteThatFindsAnExternalChangeStopsTheWrite(_ part: FirstPart, _ change: UsersChange) async {
     let sameDisplayStart = rect(600, 100, 300, 300)
     let started = part == .size ? crossJob() : job(start: sameDisplayStart, target: rect(0, 25, 500, 775))
     let rig = await Rig(start: started.start)
     let gate = await rig.fake.pause(beforeCall: 1)
     let task = rig.start(started)
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
 
     // The reading queued first sees the user's change.
     let moved = rect(300, 300, 450, 350)
@@ -366,7 +366,7 @@ private enum QueuedStop: CaseIterable {
 /// blocks makes no write, is pinned by the order of steps in FakePlatformTests
 /// (`aPositionWriteThatFailsItsSettabilityQueryIsNotAdmitted`) and by Platform27's
 /// `aStopArrivingWhileThePositionsSettabilityQueryBlocksRefusesTheWrite`.
-@Test(.timeLimit(.minutes(1)), arguments: FirstPart.allCases, QueuedStop.allCases)
+@Test(.gated, .timeLimit(.minutes(1)), arguments: FirstPart.allCases, QueuedStop.allCases)
 private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: FirstPart, _ stop: QueuedStop) async {
     let sameDisplayStart = rect(600, 100, 300, 300)
     var started = part == .size ? crossJob() : job(start: sameDisplayStart, target: rect(0, 25, 500, 775))
@@ -375,7 +375,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     rig.owner.layoutApplicationBegan(1)
     let gate = await rig.fake.pause(beforeCall: 1)
     let task = rig.start(started, layoutApplication: 1)
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     switch stop {
     case .cancel: task.cancel()
     case .reconfigure: rig.owner.reconfigurationBegan()
@@ -430,13 +430,13 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     #expect(await rig.log == steppedLog + ["begin", "read", "end"])
 }
 
-@Test func cancelledWhileTheReapplyBeginsKeepsTheEarlierResult() async {
+@Test(.gated) func cancelledWhileTheReapplyBeginsKeepsTheEarlierResult() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let gate = await rig.fake.pause(beforeCall: steppedLog.count)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(25))
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     task.cancel()
     gate.open()
 
@@ -513,34 +513,34 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     #expect(await rig.log == steppedLog)
 }
 
-@Test(.timeLimit(.minutes(1))) func aMoveWhileTheSessionEndsInterruptsTheRequest() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aMoveWhileTheSessionEndsInterruptsTheRequest() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 5)
     let task = rig.start(crossJob())
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     #expect(await rig.move(to: rect(1500, 700, 1200, 900)) == .external)
     gate.open()
 
     #expect(await task.bounded() == .interrupted)
 }
 
-@Test(.timeLimit(.minutes(1))) func aReadingOfTheAchievedFrameWhileTheSessionEndsIsOwn() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aReadingOfTheAchievedFrameWhileTheSessionEndsIsOwn() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 5)
     let task = rig.start(crossJob())
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     #expect(await rig.read() == .own)
     gate.open()
 
     #expect(await task.bounded() == .placed(crossTarget))
 }
 
-@Test(.timeLimit(.minutes(1))) func aMoveDuringAnAttemptWithNothingToWriteInterruptsIt() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aMoveDuringAnAttemptWithNothingToWriteInterruptsIt() async {
     let target = rect(0, 25, 500, 775)
     let rig = await Rig(start: target)
     let gate = await rig.fake.pause(beforeCall: 0)
     let task = rig.start(job(start: target, target: target))
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     #expect(await rig.move(to: rect(300, 300, 500, 775)) == .external)
     gate.open()
 
@@ -581,12 +581,12 @@ private enum During: CaseIterable {
     case cancel, reconfigure, externalMove, unchangedStart
 }
 
-@Test(arguments: During.allCases)
+@Test(.gated, arguments: During.allCases)
 private func aChangeWhileTheSessionBeginsIsJudgedBeforeTheFirstWrite(_ during: During) async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 0)
     let task = rig.start(crossJob())
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     switch during {
     case .cancel: task.cancel()
     case .reconfigure: rig.owner.reconfigurationBegan()
@@ -669,7 +669,7 @@ func aLimitedSizeIsPositionedAsIfItWereTheSizeAskedFor(target: ScreenRect) async
 
 // MARK: Reconfigurations
 
-@Test(.timeLimit(.minutes(1))) func aRequestBegunBeforeAReconfigurationNeverOpensASession() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aRequestBegunBeforeAReconfigurationNeverOpensASession() async {
     let rig = await Rig(start: crossStart)
     var stale = crossJob()
     stale.ticket = rig.owner.beginRequest(window(1, frame: crossStart)).ticket
@@ -688,13 +688,13 @@ func aLimitedSizeIsPositionedAsIfItWereTheSizeAskedFor(target: ScreenRect) async
 private func readDuring(_ rig: Rig, call: Int, job: WriteJob) async -> (verdict: ReadingVerdict?, result: WriteResult?) {
     let gate = await rig.fake.pause(beforeCall: call)
     let task = rig.start(job)
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     let verdict = await rig.read()
     gate.open()
     return (verdict, await task.bounded())
 }
 
-@Test(.timeLimit(.minutes(1)), arguments: 1...5)
+@Test(.gated, .timeLimit(.minutes(1)), arguments: 1...5)
 func aReadingBetweenAnyTwoCallsIsOwn(call: Int) async {
     let rig = await Rig(start: crossStart)
     let read = await readDuring(rig, call: call, job: crossJob())
@@ -702,7 +702,7 @@ func aReadingBetweenAnyTwoCallsIsOwn(call: Int) async {
     #expect(read.result == .placed(crossTarget))
 }
 
-@Test(.timeLimit(.minutes(1)), arguments: 1...5)
+@Test(.gated, .timeLimit(.minutes(1)), arguments: 1...5)
 func aReadingBetweenAnyTwoCallsOfAPositionFirstWriteIsOwn(call: Int) async {
     let start = rect(600, 100, 300, 300)
     let target = rect(0, 25, 500, 775)
@@ -712,7 +712,7 @@ func aReadingBetweenAnyTwoCallsOfAPositionFirstWriteIsOwn(call: Int) async {
     #expect(read.result == .placed(target))
 }
 
-@Test(.timeLimit(.minutes(1)), arguments: 1...5)
+@Test(.gated, .timeLimit(.minutes(1)), arguments: 1...5)
 func aReadingAroundAClampIsOwn(call: Int) async {
     let start = rect(1100, 100, 1800, 1400)
     let rig = await Rig(start: start) {
@@ -724,11 +724,11 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(read.result == .placed(v))
 }
 
-@Test(.timeLimit(.minutes(1))) func aMoveWhileTheSessionEndsIsExternalEvenToTheWrittenSize() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aMoveWhileTheSessionEndsIsExternalEvenToTheWrittenSize() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 5)
     let task = rig.start(crossJob())
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     #expect(await rig.move(to: rect(100, 100, 1100, 900)) == .external)
     gate.open()
     #expect(await task.bounded() == .interrupted)
@@ -749,11 +749,10 @@ func aReadingAroundAClampIsOwn(call: Int) async {
         finished.set()
         return result
     }
-    await rig.fake.waitUntil { $0.callLog.last == "end" }
-    // A reapply would wait on the clock, and the request would not finish.
-    let returned = await pollUntil { finished.isSet }
-    if !returned { await rig.clock.advance(by: .milliseconds(25)) }
-    #expect(returned)
+    // A reapply would wait on the clock instead of finishing.
+    await waitUntil("the request to finish or wait for a reapply") { finished.isSet || rig.clock.sleeperCount > 0 }
+    #expect(rig.clock.sleeperCount == 0)
+    if rig.clock.sleeperCount > 0 { await rig.clock.advance(by: .milliseconds(25)) }
     #expect(await watched.bounded() == .positionRefused(rect(100, 100, 1200, 900)))
     #expect(await rig.log.filter { $0 == "begin" }.count == 1)
 }
@@ -763,20 +762,19 @@ func aReadingAroundAClampIsOwn(call: Int) async {
         $0.sizeRule = { _, asked in ScreenSize(width: max(asked.width, 1300), height: asked.height) }
     }
     let task = rig.start(crossJob())
-    let slept = await pollUntil(timeout: .seconds(2)) { rig.clock.sleeperCount == 1 }
-    #expect(slept)
-    if slept { await rig.clock.advance(by: .milliseconds(25)) }
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: .milliseconds(25))
     #expect(await task.bounded() == .sizeRefused(rect(1000, 0, 1300, 900)))
     #expect(await rig.log.filter { $0 == "begin" }.count == 2)
 }
 
-@Test(.timeLimit(.minutes(1))) func aMoveWhileAReapplyBeginsInterruptsTheRequestEvenWhenTheBeginFails() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aMoveWhileAReapplyBeginsInterruptsTheRequestEvenWhenTheBeginFails() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let gate = await rig.fake.pause(beforeCall: steppedLog.count)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(25))
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     #expect(await rig.move(to: rect(300, 300, 1200, 900)) == .external)
     await rig.fake.configure { $0.windows[handle] = nil }
     gate.open()
@@ -784,26 +782,26 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(await task.bounded() == .interrupted)
 }
 
-@Test func aReapplyWhoseBeginFailsKeepsTheEarlierResult() async {
+@Test(.gated) func aReapplyWhoseBeginFailsKeepsTheEarlierResult() async {
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let gate = await rig.fake.pause(beforeCall: steppedLog.count)
     let task = rig.start(steppedJob())
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(25))
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     await rig.fake.configure { $0.windows[handle] = nil }
     gate.open()
 
     #expect(await task.bounded() == .placed(steppedAchieved))
 }
 
-@Test func anAppThatRefusesTheSizeCannotSnapTheWindowBackUnnoticed() async {
+@Test(.gated) func anAppThatRefusesTheSizeCannotSnapTheWindowBackUnnoticed() async {
     // The refused size write reads back the start frame, but the window has since moved: back there is
     // someone else's doing. Calls: begin, size, read, position, read, size, read, end.
     let rig = await Rig(start: crossStart) { $0.windows[handle]?.canResize = false }
     let gate = await rig.fake.pause(beforeCall: 7)
     let task = rig.start(crossJob())
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     #expect(await rig.move(to: crossStart) == .external)
     gate.open()
     #expect(await task.bounded() == .interrupted)
@@ -846,11 +844,11 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(rig.chain == nil)
 }
 
-@Test func unreadWriteVerifiesNothing() async {
+@Test(.gated) func unreadWriteVerifiesNothing() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 4)
     let task = rig.start(crossJob())
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     await rig.fake.configure { $0.hung = [100] }
     gate.open()
     await rig.clock.waitForSleepers(1)
@@ -871,11 +869,11 @@ func aReadingAroundAClampIsOwn(call: Int) async {
     #expect(await rig.move(to: rect(400, 400, 400, 300)) == .external)
 }
 
-@Test func cancelledAfterTheSizeWriteKeepsTheVerifiedFrame() async {
+@Test(.gated) func cancelledAfterTheSizeWriteKeepsTheVerifiedFrame() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 2)
     let task = rig.start(crossJob())
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     task.cancel()
     gate.open()
 
@@ -889,12 +887,12 @@ private enum Cancellation: CaseIterable {
     case newerRequest
 }
 
-@Test(arguments: Cancellation.allCases)
+@Test(.gated, arguments: Cancellation.allCases)
 private func aRequestCancelledMidSequenceStillJudgesAMove(_ cancellation: Cancellation) async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 2)
     let task = rig.start(crossJob())
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     switch cancellation {
     case .reconfiguration: rig.owner.reconfigurationBegan()
     case .newerRequest: task.cancel()
@@ -906,11 +904,11 @@ private func aRequestCancelledMidSequenceStillJudgesAMove(_ cancellation: Cancel
     #expect(await rig.log == ["begin", "size 1200x900", "read", "end"])
 }
 
-@Test func cancelledBeforeTheFirstWriteWritesNothing() async {
+@Test(.gated) func cancelledBeforeTheFirstWriteWritesNothing() async {
     let rig = await Rig(start: crossStart)
     let gate = await rig.fake.pause(beforeCall: 0)
     let task = rig.start(crossJob(firstWrite: FirstWrite(opensChainOn: displayA)))
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     task.cancel()
     gate.open()
 
@@ -923,7 +921,7 @@ private enum Exit: CaseIterable {
     case interruption, cancellation, reconfiguration, platformFailure
 }
 
-@Test(arguments: Exit.allCases)
+@Test(.gated, arguments: Exit.allCases)
 private func sessionEndsOnEveryExit(_ exit: Exit) async {
     let rig = await Rig(start: crossStart) {
         switch exit {
@@ -935,7 +933,7 @@ private func sessionEndsOnEveryExit(_ exit: Exit) async {
     let gate = exit == .cancellation || exit == .reconfiguration ? await rig.fake.pause(beforeCall: 2) : nil
     let task = rig.start(crossJob())
     if let gate {
-        #expect(await pollUntil { gate.waiterCount == 1 })
+        await gate.waitUntilHolding(1)
         if exit == .cancellation { task.cancel() } else { rig.owner.reconfigurationBegan() }
         gate.open()
     }

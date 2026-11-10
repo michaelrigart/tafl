@@ -91,13 +91,9 @@ private struct Rig {
     }
 
     /// Waits until the window request queue has been asked for `count` requests in all.
-    func waitForRequests(_ count: Int) async -> Bool {
-        let begun = ContinuousClock.now
-        while await queue.requestCount < count {
-            if begun.duration(to: .now) > .seconds(2) { return false }
-            await Task.yield()
-        }
-        return true
+    func waitForRequests(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async {
+        let queue = queue
+        await waitUntil("\(count) requests to the queue", sourceLocation: sourceLocation) { await queue.requestCount >= count }
     }
 
     func run(_ request: MoveRequest, gap: Double = 0) async -> PlacementOutcome {
@@ -415,13 +411,13 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(rig.stored.restore[handle]?.frame == rect(10, 40, 300, 200))
 }
 
-@Test(.timeLimit(.minutes(1))) func aMoveTheWriterNeverSawStillKeepsItsPlacementOutOfTheMemory() async throws {
+@Test(.gated, .timeLimit(.minutes(1))) func aMoveTheWriterNeverSawStillKeepsItsPlacementOutOfTheMemory() async throws {
     let rig = await Rig(start: rect(100, 100, 400, 300))
     // Two writes, each read back, then the session's end (call 5), held while the user drags the window
     // and something reads it.
     let ending = await rig.fake.pause(beforeCall: 5)
     let task = rig.start(request(.named(.leftHalf), placement: .leftHalf, source: .action(.leftHalf)))
-    #expect(await pollUntil { ending.waiterCount == 1 })
+    await ending.waitUntilHolding(1)
     await rig.fake.configure { $0.windows[handle]?.frame = rect(300, 300, 400, 300) }
     let owner = rig.owner
     #expect(try await rig.fake.snapshot(of: handle) { owner.read($0) }.get() == .external)
@@ -431,12 +427,12 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(rig.stored.restore[handle]?.chainOpen == false)
 }
 
-@Test func noWriteNoChain() async {
+@Test(.gated) func noWriteNoChain() async {
     let rig = await Rig(start: rect(100, 100, 400, 300))
     // The window goes away after Resolve read it, before the session begins.
     let gate = await rig.fake.pause(beforeCall: 0)
     let task = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     await rig.fake.configure { $0.windows[handle] = nil }
     gate.open()
     #expect(await task.bounded() == .failed(.noWindow))
@@ -445,11 +441,11 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(rig.stored.placed[handle] == nil)
 }
 
-@Test func aReconfigurationBeforeTheWriteCancelsItWithoutAChain() async {
+@Test(.gated) func aReconfigurationBeforeTheWriteCancelsItWithoutAChain() async {
     let rig = await Rig(start: rect(100, 100, 400, 300))
     let gate = await rig.fake.pause(beforeCall: 0)
     let task = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     rig.owner.reconfigurationBegan()
     gate.open()
     #expect(await task.bounded() == .superseded)
@@ -459,16 +455,16 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(rig.stored.placed[handle] == nil)
 }
 
-@Test(.timeLimit(.minutes(1))) func cancelledRequestKeepsItsRestoreFrame() async {
+@Test(.gated, .timeLimit(.minutes(1))) func cancelledRequestKeepsItsRestoreFrame() async {
     let start = rect(100, 100, 400, 300)
     let rig = await Rig(start: start)
     // Held on the read after the first write: the chain is open and one part is written.
     let gate = await rig.fake.pause(beforeCall: 2)
     let first = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     let second = rig.start(request(.named(.rightHalf), source: .action(.rightHalf)))
     // The queue has the second request once it has cancelled the first.
-    #expect(await rig.waitForRequests(2))
+    await rig.waitForRequests(2)
     gate.open()
 
     #expect(await first.bounded() == .superseded)
@@ -477,13 +473,13 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(rig.stored.placed[handle]?.action == .rightHalf)
 }
 
-@Test(.timeLimit(.minutes(1))) func aNewerRequestStartsWhereTheWindowIsNotWhereTheOlderOnesQueuedWriteWouldPutIt() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aNewerRequestStartsWhereTheWindowIsNotWhereTheOlderOnesQueuedWriteWouldPutIt() async {
     let start = rect(100, 100, 400, 300)
     let rig = await Rig(start: start)
     // The older request's first write waits on the app's queue, past every check made before it was queued.
     let gate = await rig.fake.pause(beforeCall: 1)
     let older = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     let resolved = Seen()
     let newer = Task { [pipeline = rig.pipeline] in
         await pipeline.run(handle, config: config()) { window in
@@ -492,7 +488,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
         }
     }
     // The newer request has cancelled the older one, and waits for it to finish.
-    #expect(await rig.waitForRequests(2))
+    await rig.waitForRequests(2)
     gate.open()
 
     #expect(await older.bounded() == .superseded)
@@ -502,12 +498,12 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(rig.stored.restore[handle] == chain(start))
 }
 
-@Test func partialWriteCountsAsTafls() async {
+@Test(.gated) func partialWriteCountsAsTafls() async {
     let start = rect(100, 100, 400, 300)
     let rig = await Rig(start: start)
     let gate = await rig.fake.pause(beforeCall: 2)
     let task = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     rig.owner.reconfigurationBegan()
     gate.open()
 
@@ -552,13 +548,13 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(rig.stored.restore[handle]?.frame == f0)
 }
 
-@Test func failureBeforeAnyWriteKeepsThePlacedRecord() async {
+@Test(.gated) func failureBeforeAnyWriteKeepsThePlacedRecord() async {
     let start = rect(100, 100, 400, 300)
     let memory = WindowMemory(placed: [handle: placed(start)])
     let rig = await Rig(start: start, memory: memory)
     let gate = await rig.fake.pause(beforeCall: 0)
     let task = rig.start(request(.named(.leftHalf), source: .action(.leftHalf)))
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     await rig.fake.configure { $0.windows[handle] = nil }
     gate.open()
     #expect(await task.bounded() == .failed(.noWindow))

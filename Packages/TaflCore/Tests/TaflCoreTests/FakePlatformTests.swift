@@ -41,11 +41,11 @@ private final class Taken: Sendable {
     var all: [ScreenRect] { frames.withLock { $0 } }
 }
 
-@Test(.timeLimit(.minutes(1))) func aReadHandsWhatItReadToTakeBeforeItsResultIsHeld() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aReadHandsWhatItReadToTakeBeforeItsResultIsHeld() async {
     let w = window(1, frame: rect(10, 10, 400, 300))
     let (fake, _) = await makeFake(w)
     let taken = Taken()
-    let late = FakeGate()
+    let late = Gate()
     await fake.configure { $0.snapshotLateGate = late }
     let read = Task {
         await fake.snapshot(of: w.handle) { snapshot in
@@ -53,13 +53,13 @@ private final class Taken: Sendable {
             return snapshot.frame
         }
     }
-    await fake.waitUntil { _ in late.waiterCount == 1 }
+    await late.waitUntilHolding(1)
     #expect(taken.all == [w.frame])
 
-    let listedLate = FakeGate()
+    let listedLate = Gate()
     await fake.configure { $0.visibleWindowsLateGate = listedLate }
     let listing = Task { await fake.visibleWindows { taken.add($0.frame) } }
-    await fake.waitUntil { _ in listedLate.waiterCount == 1 }
+    await listedLate.waitUntilHolding(1)
     #expect(taken.all == [w.frame, w.frame])
     late.open()
     listedLate.open()
@@ -100,7 +100,7 @@ private final class Taken: Sendable {
         return result
     }
     let otherApp = try await session(fake, other.handle)
-    await fake.waitUntil { $0.waitingSessionCount == 1 }
+    await waitUntil("the second session to wait for the first") { await fake.waitingSessionCount == 1 }
     #expect(secondReturned.withLock { $0 } == false)
     #expect(await fake.callLog == ["begin", "begin"])
 
@@ -122,13 +122,13 @@ private final class Taken: Sendable {
     #expect(try await s.readFrame(take: { $0 }).get() == rect(300, 300, 500, 400))
 }
 
-@Test func pauseHoldsTheCallUntilTheGateOpens() async throws {
+@Test(.gated) func pauseHoldsTheCallUntilTheGateOpens() async throws {
     let w = window(1, frame: rect(0, 0, 100, 100))
     let (fake, _) = await makeFake(w)
     let gate = await fake.pause(beforeCall: 1)
     let s = try await session(fake, w.handle)
     let write = Task { await s.setSize(ScreenSize(width: 500, height: 400), admit: admitted) }
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     #expect(await fake.callLog == ["begin"])
     #expect(await fake.windows[w.handle]?.frame == rect(0, 0, 100, 100))
 
@@ -215,9 +215,10 @@ private final class Taken: Sendable {
     await fake.configure { $0.unobserved = [.init(pid: 7, bundleID: "com.example.slow", missing: [.created])] }
     await fake.emit(.windowMoved(w.handle))
     await fake.emitUnobserved()
-    var iterator = fake.events.makeAsyncIterator()
-    #expect(await iterator.next() == .windowMoved(w.handle))
-    #expect(await iterator.next() == .unobservable(pid: 7, bundleID: "com.example.slow", missing: [.created]))
+    let events = Collector(fake.events, marker: markerEvent)
+    #expect(await events.next() == .windowMoved(w.handle))
+    #expect(await events.next() == .unobservable(pid: 7, bundleID: "com.example.slow", missing: [.created]))
+    #expect(await fake.eventsSent == 2)
 }
 
 @Test func failureMessages() {
@@ -244,16 +245,16 @@ private final class Taken: Sendable {
     #expect(clock.now < .seconds(5))
 }
 
-@Test func cancelledCallerStillWaitsForTheGate() async throws {
+@Test(.gated) func cancelledCallerStillWaitsForTheGate() async throws {
     let w = window(1, frame: rect(0, 0, 100, 100))
     let (fake, _) = await makeFake(w)
     let gate = await fake.pause(beforeCall: 1)
     let s = try await session(fake, w.handle)
     let write = Task { await s.setSize(ScreenSize(width: 500, height: 400), admit: admitted) }
-    #expect(await pollUntil { gate.waiterCount == 1 })
+    await gate.waitUntilHolding(1)
     write.cancel()
     // A gate that let a cancelled caller go would drop it from the gate inside `cancel()`.
-    #expect(gate.waiterCount == 1)
+    #expect(gate.heldCount == 1)
     #expect(await fake.callLog == ["begin"])
 
     gate.open()
@@ -319,14 +320,6 @@ private final class Taken: Sendable {
     }
     #expect(result == .failure(.cannotMove))
     #expect(await fake.callLog == ["begin", "end"])
-}
-
-@Test func waitUntilRecordsAnIssueOnTimeout() async {
-    let (fake, _) = await makeFake()
-    await fake.waitUntil { $0.callLog.isEmpty }
-    await withKnownIssue {
-        await fake.waitUntil(timeout: .milliseconds(50)) { !$0.callLog.isEmpty }
-    }
 }
 
 private final class Admissions: Sendable {

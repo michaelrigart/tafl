@@ -4,39 +4,6 @@ import Testing
 import TaflTestSupport
 @testable import TaflCore
 
-/// Holds one call of a `FakePlatform` until `open()`. A cancelled caller keeps waiting: a real
-/// Accessibility call in flight cannot be cancelled.
-final class FakeGate: Sendable {
-    private struct State {
-        var isOpen = false
-        var waiters: [CheckedContinuation<Void, Never>] = []
-    }
-
-    private let state = Mutex(State())
-
-    /// How many calls are held at this gate.
-    var waiterCount: Int { state.withLock { $0.waiters.count } }
-
-    func open() {
-        let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
-            state.isOpen = true
-            defer { state.waiters = [] }
-            return state.waiters
-        }
-        for waiter in waiters { waiter.resume() }
-    }
-
-    fileprivate func wait() async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            let alreadyOpen = state.withLock { state in
-                if !state.isOpen { state.waiters.append(continuation) }
-                return state.isOpen
-            }
-            if alreadyOpen { continuation.resume() }
-        }
-    }
-}
-
 /// A scripted platform. A read hands what it read to the caller's `take` in the same actor step, as
 /// the platform does inside its app's queue: a gate that holds a read's result holds it after `take`
 /// has run. A write asks its `admit` in the same step as the write, after its gate: a read made while
@@ -52,8 +19,8 @@ final class FakeGate: Sendable {
 /// the slot). A call keeps its index while it is held: a gated call is logged only when its gate
 /// opens, so another app's calls that start later may log ahead of it.
 ///
-/// Tests wait on an observable condition (`waitUntil`, a log entry, a clock's sleeper count or
-/// `task.bounded()`), never on a yield budget.
+/// A call held at a gate parks the engine's task that made it (`EngineActivity`), so a test can wait
+/// for the engine to be quiescent while the gate holds. Gates are `Gate`s, which need a `.gated` test.
 actor FakePlatform: WindowPlatform {
     struct UnobservedApp: Equatable, Sendable {
         var pid: Int32
@@ -88,27 +55,27 @@ actor FakePlatform: WindowPlatform {
         var call: Int
         var step: Int
     }
-    private var raiseGates: [RaiseStep: FakeGate] = [:]
-    private var beginGates: [WindowHandle: FakeGate] = [:]
+    private var raiseGates: [RaiseStep: Gate] = [:]
+    private var beginGates: [WindowHandle: Gate] = [:]
     /// Holds the next `displays()` call until the gate opens.
-    var displaysGate: FakeGate?
+    var displaysGate: Gate?
     /// Holds the next `visibleWindows()` call until the gate opens.
-    var visibleWindowsGate: FakeGate?
+    var visibleWindowsGate: Gate?
     /// Holds the next `startObserving(notices:)` call until the gate opens.
-    var startObservingGate: FakeGate?
+    var startObservingGate: Gate?
     /// Reads `unobserved` for the next `observeAgain(pids:)` call, then holds its result until the gate opens.
-    var observeAgainGate: FakeGate?
+    var observeAgainGate: Gate?
     /// Reads the windows, then holds the result of the next `visibleWindows()` until the gate opens.
-    var visibleWindowsLateGate: FakeGate?
+    var visibleWindowsLateGate: Gate?
     /// Holds the next `snapshot(of:)` call until the gate opens.
-    var snapshotGate: FakeGate?
+    var snapshotGate: Gate?
     /// Reads the window, then holds the result of the next `snapshot(of:)` until the gate opens.
-    var snapshotLateGate: FakeGate?
+    var snapshotLateGate: Gate?
     /// How many `snapshot(of:)` calls have started.
     private(set) var snapshotCount = 0
-    private var snapshotGates: [Int: FakeGate] = [:]
+    private var snapshotGates: [Int: Gate] = [:]
     private var visibleWindowsCount = 0
-    private var visibleWindowsResultGates: [Int: FakeGate] = [:]
+    private var visibleWindowsResultGates: [Int: Gate] = [:]
 
     /// How many `beginWriting` calls wait for another session of the same app to end.
     var waitingSessionCount: Int { waiters.values.reduce(0) { $0 + $1.count } }
@@ -118,17 +85,19 @@ actor FakePlatform: WindowPlatform {
     private(set) var observeAgainCalls: [Set<Int32>] = []
     /// What the last `startObserving(notices:)` was given.
     private var notices: (any WindowNotices)?
+    /// How many events the fake has sent, for a test to wait until the engine has received them all.
+    private(set) var eventsSent = 0
 
     nonisolated let events: AsyncStream<PlatformEvent>
     private nonisolated let eventSink: AsyncStream<PlatformEvent>.Continuation
 
-    private let clock: any TaflClock
+    private let clock: ManualClock
     private var callCount = 0
-    private var gates: [Int: FakeGate] = [:]
+    private var gates: [Int: Gate] = [:]
     private var busyPids: Set<Int32> = []
     private var waiters: [Int32: [CheckedContinuation<Void, Never>]] = [:]
 
-    init(clock: any TaflClock, displays: [Display] = [displayA]) {
+    init(clock: ManualClock, displays: [Display] = [displayA]) {
         self.clock = clock
         self.displays = displays
         (events, eventSink) = AsyncStream.makeStream(of: PlatformEvent.self)
@@ -148,7 +117,7 @@ actor FakePlatform: WindowPlatform {
         case .appQuit(let pid): notices?.quit(pid: pid)
         default: break
         }
-        eventSink.yield(event)
+        send(event)
     }
 
     /// Reads a window for its announcement, as a catch-up does long before its event arrives:
@@ -159,6 +128,11 @@ actor FakePlatform: WindowPlatform {
 
     /// Sends an event without telling the notices: the delivery of one announced earlier.
     func deliver(_ event: PlatformEvent) {
+        send(event)
+    }
+
+    private func send(_ event: PlatformEvent) {
+        eventsSent += 1
         eventSink.yield(event)
     }
 
@@ -169,49 +143,32 @@ actor FakePlatform: WindowPlatform {
         }
     }
 
-    /// Waits until `condition` holds, polling with `Task.yield()`. Records an issue after
-    /// `timeout` of wall-clock time.
-    func waitUntil(
-        timeout: Duration = .seconds(2),
-        sourceLocation: SourceLocation = #_sourceLocation,
-        _ condition: @Sendable (isolated FakePlatform) -> Bool
-    ) async {
-        let start = ContinuousClock.now
-        while !condition(self) {
-            if start.duration(to: ContinuousClock.now) > timeout {
-                Issue.record("Timed out waiting for a FakePlatform condition", sourceLocation: sourceLocation)
-                return
-            }
-            await Task.yield()
-        }
-    }
-
     /// Holds the `snapshot(of:)` call with this index, counted from 0, until the returned gate opens.
-    func pauseSnapshot(at index: Int) -> FakeGate {
-        let gate = FakeGate()
+    func pauseSnapshot(at index: Int) -> Gate {
+        let gate = Gate()
         snapshotGates[index] = gate
         return gate
     }
 
     /// Reads the windows for the `visibleWindows()` call with this index, counted from 0, then holds
     /// its result until the returned gate opens.
-    func pauseVisibleWindowsResult(at index: Int) -> FakeGate {
-        let gate = FakeGate()
+    func pauseVisibleWindowsResult(at index: Int) -> Gate {
+        let gate = Gate()
         visibleWindowsResultGates[index] = gate
         return gate
     }
 
     /// Holds the `beginWriting` call for this window until the returned gate opens: before it takes
     /// its app's session slot, and without a call index.
-    func pauseBeginning(_ handle: WindowHandle) -> FakeGate {
-        let gate = FakeGate()
+    func pauseBeginning(_ handle: WindowHandle) -> Gate {
+        let gate = Gate()
         beginGates[handle] = gate
         return gate
     }
 
     /// Holds the call with this index until the returned gate opens.
-    func pause(beforeCall index: Int) -> FakeGate {
-        let gate = FakeGate()
+    func pause(beforeCall index: Int) -> Gate {
+        let gate = Gate()
         gates[index] = gate
         return gate
     }
@@ -221,7 +178,7 @@ actor FakePlatform: WindowPlatform {
     func displays() async -> [Display] {
         if let gate = displaysGate {
             displaysGate = nil
-            await gate.wait()
+            await hold(gate)
         }
         return displays
     }
@@ -237,16 +194,16 @@ actor FakePlatform: WindowPlatform {
         visibleWindowsCount += 1
         if let gate = visibleWindowsGate {
             visibleWindowsGate = nil
-            await gate.wait()
+            await hold(gate)
         }
         let read = windows.values
             .sorted { ($0.handle.pid, $0.handle.windowID) < ($1.handle.pid, $1.handle.windowID) }
             .map(take)
         if let late = visibleWindowsLateGate {
             visibleWindowsLateGate = nil
-            await late.wait()
+            await hold(late)
         }
-        if let late = visibleWindowsResultGates.removeValue(forKey: index) { await late.wait() }
+        if let late = visibleWindowsResultGates.removeValue(forKey: index) { await hold(late) }
         return read
     }
 
@@ -257,10 +214,10 @@ actor FakePlatform: WindowPlatform {
     ) async -> Result<T, PlatformFailure> {
         let index = snapshotCount
         snapshotCount += 1
-        if let gate = snapshotGates.removeValue(forKey: index) { await gate.wait() }
+        if let gate = snapshotGates.removeValue(forKey: index) { await hold(gate) }
         if let gate = snapshotGate {
             snapshotGate = nil
-            await gate.wait()
+            await hold(gate)
         }
         if hung.contains(handle.pid) {
             await hungWait()
@@ -270,7 +227,7 @@ actor FakePlatform: WindowPlatform {
         let read = take(window)
         if let late = snapshotLateGate {
             snapshotLateGate = nil
-            await late.wait()
+            await hold(late)
         }
         return .success(read)
     }
@@ -292,7 +249,7 @@ actor FakePlatform: WindowPlatform {
     }
 
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> {
-        if let gate = beginGates.removeValue(forKey: handle) { await gate.wait() }
+        if let gate = beginGates.removeValue(forKey: handle) { await hold(gate) }
         await acquireSlot(handle.pid)
         if await enter(handle, "begin") {
             releaseSlot(handle.pid)
@@ -311,15 +268,15 @@ actor FakePlatform: WindowPlatform {
         let call = raiseCalls.count
         raiseCalls.append(windows)
         for (step, window) in windows.enumerated() {
-            if let gate = raiseGates.removeValue(forKey: RaiseStep(call: call, step: step)) { await gate.wait() }
+            if let gate = raiseGates.removeValue(forKey: RaiseStep(call: call, step: step)) { await hold(gate) }
             guard admit() else { return }
             raised.append(window)
         }
     }
 
     /// Holds the `raise` call with this index, counted from 0, before its step with this index.
-    func pauseRaise(call: Int, beforeStep step: Int) -> FakeGate {
-        let gate = FakeGate()
+    func pauseRaise(call: Int, beforeStep step: Int) -> Gate {
+        let gate = Gate()
         raiseGates[RaiseStep(call: call, step: step)] = gate
         return gate
     }
@@ -337,7 +294,7 @@ actor FakePlatform: WindowPlatform {
         startObservingCount += 1
         if let gate = startObservingGate {
             startObservingGate = nil
-            await gate.wait()
+            await hold(gate)
         }
         return unobserved.map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
     }
@@ -349,7 +306,7 @@ actor FakePlatform: WindowPlatform {
             .map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
         if let gate = observeAgainGate {
             observeAgainGate = nil
-            await gate.wait()
+            await hold(gate)
         }
         return answer
     }
@@ -453,18 +410,24 @@ actor FakePlatform: WindowPlatform {
     private func claim(_ handle: WindowHandle) async {
         let index = callCount
         callCount += 1
-        if let gate = gates.removeValue(forKey: index) { await gate.wait() }
+        if let gate = gates.removeValue(forKey: index) { await hold(gate) }
         if let hook = beforeCall[index], var window = windows[handle] {
             hook(&window)
             windows[handle] = window
         }
     }
 
-    /// A call in flight cannot be cancelled, so the wait runs in an unstructured task that
-    /// does not inherit the caller's cancellation.
+    /// A call in flight cannot be cancelled: it takes the app's whole timeout.
     private func hungWait() async {
-        let clock = clock
-        await Task { try? await clock.sleep(for: .milliseconds(500)) }.value
+        await clock.sleepIgnoringCancellation(for: .milliseconds(500))
+    }
+
+    /// Holds a call at its gate. The engine's task that made it, if any, is parked meanwhile.
+    private func hold(_ gate: Gate) async {
+        await gate.hold(parking: {
+            guard let parked = EngineActivity.parkCurrentTask() else { return nil }
+            return { parked.unpark() }
+        })
     }
 
     private func acquireSlot(_ pid: Int32) async {
@@ -472,7 +435,7 @@ actor FakePlatform: WindowPlatform {
             busyPids.insert(pid)
             return
         }
-        await withCheckedContinuation { waiters[pid, default: []].append($0) }
+        await withCheckedContinuation { waiters[pid, default: []].append($0) } // lint-tests: allow models the app's session slot, released by the session before it
     }
 
     private func releaseSlot(_ pid: Int32) {

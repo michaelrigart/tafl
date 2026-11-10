@@ -66,3 +66,8 @@ func window(
         isAppHidden: false
     )
 }
+
+/// A platform event no test sends, for a `Collector`'s drains: a launch with a negative pid.
+func markerEvent(_ number: Int) -> PlatformEvent {
+    .appLaunched(pid: -Int32(number), bundleID: "marker")
+}
