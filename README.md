@@ -69,7 +69,7 @@ the first time you open it. After the first install:
 3. Quit Rectangle, or any other app that uses the same shortcuts, before you start Tafl.
    Tafl's defaults are Rectangle's alternate set, so both would register the same keys. If
    another app holds a shortcut, Tafl gets no error when it registers the same key
-   (measured on macOS 27.2), so the shortcut may not reach Tafl.
+   (measured on macOS 27.2), so a clash can go unnoticed.
 
 Without a config file Tafl runs on its built-in defaults. Settings > Overview can create a
 starter file with every setting at its default, commented. That is the only time Tafl writes
@@ -177,11 +177,10 @@ Most of these come from macOS 27, not from Tafl. v1's design takes what macOS al
 Rectangle's source and Apple's documentation; the only item below that has been measured on
 macOS 27.2 is the first one.
 
-- **A shortcut another app holds may not reach Tafl, and Tafl isn't told.** Registering a
-  key another app already holds gives Tafl no error (measured on 27.2). With Rectangle
-  running, Tafl's registration took 45 of 45 presses and Rectangle's same chords stopped
-  working. Other apps were not tried, so quit Rectangle or any other app that uses the same
-  keys.
+- **Tafl isn't told when another app holds a shortcut.** Registering a key another app
+  already holds gives Tafl no error (measured on 27.2). With Rectangle running, ⌃⌥← and ⌃⌥→
+  pressed 45 times all reached Tafl, and Rectangle moved nothing. Other apps and other keys
+  were not tried, so quit Rectangle or any other app that uses the same keys.
 - **No Spaces.** macOS has no public API for them, so Tafl doesn't move windows between
   Spaces and has no per-Space layouts. Layouts and display-change rules reach the windows
   of the current Space; windows on other Spaces stay where macOS put them.
