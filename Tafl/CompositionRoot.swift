@@ -24,9 +24,7 @@ final class CompositionRoot {
     /// Whether Accessibility was granted when last looked at.
     private var trusted = false
     private var engineStarted = false
-    /// Whether this process has run without the grant, so a grant seen now needs a fresh process.
-    private var ranWithoutGrant = false
-    private var relaunching = false
+    private var grantRule = GrantRule()
     /// The categories of the last failures, newest last, for diagnostics.
     private var recentFailures: [String] = []
     private var platformInfoTask: Task<Void, Never>?
@@ -182,43 +180,40 @@ final class CompositionRoot {
 
     // MARK: Accessibility
 
-    /// Reads the Accessibility grant and acts on a change: starts the engine, or on a loss removes
-    /// the shortcuts. A grant that arrives in a process that ran without it relaunches Tafl, because
-    /// observing started right after such a grant can fail for every app.
+    /// Reads the held Accessibility grant and does what `GrantRule` says: starts the engine, shows the
+    /// onboarding on a loss, or relaunches Tafl when a grant arrives in a process that ran without it.
     func syncPermission() {
         let granted = permission.isTrusted
-        Log.app.notice("Accessibility check: reported=\(granted, privacy: .public)")
+        Log.app.notice("Accessibility: trusted=\(granted, privacy: .public)")
         trusted = granted
         defer { refreshMenu() }
-        guard granted else {
-            ranWithoutGrant = true
-            configController.reactivate()
-            onboarding.show()
-            return
-        }
-        if ranWithoutGrant, !relaunching {
-            relaunching = true
-            Log.app.notice("Accessibility granted to a running Tafl, relaunching")
-            if Relaunch.perform() { return }
-            relaunching = false
-        }
-        guard !relaunching else { return }
-        onboarding.close()
-        if !engineStarted {
-            startEngine()
-        } else if ranWithoutGrant {
-            ranWithoutGrant = false
-            configController.reactivate()
-            restartObserving()
-        }
+        perform(grantRule.read(granted: granted, engineStarted: engineStarted))
     }
 
     private func permissionLost() {
         Log.app.notice("Accessibility permission missing")
         trusted = false
-        ranWithoutGrant = true
-        configController.reactivate()
-        onboarding.show()
+        perform(grantRule.read(granted: false, engineStarted: engineStarted))
+    }
+
+    private func perform(_ action: GrantRule.Action) {
+        switch action {
+        case .nothing:
+            break
+        case .showOnboarding:
+            configController.reactivate()
+            onboarding.show()
+        case .relaunch:
+            Log.app.notice("Accessibility granted to a running Tafl, relaunching")
+            perform(grantRule.relaunchAttempted(started: Relaunch.perform(), engineStarted: engineStarted))
+        case .startEngine:
+            onboarding.close()
+            startEngine()
+        case .restartObserving:
+            onboarding.close()
+            configController.reactivate()
+            restartObserving()
+        }
     }
 
     private func startEngine() {
