@@ -64,6 +64,25 @@ struct DisplayChangeRulesTests {
         ])
     }
 
+    @Test func rememberedSetupStepsAsideForAWindowMacOSRestored() {
+        // macOS put the window back at its last frame on this setup: the rule sends no move, and the
+        // window is not handed on to the rules below it either.
+        let remembered = StoredFrame(display: displayB.identity, relative: UnitRect(x: 0.5, y: 0, width: 0.5, height: 0.5))
+        let previous = StoredFrame(display: displayA.identity, relative: UnitRect(x: 0, y: 0, width: 0.5, height: 1))
+        let restored = window(1, frame: rect(2000, 0, 1000, 775))
+        #expect(plan(new: [displayB], [atChange(restored, previous: previous, remembered: remembered)]).isEmpty)
+        let offByAPoint = window(2, frame: rect(2001, 0, 1000, 775))
+        #expect(plan(new: [displayB], [atChange(offByAPoint, remembered: remembered)]).isEmpty)
+        let offByTwo = window(3, frame: rect(2002, 0, 1000, 775))
+        #expect(plan(new: [displayB], [atChange(offByTwo, remembered: remembered)]).map(\.spec) == [.frame(rect(2000, 0, 1000, 775))])
+    }
+
+    @Test func aClaimingLayoutStillPlacesAWindowMacOSRestored() {
+        let remembered = StoredFrame(display: displayA.identity, relative: UnitRect(x: 0.5, y: 0, width: 0.5, height: 1))
+        let restored = window(1, frame: remembered.relative.absolute(in: displayA.visibleFrame))
+        #expect(plan(new: [displayA], [atChange(restored, remembered: remembered)], claiming: layout(.leftHalf)).map(\.spec) == [.named(.leftHalf)])
+    }
+
     @Test func recognisedPlacementCarriesOver() {
         let w = window(1, frame: rect(0, 25, 300, 300))
         let previous = StoredFrame(display: displayB.identity, relative: UnitRect(x: 0, y: 0, width: 0.5, height: 1))
