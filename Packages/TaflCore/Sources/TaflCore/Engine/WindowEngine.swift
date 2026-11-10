@@ -137,6 +137,9 @@ public actor WindowEngine {
     var reportedUnobservable: Set<Int32> = []
     /// While a restart is pending: what events said since the first pending one was asked for.
     var restartJournal: RestartJournal?
+    /// The apps whose retries are scheduled and not over. A newer restart cancels the schedule but
+    /// does not count these as unobservable before it, so it retries them again if they still fail.
+    var pendingRetries: Set<Int32> = []
     /// The latest restart; the next one waits for it.
     var restartTask: Task<Void, Never>?
     /// The schedule of tries for the apps the latest restart could not observe.
@@ -298,7 +301,9 @@ public actor WindowEngine {
         observeRetryTask?.cancel()
         observeRetryTask = nil
         // The baseline is taken before any registration work, which events may report on meanwhile.
-        if restartJournal == nil { restartJournal = RestartJournal(before: unobservable) }
+        if restartJournal == nil {
+            restartJournal = RestartJournal(before: unobservable.filter { !pendingRetries.contains($0.key) })
+        }
         let previous = restartTask
         let task = Task {
             await previous?.value
@@ -331,7 +336,8 @@ public actor WindowEngine {
     /// left. A newer restart, a stop and an app's quit end the tries for the apps they concern.
     private func scheduleObserveRetries(for pids: Set<Int32>, after generation: Int) {
         let delays = timing.observeRetryDelays
-        guard !pids.isEmpty, !delays.isEmpty else { return }
+        pendingRetries = delays.isEmpty ? [] : pids
+        guard !pendingRetries.isEmpty else { return }
         observeRetryTask = Task { [clock] in
             var pending = pids
             var elapsed = Duration.zero
@@ -341,7 +347,13 @@ public actor WindowEngine {
                 pending = await self.observeAgain(pending, after: generation)
                 if pending.isEmpty { return }
             }
+            self.endRetries(after: generation)
         }
+    }
+
+    /// The last try is over: the apps still failing are given up on, unless a newer restart has begun.
+    private func endRetries(after generation: Int) {
+        if restarts.isCurrent(generation) { pendingRetries = [] }
     }
 
     /// The apps still unobservable after trying these again. Whatever has happened meanwhile (a newer
@@ -361,6 +373,7 @@ public actor WindowEngine {
                 unobservable[pid] = nil
             }
         }
+        pendingRetries = remaining
         return remaining
     }
 

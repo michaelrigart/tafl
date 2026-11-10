@@ -1811,12 +1811,41 @@ private func wakeRig() async -> Rig {
 @Test(.timeLimit(.minutes(1))) func aNewerRestartCancelsThePendingRetries() async {
     let rig = await wakeRig()
     await rig.clock.waitForSleepers(1)
-    // The newer restart finds the app failing too; it was unobservable before it, so it has no retries.
+    // The newer restart finds the app observable, so the earlier retries have nothing left to do.
+    await rig.fake.configure { $0.unobserved = [] }
     await rig.engine.restartObserving()
     #expect(rig.clock.sleeperCount == 0)
     await rig.clock.advance(by: .seconds(60))
     #expect(await rig.fake.observeAgainCalls.isEmpty)
-    #expect(await rig.engine.unobservable == [200: [.moved, .resized]])
+    #expect(await rig.engine.unobservable.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func aNewerRestartRetriesTheAppsTheEarlierRetriesStillHad() async {
+    let rig = await wakeRig()
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: .seconds(3))
+    await rig.fake.waitUntil { $0.observeAgainCalls.count == 1 }
+    // The second wake finds the app failing again, 3 s in: its retries are the newer restart's.
+    await rig.engine.restartObserving()
+    await rig.clock.waitForSleepers(1)
+    await rig.fake.configure { $0.unobserved = [] }
+    await rig.clock.advance(by: .seconds(3))
+    await waitForUnobservable(rig, [:])
+    #expect(await rig.fake.observeAgainCalls == [[200], [200]])
+}
+
+@Test(.timeLimit(.minutes(1))) func anAppTheRetriesGaveUpOnIsNotRetriedByTheNextRestart() async {
+    let rig = await wakeRig()
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: .seconds(3))
+    await rig.fake.waitUntil { $0.observeAgainCalls.count == 1 }
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: .seconds(7))
+    await rig.fake.waitUntil { $0.observeAgainCalls.count == 2 }
+    await rig.engine.observeRetryTask?.bounded()
+    await rig.engine.restartObserving()
+    #expect(rig.clock.sleeperCount == 0)
+    #expect(await rig.fake.observeAgainCalls.count == 2)
 }
 
 @Test(.timeLimit(.minutes(1))) func anAppThatQuitsIsNotRetried() async {

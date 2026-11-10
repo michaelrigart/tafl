@@ -28,6 +28,7 @@ extension WindowEngine {
             eventsHandled += 1
         case .appQuit(let pid):
             unobservable[pid] = nil
+            pendingRetries.remove(pid)
             reportedUnobservable.remove(pid)
             restartJournal?.quit(pid: pid)
             frameReads = frameReads.filter { $0.key.pid != pid }
