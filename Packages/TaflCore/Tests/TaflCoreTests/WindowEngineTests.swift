@@ -136,9 +136,17 @@ private final class Rig: Sendable {
     /// and reports keep their order, so a test can say that none of a kind was sent. Works on a
     /// stopped engine too.
     func waitForReportsUpToNow(sourceLocation: SourceLocation = #_sourceLocation) async {
-        let marker = EngineReport.layoutApplied(name: "marker", placed: 0, failed: 0)
-        await engine.report(marker)
-        await waitForReport(sourceLocation: sourceLocation) { $0 == marker }
+        await engine.report(Self.marker)
+        await waitForReport(sourceLocation: sourceLocation) { $0 == Self.marker }
+    }
+
+    private static let marker = EngineReport.layoutApplied(name: "marker", placed: 0, failed: 0)
+
+    /// Every report sent so far, without the marker that `waitForReportsUpToNow` sends: what a test
+    /// reads to say that none of a kind was sent, or what the exact list was, or how many there were.
+    func reportsUpToNow(sourceLocation: SourceLocation = #_sourceLocation) async -> [EngineReport] {
+        await waitForReportsUpToNow(sourceLocation: sourceLocation)
+        return reports.filter { $0 != Self.marker }
     }
 
     /// Waits until `count` display changes have been handled in all.
@@ -323,14 +331,14 @@ private final class Rig: Sendable {
     await rig.clock.waitForSleepers(1)
     await rig.engine.perform(.maximize)
     #expect(await rig.frame(of: elsewhere.handle) == rect(0, 25, 1000, 775))
-    #expect(rig.reports == [.memory(.fresh)])
+    #expect(await rig.reportsUpToNow() == [.memory(.fresh)])
 
     await rig.clock.advance(by: .milliseconds(500))
     await applying.bounded()
     // The run is summed up, and its failure says why on the window's display.
     let failure = EngineReport.failure(.notResponding(app: "Example"), display: displayA.identity)
     await rig.waitForReport { $0 == failure }
-    #expect(rig.reports == [.memory(.fresh), .layoutApplied(name: "Work", placed: 2, failed: 1), failure])
+    #expect(await rig.reportsUpToNow() == [.memory(.fresh), .layoutApplied(name: "Work", placed: 2, failed: 1), failure])
     #expect(await rig.engine.activeLayoutName == "Work")
 }
 
@@ -344,7 +352,7 @@ private final class Rig: Sendable {
     await rig.engine.start(config: config(layouts: [desk]))
     await rig.engine.applyLayout(named: "Work")
     await rig.waitForReport { $0 == .failure(.cannotMove, display: displayA.identity) }
-    #expect(rig.reports == [
+    #expect(await rig.reportsUpToNow() == [
         .memory(.fresh),
         .layoutApplied(name: "Work", placed: 0, failed: 2),
         .failure(.cannotMove, display: displayA.identity),
@@ -357,7 +365,7 @@ private final class Rig: Sendable {
     await rig.engine.start(config: config(layouts: [desk]))
     await rig.engine.applyLayout(named: "Desk")
     await rig.waitForReport { $0 == .failure(.permissionMissing, display: nil) }
-    #expect(rig.reports == [.memory(.fresh), .failure(.permissionMissing, display: nil)])
+    #expect(await rig.reportsUpToNow() == [.memory(.fresh), .failure(.permissionMissing, display: nil)])
     #expect(await rig.log.isEmpty)
     #expect(await rig.engine.activeLayoutName == nil)
 }
@@ -1049,7 +1057,7 @@ private let placeholderB = Display(
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(500))
     await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 1) }
-    #expect(rig.reports.allSatisfy { if case .failure = $0 { false } else { true } })
+    #expect(await rig.reportsUpToNow().allSatisfy { if case .failure = $0 { false } else { true } })
 }
 
 @Test func aLayoutEndsAtTheNextDisplayChange() async {
@@ -1080,7 +1088,7 @@ private let placeholderB = Display(
     await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
     #expect(await rig.frame(of: observed.handle) == leftHalfA)
     #expect(await rig.frame(of: unobserved.handle) == asleep)
-    #expect(rig.reports.filter { $0 == .unobservable(bundleID: "com.b") }.count == 1)
+    #expect(await rig.reportsUpToNow().filter { $0 == .unobservable(bundleID: "com.b") }.count == 1)
 }
 
 @Test func unobservableAppsAreCountedUntilTheyQuit() async {
@@ -1155,8 +1163,9 @@ private func temporaryStore() -> (MemoryStore, URL) {
     await second.engine.start(config: config())
     #expect(await second.log.isEmpty)
     await second.waitForReport { if case .memory = $0 { true } else { false } }
-    #expect(second.reports.count == 1)
-    if case .memory(.loaded) = second.reports.first {} else { Issue.record("Expected the saved memory to load; got \(second.reports)") }
+    let sent = await second.reportsUpToNow()
+    #expect(sent.count == 1)
+    if case .memory(.loaded) = sent.first {} else { Issue.record("Expected the saved memory to load; got \(sent)") }
 }
 
 @Test func theRememberedLayoutIsLookedUpByNameAtLaunch() async {
@@ -1641,7 +1650,7 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
     #expect(await rig.fake.stopObservingCount == 1)
     #expect(await rig.engine.unobservable == [300: [.created]])
     await rig.waitForReport { $0 == .unobservable(bundleID: "com.c") }
-    #expect(rig.reports.filter { $0 == .unobservable(bundleID: "com.b") }.count == 1)
+    #expect(await rig.reportsUpToNow().filter { $0 == .unobservable(bundleID: "com.b") }.count == 1)
     // The event consumer carries on.
     await rig.emit(.appLaunched(pid: 5, bundleID: nil))
     await rig.waitForEvents(1)
@@ -2146,7 +2155,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     await restarting.bounded()
     #expect(await rig.engine.unobservable.isEmpty)
     #expect(await rig.engine.unobservableAppCount == 0)
-    #expect(!rig.reports.contains(.unobservable(bundleID: "com.d")))
+    #expect(await !rig.reportsUpToNow().contains(.unobservable(bundleID: "com.d")))
 }
 
 @Test(.timeLimit(.minutes(1))) func overlappingRestartsKeepWhatEventsLearned() async {
@@ -2194,7 +2203,7 @@ private func rulesOvertakenByALayout() async -> Rig {
         return
     }
     #expect(saved.placed[handle]?.display == displayB.identity)
-    #expect(rig.reports == [.memory(.fresh)])
+    #expect(await rig.reportsUpToNow() == [.memory(.fresh)])
 }
 
 @Test(.timeLimit(.minutes(1))) func aRequestAfterStopBeganIsRefused() async {
@@ -2216,7 +2225,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     await stopping.bounded()
     #expect(await rig.frame(of: other.handle) == start)
     #expect(await rig.log.filter { $0 == "begin" }.count == 1)
-    #expect(rig.reports == [.memory(.fresh)])
+    #expect(await rig.reportsUpToNow() == [.memory(.fresh)])
 }
 
 /// Quit while startup's rules are still reading the windows: placing stops at once, before startup is
@@ -2307,7 +2316,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     #expect(await rig.log.filter { $0.hasPrefix("size") || $0.hasPrefix("position") }.allSatisfy { $0.hasSuffix("cancelled") })
     #expect(await rig.frame(of: one.handle) == start)
     #expect(await rig.frame(of: two.handle) == start)
-    #expect(rig.reports == [.memory(.fresh)])
+    #expect(await rig.reportsUpToNow() == [.memory(.fresh)])
 
     await rig.engine.stop()
     guard case .loaded = store.load() else {
@@ -2333,7 +2342,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     await applying.bounded()
     #expect(await rig.frame(of: second.handle) == second.frame)
     #expect(await rig.log.filter { $0 == "begin" }.count == 1)
-    #expect(rig.reports == [.memory(.fresh), .layoutApplied(name: "Desk", placed: 1, failed: 0)])
+    #expect(await rig.reportsUpToNow() == [.memory(.fresh), .layoutApplied(name: "Desk", placed: 1, failed: 0)])
     #expect(await rig.engine.memory.read().placed[second.handle] == nil)
 }
 
@@ -2357,7 +2366,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     gate.open()
     await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
     #expect(await rig.frame(of: strayB2.handle) == rect(400, 400, 300, 300))
-    #expect(rig.reports.allSatisfy { if case .failure = $0 { false } else { true } })
+    #expect(await rig.reportsUpToNow().allSatisfy { if case .failure = $0 { false } else { true } })
 }
 
 // MARK: Memory of gone windows
@@ -2425,8 +2434,7 @@ private func callsOf(_ placement: @Sendable (Rig) async -> Void, config: Config)
     await acting.bounded()
     let memory = await rig.engine.memory.read()
     #expect(memory.restore[handle]?.chainOpen == false)
-    await rig.waitForReport { if case .failure = $0 { true } else { false } }
-    #expect(rig.reports.contains { if case .failure(.movedDuringPlacement, _) = $0 { true } else { false } })
+    await rig.waitForReport { if case .failure(.movedDuringPlacement, _) = $0 { true } else { false } }
 }
 
 // MARK: Readings in read order
@@ -2647,7 +2655,7 @@ func anActionAfterADragStartsANewChainAtTheDraggedFrame(eventReadFirst: Bool) as
     // The drag's own notification reads the window after the action: Tafl's own frame by then.
     await rig.emit(.windowMoved(handle))
     await rig.waitForEvents(1)
-    #expect(rig.reports.allSatisfy { if case .failure = $0 { false } else { true } })
+    #expect(await rig.reportsUpToNow().allSatisfy { if case .failure = $0 { false } else { true } })
     await rig.engine.perform(.restore)
     #expect(await rig.frame() == dragged)
 }
