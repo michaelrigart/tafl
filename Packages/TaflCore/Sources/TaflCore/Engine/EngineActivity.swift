@@ -3,13 +3,14 @@ import Synchronization
 /// What the engine is doing, kept so a test can wait until it can do nothing more by itself
 /// (`WindowEngine.quiescent(afterEvents:)`). Nothing in the app waits on it.
 ///
-/// Work counts from its start to its end: a call into the engine from entry to return, and a task
-/// the engine starts from the step that creates it. A task stops counting while it is parked on
-/// input whose waker credits it back before waking it (`parkCurrentTask()`), as the tests' clock and
-/// gates do. Anything a piece of work awaits in another task (a request, a run's apps) counts as
-/// that work still running, so a quiet engine never has work left that could go on by itself.
+/// Work comes in units, each run in a task of its own: a call into the engine, counted from entry
+/// to return, and a task the engine starts, counted from the step that creates it. A unit stops
+/// counting while its task is parked on input whose waker credits it back before waking it
+/// (`parkCurrentTask()`), as the tests' clock and gates do. Anything a unit awaits in another task
+/// (a request, a run's apps, a restart) counts as the unit still running, so a quiet engine never
+/// has work left that could go on by itself.
 final class EngineActivity: Sendable {
-    /// A task the engine started, counted from the step that created it until its body returns.
+    /// A call into the engine or a task it started, counted from its creation until its body returns.
     final class Unit: Sendable {
         private enum Phase {
             case created, running, parked, over
@@ -34,7 +35,7 @@ final class EngineActivity: Sendable {
             state.withLock { $0.phase == .created || $0.phase == .running }
         }
 
-        /// Runs `body` as this unit, in the task created for it; the unit is over when it returns.
+        /// Runs `body` as this unit, in the unit's own task; the unit is over when it returns.
         nonisolated(nonsending) func run<T>(_ body: nonisolated(nonsending) () async -> T) async -> T {
             state.withLock { state in
                 state.phase = .running
@@ -45,6 +46,10 @@ final class EngineActivity: Sendable {
                 activity.change(by: -1)
             }
             return await EngineActivity.$current.withValue(self, operation: body)
+        }
+
+        fileprivate var isCurrentTask: Bool {
+            state.withLock { $0.task != nil && $0.task == currentTaskID() }
         }
 
         fileprivate func parkIfOwnTask() -> Bool {
@@ -95,13 +100,11 @@ final class EngineActivity: Sendable {
         Unit(self)
     }
 
-    /// A call into the engine, counted until the matching `leave()`.
-    func enter() {
-        change(by: 1)
-    }
-
-    func leave() {
-        change(by: -1)
+    /// Runs a call into the engine as a unit of the calling task, unless that task already runs one
+    /// of this engine's units, as when the engine calls itself.
+    nonisolated(nonsending) func call<T>(_ body: nonisolated(nonsending) () async -> T) async -> T {
+        if let unit = Self.current, unit.activity === self, unit.isCurrentTask { return await body() }
+        return await Unit(self).run(body)
     }
 
     /// Counts an event the engine has received and dealt with; work it started is counted already.

@@ -205,44 +205,44 @@ public actor WindowEngine {
     /// Loads the memory, starts observing and, when the display setup differs from the one
     /// the memory last saw, runs the display change rules. Call it once.
     public func start(config: Config) async {
-        activity.enter()
-        defer { activity.leave() }
-        self.config = config
-        let load = await memory.load()
-        report(.memory(load))
-        await forgetGoneProcesses()
-        let remembered = await memory.read()
-        activeLayout = ActiveLayout(name: remembered.activeLayout)
-        activeLayout.reconcile(with: config)
-        let layout = activeLayout.name
-        await memory.update { $0.activeLayout = layout }
+        await activity.call {
+            self.config = config
+            let load = await memory.load()
+            report(.memory(load))
+            await forgetGoneProcesses()
+            let remembered = await memory.read()
+            activeLayout = ActiveLayout(name: remembered.activeLayout)
+            activeLayout.reconcile(with: config)
+            let layout = activeLayout.name
+            await memory.update { $0.activeLayout = layout }
 
-        // Apps that failed to register are known before any rule or seed looks at a window.
-        learn(await platform.startObserving(notices: owner))
-        let current = await platform.displays()
-        if current.contains(where: \.isPlaceholder) {
-            // A placeholder display is no setup (see `settle`): nothing moves, and nothing is recorded or
-            // remembered for it. Recording stays frozen on the last real setup, which the next real setup
-            // is compared with; with none remembered the next real setup is a first setup.
-            owner.freezeLastKnown(on: remembered.lastDisplays)
-            changeOrigin = remembered.lastDisplays
-            awaitingFirstSetup = remembered.lastSetup == nil
-            listen()
-        } else if let lastSetup = remembered.lastSetup, lastSetup != DisplaySetup(current) {
-            owner.freezeLastKnown(on: remembered.lastDisplays)
-            changeOrigin = remembered.lastDisplays
-            // From here a reconfiguration freezes and stops the run below.
-            listen()
-            await applyDisplayChange(from: remembered.lastDisplays, to: current)
-        } else {
-            // Taken in the step that resumes recording, before any event is handled: a change that
-            // begins from here stores its own setup.
-            let began = reconfigurations.current
-            owner.recordLastKnown(for: current)
-            listen()
-            // The seed: every window's first reading, recorded for the current setup.
-            _ = await platform.visibleWindows(take: owner.take)
-            await rememberDisplays(current, since: began)
+            // Apps that failed to register are known before any rule or seed looks at a window.
+            learn(await platform.startObserving(notices: owner))
+            let current = await platform.displays()
+            if current.contains(where: \.isPlaceholder) {
+                // A placeholder display is no setup (see `settle`): nothing moves, and nothing is recorded or
+                // remembered for it. Recording stays frozen on the last real setup, which the next real setup
+                // is compared with; with none remembered the next real setup is a first setup.
+                owner.freezeLastKnown(on: remembered.lastDisplays)
+                changeOrigin = remembered.lastDisplays
+                awaitingFirstSetup = remembered.lastSetup == nil
+                listen()
+            } else if let lastSetup = remembered.lastSetup, lastSetup != DisplaySetup(current) {
+                owner.freezeLastKnown(on: remembered.lastDisplays)
+                changeOrigin = remembered.lastDisplays
+                // From here a reconfiguration freezes and stops the run below.
+                listen()
+                await applyDisplayChange(from: remembered.lastDisplays, to: current)
+            } else {
+                // Taken in the step that resumes recording, before any event is handled: a change that
+                // begins from here stores its own setup.
+                let began = reconfigurations.current
+                owner.recordLastKnown(for: current)
+                listen()
+                // The seed: every window's first reading, recorded for the current setup.
+                _ = await platform.visibleWindows(take: owner.take)
+                await rememberDisplays(current, since: began)
+            }
         }
     }
 
@@ -258,19 +258,19 @@ public actor WindowEngine {
     /// A layout application still running finishes against the config in force then: a layout the
     /// reload removed does not become active.
     public func update(config: Config) async {
-        activity.enter()
-        defer { activity.leave() }
-        self.config = config
-        activeLayout.reconcile(with: config)
-        let layout = activeLayout.name
-        await memory.update { $0.activeLayout = layout }
+        await activity.call {
+            self.config = config
+            activeLayout.reconcile(with: config)
+            let layout = activeLayout.name
+            await memory.update { $0.activeLayout = layout }
+        }
     }
 
     public func save() async {
-        activity.enter()
-        defer { activity.leave() }
-        guard !isStopping else { return }
-        await writeMemory()
+        await activity.call {
+            guard !isStopping else { return }
+            await writeMemory()
+        }
     }
 
     private func writeMemory() async {
@@ -283,33 +283,33 @@ public actor WindowEngine {
     /// nothing more, and nothing saves but `stop`. Quit calls it before it waits for startup and a
     /// restart, which a slow app can hold up. Idempotent.
     public func stopPlacing() async {
-        activity.enter()
-        defer { activity.leave() }
-        isStopping = true
-        stops.begin()
-        eventTask?.cancel()
-        settleTask?.cancel()
-        rulesTask?.cancel()
-        for task in background.values { task.cancel() }
-        observeRetryTask?.cancel()
-        observeRetryTask = nil
-        eventTask = nil
-        settleTask = nil
-        rulesTask = nil
-        background = [:]
-        frameReads = [:]
-        await queue.halt()
+        await activity.call {
+            isStopping = true
+            stops.begin()
+            eventTask?.cancel()
+            settleTask?.cancel()
+            rulesTask?.cancel()
+            for task in background.values { task.cancel() }
+            observeRetryTask?.cancel()
+            observeRetryTask = nil
+            eventTask = nil
+            settleTask = nil
+            rulesTask = nil
+            background = [:]
+            frameReads = [:]
+            await queue.halt()
+        }
     }
 
     /// Stops placing, waits until each request has ended its session and recorded what it did,
     /// stops observing and saves the memory. The engine does not start again.
     public func stop() async {
-        activity.enter()
-        defer { activity.leave() }
-        await stopPlacing()
-        await queue.stop()
-        await platform.stopObserving()
-        await writeMemory()
+        await activity.call {
+            await stopPlacing()
+            await queue.stop()
+            await platform.stopObserving()
+            await writeMemory()
+        }
     }
 
     /// Registers the platform's observers again, as after a wake or a user switch, and learns
@@ -317,22 +317,22 @@ public actor WindowEngine {
     /// time, and only the newest commits: it lays what events said since the first pending one
     /// was asked for over its answer.
     public func restartObserving() async {
-        activity.enter()
-        defer { activity.leave() }
-        let generation = restarts.begin()
-        observeRetryTask?.cancel()
-        observeRetryTask = nil
-        // The baseline is taken before any registration work, which events may report on meanwhile.
-        if restartJournal == nil {
-            restartJournal = RestartJournal(before: unobservable.filter { !pendingRetries.contains($0.key) })
+        await activity.call {
+            let generation = restarts.begin()
+            observeRetryTask?.cancel()
+            observeRetryTask = nil
+            // The baseline is taken before any registration work, which events may report on meanwhile.
+            if restartJournal == nil {
+                restartJournal = RestartJournal(before: unobservable.filter { !pendingRetries.contains($0.key) })
+            }
+            let previous = restartTask
+            let task = Task {
+                await previous?.value
+                await self.restart(generation)
+            }
+            restartTask = task
+            await task.value
         }
-        let previous = restartTask
-        let task = Task {
-            await previous?.value
-            await self.restart(generation)
-        }
-        restartTask = task
-        await task.value
     }
 
     private func restart(_ generation: Int) async {
@@ -430,54 +430,54 @@ public actor WindowEngine {
     // MARK: Actions
 
     public func perform(_ action: Action) async {
-        activity.enter()
-        defer { activity.leave() }
-        guard !isStopping else { return }
-        guard await platform.isAccessibilityGranted() else {
-            report(.failure(.permissionMissing, display: nil))
-            return
-        }
-        let focused: WindowSnapshot
-        switch await platform.focusedWindow(take: owner.take) {
-        case .failure(.notResponding):
-            report(.failure(.notResponding(app: "The app"), display: nil))
-            return
-        case .failure:
-            report(.failure(.noWindow, display: nil))
-            return
-        case .success(let snapshot):
-            focused = snapshot
-        }
-        owner.touch(focused.handle)
-        let pointer = await platform.pointerDisplay()
-        let config = config
-        let outcome = await pipeline.run(focused.handle, config: config, unplaceable: .explained, plan: { resolved in
-            let context = ActionContext(
-                window: resolved.snapshot,
-                display: resolved.display,
-                displays: resolved.displays,
-                pointerDisplay: pointer,
-                placed: resolved.placed,
-                isAtAchieved: resolved.isAtAchieved,
-                restoreTarget: resolved.restoreTarget,
-                config: config
-            )
-            switch ActionResolver.plan(action, context) {
-            case .move(let spec, let target, let placement, let cycleStep):
-                return .request(MoveRequest(
-                    window: focused.handle,
-                    spec: spec,
-                    display: target.identity,
-                    placement: placement,
-                    cycleStep: cycleStep,
-                    source: .action(action)
-                ))
-            case .nothing: return .nothing
-            case .fail(let kind): return .fail(kind)
+        await activity.call {
+            guard !isStopping else { return }
+            guard await platform.isAccessibilityGranted() else {
+                report(.failure(.permissionMissing, display: nil))
+                return
             }
-        })
-        if case .failed(let kind) = outcome {
-            report(.failure(kind, display: await displayIdentity(of: focused, after: kind)))
+            let focused: WindowSnapshot
+            switch await platform.focusedWindow(take: owner.take) {
+            case .failure(.notResponding):
+                report(.failure(.notResponding(app: "The app"), display: nil))
+                return
+            case .failure:
+                report(.failure(.noWindow, display: nil))
+                return
+            case .success(let snapshot):
+                focused = snapshot
+            }
+            owner.touch(focused.handle)
+            let pointer = await platform.pointerDisplay()
+            let config = config
+            let outcome = await pipeline.run(focused.handle, config: config, unplaceable: .explained, plan: { resolved in
+                let context = ActionContext(
+                    window: resolved.snapshot,
+                    display: resolved.display,
+                    displays: resolved.displays,
+                    pointerDisplay: pointer,
+                    placed: resolved.placed,
+                    isAtAchieved: resolved.isAtAchieved,
+                    restoreTarget: resolved.restoreTarget,
+                    config: config
+                )
+                switch ActionResolver.plan(action, context) {
+                case .move(let spec, let target, let placement, let cycleStep):
+                    return .request(MoveRequest(
+                        window: focused.handle,
+                        spec: spec,
+                        display: target.identity,
+                        placement: placement,
+                        cycleStep: cycleStep,
+                        source: .action(action)
+                    ))
+                case .nothing: return .nothing
+                case .fail(let kind): return .fail(kind)
+                }
+            })
+            if case .failed(let kind) = outcome {
+                report(.failure(kind, display: await displayIdentity(of: focused, after: kind)))
+            }
         }
     }
 
@@ -497,31 +497,31 @@ public actor WindowEngine {
     /// window order, to it. The windows it placed come to the front when it ends; a layout applied
     /// on a display change does not (`run` is shared, the raising is not).
     public func applyLayout(named name: String) async {
-        activity.enter()
-        defer { activity.leave() }
-        guard !isStopping else { return }
-        guard await platform.isAccessibilityGranted() else {
-            report(.failure(.permissionMissing, display: nil))
-            return
+        await activity.call {
+            guard !isStopping else { return }
+            guard await platform.isAccessibilityGranted() else {
+                report(.failure(.permissionMissing, display: nil))
+                return
+            }
+            guard let definition = config.layouts.first(where: { $0.name == name }) else { return }
+            let application = beginLayoutApplication()
+            // Taken before anything is read: a reconfiguration that begins during the reads stops the run.
+            let since = reconfigurations.current
+            let displays = await platform.usableDisplays()
+            let windows = await platform.visibleWindows(take: owner.take)
+            guard !isStopping, reconfigurations.isCurrent(since) else { return }
+            let requests = LayoutPlanner.requests(definition, windows: windows, displays: displays, source: .layout(name))
+            for request in requests { owner.touch(request.window) }
+            let count = await run(requests, since: since, application: application)
+            guard !isStopping, reconfigurations.isCurrent(since) else { return }
+            if layoutApplications.isCurrent(application) { await setActiveLayout(name) }
+            report(.layoutApplied(name: name, placed: count.moved + count.unchanged, failed: count.failed))
+            // One overlay for the run, saying why its first failure failed.
+            if let failure = count.firstFailure, let window = windows.first(where: { $0.handle == failure.window }) {
+                report(.failure(failure.kind, display: await displayIdentity(of: window, after: failure.kind)))
+            }
+            await bringToFront(count.placedWindows, of: definition, among: windows, application: application, since: since)
         }
-        guard let definition = config.layouts.first(where: { $0.name == name }) else { return }
-        let application = beginLayoutApplication()
-        // Taken before anything is read: a reconfiguration that begins during the reads stops the run.
-        let since = reconfigurations.current
-        let displays = await platform.usableDisplays()
-        let windows = await platform.visibleWindows(take: owner.take)
-        guard !isStopping, reconfigurations.isCurrent(since) else { return }
-        let requests = LayoutPlanner.requests(definition, windows: windows, displays: displays, source: .layout(name))
-        for request in requests { owner.touch(request.window) }
-        let count = await run(requests, since: since, application: application)
-        guard !isStopping, reconfigurations.isCurrent(since) else { return }
-        if layoutApplications.isCurrent(application) { await setActiveLayout(name) }
-        report(.layoutApplied(name: name, placed: count.moved + count.unchanged, failed: count.failed))
-        // One overlay for the run, saying why its first failure failed.
-        if let failure = count.firstFailure, let window = windows.first(where: { $0.handle == failure.window }) {
-            report(.failure(failure.kind, display: await displayIdentity(of: window, after: failure.kind)))
-        }
-        await bringToFront(count.placedWindows, of: definition, among: windows, application: application, since: since)
     }
 
     /// Last, so the overlay does not wait on an app that does not answer. A newer layout application

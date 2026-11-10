@@ -69,13 +69,31 @@ private let parking: ParkHook = {
     await task.bounded()
 }
 
-@Test(.timeLimit(.minutes(1))) func aCallIntoTheEngineIsCountedUntilItLeaves() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aCallIntoTheEngineIsAUnitOfTheCallersTask() async {
     let activity = EngineActivity()
-    activity.enter()
-    let quiet = Task { await activity.quiet(afterEvents: 0) }
-    #expect(activity.running == 1)
-    activity.leave()
-    await quiet.bounded()
+    let gate = Gate()
+    let calling = Task { await activity.call { await gate.hold(parking: parking) } }
+    await gate.waitUntilHolding(1)
+    // Parked in the caller's own task: quiet.
+    #expect(activity.running == 0)
+    gate.open()
+    await calling.bounded()
+    #expect(activity.running == 0)
+}
+
+@Test(.gated, .timeLimit(.minutes(1))) func aCallTheEngineMakesToItselfIsPartOfTheCallersUnit() async {
+    let activity = EngineActivity()
+    let gate = Gate()
+    let calling = Task {
+        await activity.call {
+            await activity.call { await gate.hold(parking: parking) }
+        }
+    }
+    await gate.waitUntilHolding(1)
+    // One unit, parked: a second unit for the inner call would still be counted.
+    #expect(activity.running == 0)
+    gate.open()
+    await calling.bounded()
 }
 
 @Test(.timeLimit(.minutes(1))) func quietWaitsForTheEventsItWasToldOf() async {
@@ -89,11 +107,11 @@ private let parking: ParkHook = {
 
 @Test(.timeLimit(.minutes(1))) func aCancelledWaitForQuietReturns() async {
     let activity = EngineActivity()
-    activity.enter()
+    let busy = activity.startingTask()
     let quiet = Task { await activity.quiet(afterEvents: 0) }
     quiet.cancel()
     await quiet.bounded()
-    activity.leave()
+    await busy.run {}
 }
 
 // MARK: The clock
