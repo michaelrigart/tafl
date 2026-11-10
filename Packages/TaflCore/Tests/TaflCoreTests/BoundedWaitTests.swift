@@ -1,5 +1,6 @@
 import Synchronization
 import Testing
+import TaflTestSupport
 
 private final class Flag: Sendable {
     private let value = Mutex(false)

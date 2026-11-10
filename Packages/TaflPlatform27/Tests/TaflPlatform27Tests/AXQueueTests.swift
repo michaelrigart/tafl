@@ -1,6 +1,7 @@
 import Dispatch
 import Synchronization
 import Testing
+import TaflTestSupport
 @testable import TaflPlatform27
 
 @Test func aForgottenPidLeavesNoQueueBehindOnceItsWorkHasRun() async {

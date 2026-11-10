@@ -3,6 +3,7 @@ import Dispatch
 import Synchronization
 import TaflCore
 import Testing
+import TaflTestSupport
 @testable import TaflPlatform27
 
 private enum Part: CaseIterable {

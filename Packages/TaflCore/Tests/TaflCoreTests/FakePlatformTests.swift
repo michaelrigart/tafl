@@ -1,5 +1,6 @@
 import Synchronization
 import Testing
+import TaflTestSupport
 @testable import TaflCore
 
 private func makeFake(_ windows: WindowSnapshot...) async -> (FakePlatform, ManualClock) {

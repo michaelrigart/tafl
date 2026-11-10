@@ -49,7 +49,7 @@ private enum Ended<Success: Sendable>: Sendable {
 /// continuation, so a test that awaits a task directly hangs instead of failing. This races the
 /// task's end against the bound instead: when the bound passes (or the caller is cancelled first) it
 /// cancels the task, records an issue and returns nil, without awaiting the stuck task itself.
-func awaitBounded<Success: Sendable>(
+public func awaitBounded<Success: Sendable>(
     timeout: Duration,
     cancelling cancel: @escaping @Sendable () -> Void,
     sourceLocation: SourceLocation,
@@ -85,7 +85,7 @@ func awaitBounded<Success: Sendable>(
 extension Task where Failure == Never {
     /// The task's value, or nil with a recorded issue when it has not finished within `timeout`.
     @discardableResult
-    func bounded(timeout: Duration = .seconds(5), sourceLocation: SourceLocation = #_sourceLocation) async -> Success? {
+    public func bounded(timeout: Duration = .seconds(5), sourceLocation: SourceLocation = #_sourceLocation) async -> Success? {
         await awaitBounded(timeout: timeout, cancelling: { self.cancel() }, sourceLocation: sourceLocation) {
             await self.value
         }
@@ -96,7 +96,7 @@ extension Task where Failure == any Error {
     /// The task's result, or nil with a recorded issue when it has not finished within `timeout`; a
     /// task that ends by throwing rethrows its error.
     @discardableResult
-    func bounded(timeout: Duration = .seconds(5), sourceLocation: SourceLocation = #_sourceLocation) async throws -> Success? {
+    public func bounded(timeout: Duration = .seconds(5), sourceLocation: SourceLocation = #_sourceLocation) async throws -> Success? {
         let result = await awaitBounded(timeout: timeout, cancelling: { self.cancel() }, sourceLocation: sourceLocation) {
             await self.result
         }

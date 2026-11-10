@@ -1,6 +1,7 @@
 import Foundation
 import Synchronization
 import Testing
+import TaflTestSupport
 @testable import TaflCore
 
 private let handle = WindowHandle(pid: 100, windowID: 1, isStable: true)

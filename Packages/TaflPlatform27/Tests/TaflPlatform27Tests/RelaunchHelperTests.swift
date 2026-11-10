@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TaflTestSupport
 @testable import TaflPlatform27
 
 private let fastTiming = RelaunchHelper.Timing(pollInterval: 0.02, dropPolls: 10, confirmPolls: 10, stablePolls: 2, attempts: 3)

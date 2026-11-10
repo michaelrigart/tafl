@@ -15,6 +15,7 @@ let package = Package(
         .testTarget(name: "TaflPlatform27Tests", dependencies: [
             "TaflPlatform27",
             .product(name: "TaflCore", package: "TaflCore"),
+            .product(name: "TaflTestSupport", package: "TaflCore"),
         ]),
     ]
 )

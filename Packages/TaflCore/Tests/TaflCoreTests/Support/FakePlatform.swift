@@ -1,6 +1,7 @@
 import Foundation
 import Synchronization
 import Testing
+import TaflTestSupport
 @testable import TaflCore
 
 /// Holds one call of a `FakePlatform` until `open()`. A cancelled caller keeps waiting: a real

@@ -1,6 +1,7 @@
 import Foundation
 import Synchronization
 import Testing
+import TaflTestSupport
 @testable import TaflCore
 
 /// A clock that moves only when a test calls `advance(by:)`.

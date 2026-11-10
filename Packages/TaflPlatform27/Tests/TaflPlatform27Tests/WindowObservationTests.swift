@@ -2,6 +2,7 @@ import ApplicationServices
 import Synchronization
 import Testing
 import TaflCore
+import TaflTestSupport
 @testable import TaflPlatform27
 
 @Test func registrationFailuresNameTheEventsMissing() {
