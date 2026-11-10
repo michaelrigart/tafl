@@ -132,12 +132,13 @@ private final class Rig: Sendable {
         }
     }
 
-    /// Waits until every report sent so far has been collected: a report that follows is sent after
-    /// them, so a test can say that none of a kind was sent. Leaves Accessibility revoked.
+    /// Waits until every report sent so far has been collected: the engine sends a marker after them
+    /// and reports keep their order, so a test can say that none of a kind was sent. Works on a
+    /// stopped engine too.
     func waitForReportsUpToNow(sourceLocation: SourceLocation = #_sourceLocation) async {
-        await fake.configure { $0.accessibilityGranted = false }
-        await engine.perform(.leftHalf)
-        await waitForReport(sourceLocation: sourceLocation) { $0 == .failure(.permissionMissing, display: nil) }
+        let marker = EngineReport.layoutApplied(name: "marker", placed: 0, failed: 0)
+        await engine.report(marker)
+        await waitForReport(sourceLocation: sourceLocation) { $0 == marker }
     }
 
     /// Waits until `count` display changes have been handled in all.
@@ -1353,6 +1354,7 @@ private let strayA2 = rect(250, 275, 200, 150)
     await rig.engine.rulesTask?.bounded()
     #expect(await rig.log.isEmpty)
     #expect(await rig.engine.isFrozen)
+    await rig.waitForReportsUpToNow()
     #expect(rig.reports.allSatisfy { if case .displayChangeHandled = $0 { false } else { true } })
 }
 
@@ -1800,6 +1802,7 @@ private func pollUntilLastKnown(
     await rig.engine.rulesTask?.bounded()
     #expect(await rig.engine.activeLayoutName == nil)
     #expect(await rig.engine.isFrozen)
+    await rig.waitForReportsUpToNow()
     #expect(rig.reports.allSatisfy { if case .displayChangeHandled = $0 { false } else { true } })
     // The stopped run leaves the stored setup to the change that follows.
     #expect(await rig.engine.memory.read().lastDisplays == [displayA])
@@ -2233,6 +2236,7 @@ private func rulesOvertakenByALayout() async -> Rig {
         return
     }
     #expect(saved.lastDisplays == bothDisplays)
+    await second.waitForReportsUpToNow()
     #expect(second.reports.allSatisfy { if case .displayChangeHandled = $0 { false } else { true } })
 }
 
@@ -2262,6 +2266,7 @@ private func rulesOvertakenByALayout() async -> Rig {
     #expect(await second.log.filter { $0.hasPrefix("size") || $0.hasPrefix("position") }.allSatisfy { $0.hasSuffix("cancelled") })
     #expect(await second.frame(of: strayB1.handle) == one)
     #expect(await second.frame(of: strayB2.handle) == two)
+    await second.waitForReportsUpToNow()
     #expect(second.reports.allSatisfy { if case .displayChangeHandled = $0 { false } else { true } })
     await second.engine.stop()
 }
