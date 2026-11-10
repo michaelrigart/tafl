@@ -409,6 +409,75 @@ private final class Rig: Sendable {
     #expect(await rig.frame(of: other.handle) == rightHalfA)
 }
 
+// MARK: Raising a layout's windows
+
+@Test func aLayoutBringsItsWindowsToTheFrontLastEntryFirstAndKeepsEachEntrysOrder() async {
+    // The first window of "com.a" is already in place; "com.c" matches no entry.
+    let inPlace = window(1, frame: leftHalfA, pid: 100, bundleID: "com.a")
+    let behindIt = window(3, frame: start, pid: 100, bundleID: "com.a")
+    let other = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let left = window(4, frame: start, pid: 300, bundleID: "com.c")
+    let desk = layout("Work", [slot(.leftHalf, app: "com.a"), slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [inPlace, behindIt, other, left], focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Work")
+    // The second entry first, so the first entry's windows end on top; within an entry, the window
+    // that was in front stays in front, so it is raised last.
+    #expect(await rig.fake.raiseCalls == [[other.handle, behindIt.handle, inPlace.handle]])
+}
+
+@Test func aWindowThatFailedToPlaceIsNotRaised() async {
+    var stuck = window(1, frame: start, pid: 100, bundleID: "com.a")
+    stuck.canMove = false
+    let other = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let desk = layout("Work", [slot(.leftHalf, app: "com.a"), slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [stuck, other], focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Work")
+    #expect(await rig.fake.raiseCalls == [[other.handle]])
+}
+
+@Test func aLayoutThatAppliesOnADisplayChangeRaisesNothing() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config(layouts: [dock]))
+    await rig.changeDisplays(to: bothDisplays, eventsHandledAfter: 2)
+    await rig.waitForReport { $0 == .displayChangeHandled(moved: 1, failed: 0) }
+    #expect(await rig.engine.activeLayoutName == "Dock")
+    #expect(await rig.fake.raiseCalls.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func aLayoutRunThatAReconfigurationStoppedRaisesNothing() async {
+    let desk = layout("Desk", [slot(.rightHalf)])
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config(layouts: [desk]))
+    let gate = await rig.fake.pause(beforeCall: 0)
+    let applying = Task { await rig.engine.applyLayout(named: "Desk") }
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.emit(.reconfigurationBegan)
+    await rig.waitForEvents(1)
+    gate.open()
+    await applying.bounded()
+    #expect(await rig.fake.raiseCalls.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func aLayoutRunThatANewerApplicationOvertookRaisesNothing() async {
+    let placed = window(1, frame: start, pid: 100, bundleID: "com.a")
+    let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
+    let other = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let first = layout("First", [slot(.leftHalf, app: "com.a"), slot(.topHalf, app: "com.c")])
+    let second = layout("Second", [slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [placed, slow, other], focused: nil) { $0.hung = [50] }
+    await rig.engine.start(config: config(layouts: [first, second]))
+    let applyingFirst = Task { await rig.engine.applyLayout(named: "First") }
+    // First has placed its window and waits on the hung app while Second is applied.
+    await rig.waitForFrame(leftHalfA, of: placed.handle)
+    await rig.clock.waitForSleepers(1)
+    await rig.engine.applyLayout(named: "Second")
+    await rig.clock.advance(by: .milliseconds(500))
+    await applyingFirst.bounded()
+    #expect(await rig.fake.raiseCalls == [[other.handle]])
+}
+
 // MARK: New windows
 
 @Test func newWindowPlacedWhileActive() async {

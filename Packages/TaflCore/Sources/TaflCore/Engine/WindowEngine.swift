@@ -29,6 +29,8 @@ struct RunCount: Sendable {
     /// Windows already where the request puts them.
     var unchanged = 0
     var failed = 0
+    /// The windows that were written or already in place.
+    var placedWindows: Set<WindowHandle> = []
     /// The failure a run reports, so one run shows one overlay: the first failure of the first
     /// app to finish with one.
     var firstFailure: RunFailure?
@@ -42,6 +44,7 @@ struct RunCount: Sendable {
         moved += other.moved
         unchanged += other.unchanged
         failed += other.failed
+        placedWindows.formUnion(other.placedWindows)
         if firstFailure == nil { firstFailure = other.firstFailure }
     }
 }
@@ -466,7 +469,9 @@ public actor WindowEngine {
     // MARK: Layouts
 
     /// A layout run that a reconfiguration stops reports nothing and does not become active. A run
-    /// that a newer layout application overtook still reports, but leaves the active layout to it.
+    /// that a newer layout application overtook still reports, but leaves the active layout, and the
+    /// window order, to it. The windows it placed come to the front when it ends; a layout applied
+    /// on a display change does not (`run` is shared, the raising is not).
     public func applyLayout(named name: String) async {
         guard !isStopping else { return }
         guard await platform.isAccessibilityGranted() else {
@@ -490,6 +495,21 @@ public actor WindowEngine {
         if let failure = count.firstFailure, let window = windows.first(where: { $0.handle == failure.window }) {
             report(.failure(failure.kind, display: await displayIdentity(of: window, after: failure.kind)))
         }
+        await bringToFront(count.placedWindows, of: definition, among: windows, application: application, since: since)
+    }
+
+    /// Last, so the overlay does not wait on an app that does not answer. A newer layout application
+    /// raises its own windows, and an older run must not cover them.
+    private func bringToFront(
+        _ placed: Set<WindowHandle>,
+        of definition: LayoutDefinition,
+        among windows: [WindowSnapshot],
+        application: Int,
+        since: Int
+    ) async {
+        guard !isStopping, reconfigurations.isCurrent(since), layoutApplications.isCurrent(application) else { return }
+        let order = LayoutPlanner.raiseOrder(definition, windows: windows, among: placed)
+        if !order.isEmpty { await platform.raise(order) }
     }
 
     /// In one step of the engine: the count stops the runs planned before it, and the owner stops
@@ -553,8 +573,12 @@ public actor WindowEngine {
                         }
                         if !reconfigurations.isCurrent(since) || refused.withLock({ $0 }) { break }
                         switch outcome {
-                        case .placed: count.moved += 1
-                        case .unchanged: count.unchanged += 1
+                        case .placed:
+                            count.moved += 1
+                            count.placedWindows.insert(request.window)
+                        case .unchanged:
+                            count.unchanged += 1
+                            count.placedWindows.insert(request.window)
                         case .failed(let kind): count.fail(request.window, kind)
                         // Neither placed nor failed: a window that stopped being placeable is skipped.
                         case .superseded, .skipped: break

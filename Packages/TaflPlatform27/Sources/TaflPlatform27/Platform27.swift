@@ -152,6 +152,31 @@ final class Platform27: WindowPlatform {
         return await read(element)
     }
 
+    /// One window after another, each on its app's queue, so the last ends on top. A window that is
+    /// not registered, or that cannot be raised, is logged and skipped.
+    func raise(_ windows: [WindowHandle]) async {
+        for handle in windows {
+            guard let element = registry.element(for: handle) else {
+                PlatformLog.windows.notice("Raise skipped: the window is not registered")
+                continue
+            }
+            let pid = handle.pid
+            let outcome = await axQueue.run(pid: pid) {
+                Raise27.bringForward(
+                    raise: { AXWindowAccess.raise(element.element) },
+                    makeFrontmost: { AXWindowAccess.setFrontmost(app: pid) })
+            }
+            switch outcome {
+            case .raised: break
+            case .raisedWithoutFrontmost:
+                PlatformLog.windows.notice("Raise: the app refused to come forward, activating it")
+                await MainActor.run { _ = NSRunningApplication(processIdentifier: pid)?.activate() }
+            case .failed(let code):
+                PlatformLog.windows.notice("Raise failed, Accessibility error \(code.rawValue, privacy: .private)")
+            }
+        }
+    }
+
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure> {
         guard let element = registry.element(for: handle), let app = AppInfo27.running(pid: handle.pid) else {
             return .failure(.noWindow)

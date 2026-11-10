@@ -9,7 +9,8 @@
 **Revised:** 2026-11-06: signing moved to Michael's Personal Team; see
 `docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`;
 2026-11-10: how Tafl notices the Accessibility switch;
-2026-11-10: measured on macOS 27.2 (feasibility probe).
+2026-11-10: measured on macOS 27.2 (feasibility probe);
+2026-11-10: a layout you apply brings its windows to the front.
 
 ## Why
 
@@ -212,7 +213,8 @@ Each of these can come later if it fits the architecture below.
 - **Editing settings in the interface.** The config file is the only place to change them.
 - **Other window-manager features:**
   - animation, gestures, throw, stash, pin or Todo mode;
-  - automatic tiling, focus switching;
+  - automatic tiling, and focus switching as a feature of its own (a layout you apply
+    brings its windows to the front; see "Layouts");
   - nudge, width-only or height-only resize;
   - custom grids beyond the named placements;
   - per-app rules outside layouts;
@@ -370,6 +372,8 @@ Names are left to the builder. The contract is:
   session wraps a sequence of them for one app: it switches Enhanced UI off at the start
   and restores it at the end. The core judges the results, including a refused size and
   an external change (see "Applying a frame").
+- **Raising windows.** Bring given windows to the front in order, and make the last one's
+  app frontmost. A failure is logged and never fails the layout.
 - **The pointer's display.**
 - **macOS's tiling settings** (read only).
 - **The Accessibility permission state.**
@@ -550,6 +554,12 @@ shortcut = "ctrl+opt+cmd+1"     # optional
   display. So a desk layout applied by shortcut while undocked arranges the windows on the
   built-in display.
 - **Apps that aren't running** are skipped. Tafl never launches anything.
+- **Raising.** A layout applied by its shortcut or from the menu brings the windows it
+  matched to the front, so the first entry's windows end on top and that app has keyboard
+  focus. The windows of one entry keep their order among themselves. A window that was
+  already in place is raised too; one that failed or vanished is not. A layout that applies
+  on a display change leaves the window order and focus alone, and so does a run that a
+  display change stopped.
 - **While a layout is active,** a window created later is placed by it, if an entry
   matches. A layout stops being active at the next display change, or when another layout
   is applied.

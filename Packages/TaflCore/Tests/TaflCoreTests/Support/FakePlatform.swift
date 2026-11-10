@@ -80,6 +80,8 @@ actor FakePlatform: WindowPlatform {
     var unobserved: [UnobservedApp] = []
 
     private(set) var callLog: [String] = []
+    /// The windows each `raise(_:)` call was given, in order. Not part of `callLog`.
+    private(set) var raiseCalls: [[WindowHandle]] = []
     /// Holds the next `displays()` call until the gate opens.
     var displaysGate: FakeGate?
     /// Holds the next `visibleWindows()` call until the gate opens.
@@ -284,6 +286,10 @@ actor FakePlatform: WindowPlatform {
             return .failure(.noWindow)
         }
         return .success(FakeSession(platform: self, handle: handle))
+    }
+
+    func raise(_ windows: [WindowHandle]) async {
+        raiseCalls.append(windows)
     }
 
     func pointerDisplay() async -> DisplayIdentity? { pointer }

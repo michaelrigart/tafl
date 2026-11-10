@@ -28,6 +28,22 @@ public enum LayoutPlanner {
         }
     }
 
+    /// The windows to bring to the front, in the order to raise them: the last entry's first, so the
+    /// first entry's windows end on top, and within an entry the window that was in front last, so it
+    /// stays in front. `windows` are in front-to-back order for each app, as the platform lists them.
+    public static func raiseOrder(
+        _ layout: LayoutDefinition,
+        windows: [WindowSnapshot],
+        among raisable: Set<WindowHandle>
+    ) -> [WindowHandle] {
+        var byEntry: [Int: [WindowHandle]] = [:]
+        for window in windows where raisable.contains(window.handle) {
+            guard let index = entryIndex(for: window, in: layout) else { continue }
+            byEntry[index, default: []].append(window.handle)
+        }
+        return layout.entries.indices.reversed().flatMap { (byEntry[$0] ?? []).reversed() }
+    }
+
     public static func claiming(_ layouts: [LayoutDefinition], displays: [Display]) -> LayoutDefinition? {
         layouts.first { !$0.displays.isEmpty && DisplayMatcher.claims($0.displays, displays) }
     }

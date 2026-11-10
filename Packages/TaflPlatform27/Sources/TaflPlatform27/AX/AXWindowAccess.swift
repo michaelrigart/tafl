@@ -74,6 +74,15 @@ public enum AXWindowAccess {
         return AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value)
     }
 
+    public static func raise(_ element: AXUIElement) -> AXError {
+        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+    }
+
+    /// Makes the app frontmost, so it has keyboard focus.
+    public static func setFrontmost(app pid: pid_t) -> AXError {
+        AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    }
+
     public static func isSettable(_ element: AXUIElement, attribute: String) -> Bool {
         (try? settability(element, attribute: attribute).get()) ?? false
     }

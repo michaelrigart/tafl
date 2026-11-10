@@ -84,6 +84,9 @@ public protocol WindowPlatform: Sendable {
     /// Waits while another session for the same app is open. Every successful call must be
     /// ended with `end()`: until it is, the app's next session waits and its Enhanced UI stays off.
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure>
+    /// Brings the windows to the front one after the other, so the last one ends on top and its app
+    /// is frontmost. A window that cannot be raised is logged and skipped: nothing fails.
+    func raise(_ windows: [WindowHandle]) async
     func pointerDisplay() async -> DisplayIdentity?
     func tilingSettings() async -> TilingSettings
     func isAccessibilityGranted() async -> Bool
