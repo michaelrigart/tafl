@@ -54,7 +54,7 @@ final class CompositionRoot {
 
     init() {
         let clock = SystemClock()
-        let platform = PlatformFactory.make()
+        let platform = PlatformFactory.make(accessibilityGranted: { [permission] in permission.isTrusted })
         self.platform = platform
         engine = WindowEngine(
             platform: platform,

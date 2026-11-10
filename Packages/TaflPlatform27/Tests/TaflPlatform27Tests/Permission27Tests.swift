@@ -14,56 +14,42 @@ private func collect(_ stream: AsyncStream<Bool>, count: Int) async -> [Bool] {
     return values
 }
 
-@MainActor
-@Test(.timeLimit(.minutes(1))) func aChangedValueIsEmittedOncePerChange() async {
-    let trusted = Mutex(false)
-    let center = NotificationCenter()
-    let permission = Permission27(center: center, name: name) { trusted.withLock { $0 } }
-    var changes = permission.changes.makeAsyncIterator()
-    trusted.withLock { $0 = true }
-    center.post(name: name, object: nil)
-    center.post(name: name, object: nil)
-    #expect(await changes.next() == true)
-    trusted.withLock { $0 = false }
-    center.post(name: name, object: nil)
-    #expect(await changes.next() == false)
-}
+/// Answers each call from a script, in call order, and says when a call starts. A call can be held
+/// until a gate stream finishes.
+private final class ScriptedCheck: Sendable {
+    private let answers: Mutex<[Bool?]>
+    private let started = Mutex(0)
+    private let startedEvents: AsyncStream<Void>
+    private let startedContinuation: AsyncStream<Void>.Continuation
+    private let hold: (call: Int, gate: AsyncStream<Void>)?
 
-@MainActor
-@Test(.timeLimit(.minutes(1))) func aValueThatTakesEffectAfterTheNotificationIsStillEmitted() async {
-    let reads = Mutex(0)
-    let center = NotificationCenter()
-    // Reads: one at creation, one on the notification, one on the next main run-loop turn.
-    let permission = Permission27(center: center, name: name) { reads.withLock { $0 += 1; return $0 >= 3 } }
-    center.post(name: name, object: nil)
-    #expect(await collect(permission.changes, count: 1) == [true])
-}
+    init(_ answers: [Bool?], holdingCall call: Int? = nil, until gate: AsyncStream<Void> = AsyncStream { $0.finish() }) {
+        self.answers = Mutex(answers)
+        (startedEvents, startedContinuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .unbounded)
+        hold = call.map { ($0, gate) }
+    }
 
-@MainActor
-@Test(.timeLimit(.minutes(1))) func aNotificationWithoutAChangeEmitsNothingAndTheNextChangeFollows() async {
-    let trusted = Mutex(true)
-    let center = NotificationCenter()
-    let permission = Permission27(center: center, name: name) { trusted.withLock { $0 } }
-    center.post(name: name, object: nil)
-    trusted.withLock { $0 = false }
-    center.post(name: name, object: nil)
-    #expect(await collect(permission.changes, count: 1) == [false])
-}
+    var callCount: Int { started.withLock { $0 } }
 
-@MainActor
-@Test(.timeLimit(.minutes(1))) func theStreamEndsWhenThePermissionObjectGoes() async {
-    var permission: Permission27? = Permission27(center: NotificationCenter(), name: name) { false }
-    var changes = permission!.changes.makeAsyncIterator()
-    permission = nil
-    #expect(await changes.next() == nil)
-}
+    func call() async -> Bool? {
+        let number = started.withLock { count in
+            count += 1
+            return count
+        }
+        let answer = answers.withLock { $0.isEmpty ? nil : $0.removeFirst() }
+        startedContinuation.yield()
+        if let hold, hold.call == number {
+            for await _ in hold.gate {}
+        }
+        return answer
+    }
 
-@Test func isTrustedIsWhatTheReadAnswersEachTime() {
-    let trusted = Mutex(true)
-    let permission = Permission27(center: NotificationCenter(), name: name) { trusted.withLock { $0 } }
-    #expect(permission.isTrusted)
-    trusted.withLock { $0 = false }
-    #expect(!permission.isTrusted)
+    /// Returns once `count` calls have started. Checks run one at a time, so a call starts only after
+    /// the one before it has been applied.
+    func waitForCalls(_ count: Int) async {
+        if callCount >= count { return }
+        for await _ in startedEvents where callCount >= count { return }
+    }
 }
 
 private final class Scheduled: Sendable {
@@ -84,54 +70,88 @@ private final class Scheduled: Sendable {
     }
 }
 
-/// Returns once the main queue has run everything queued before the call.
-@MainActor private func afterTheNextTurn() async {
-    await withCheckedContinuation { continuation in
-        DispatchQueue.main.async { continuation.resume() }
-    }
+private func permission(
+    initial: Bool = false, center: NotificationCenter = NotificationCenter(), scheduled: Scheduled = Scheduled(),
+    check: @escaping @Sendable () async -> Bool?
+) -> Permission27 {
+    Permission27(center: center, name: name, initial: { initial }, check: check, after: scheduled.schedule)
 }
 
 @MainActor
-@Test(.timeLimit(.minutes(1))) func aValueThatChangesAfterTheNextTurnReadIsEmittedByALaterRead() async {
-    let reads = Mutex(0)
-    let scheduled = Scheduled()
+@Test(.timeLimit(.minutes(1))) func aChangedResultIsEmittedOnceAndBecomesTheValue() async {
+    let script = ScriptedCheck([true, true, false])
     let center = NotificationCenter()
-    // Reads: creation, the notification, the next main run-loop turn, then the first delayed read.
-    let permission = Permission27(
-        center: center, name: name,
-        read: { reads.withLock { $0 += 1; return $0 >= 4 } },
-        after: scheduled.schedule)
+    let scheduled = Scheduled()
+    let permission = permission(center: center, scheduled: scheduled, check: script.call)
     center.post(name: name, object: nil)
-    await afterTheNextTurn()
-    #expect(reads.withLock { $0 } == 3)
     scheduled.runAll()
-    #expect(await collect(permission.changes, count: 1) == [true])
+    #expect(await collect(permission.changes, count: 2) == [true, false])
+    #expect(!permission.isTrusted)
 }
 
 @MainActor
-@Test(.timeLimit(.minutes(1))) func eachNotificationSchedulesExactlyTheHalfSecondAndTwoSecondReads() async {
+@Test func theInitialValueIsWhatTheInitialReadAnswers() {
+    #expect(permission(initial: true, check: { nil }).isTrusted)
+    #expect(!permission(initial: false, check: { nil }).isTrusted)
+}
+
+@MainActor
+@Test func readingTheValueNeverRunsTheCheck() {
+    let script = ScriptedCheck([true])
+    let permission = permission(check: script.call)
+    _ = permission.isTrusted
+    _ = permission.isTrusted
+    #expect(script.callCount == 0)
+}
+
+@MainActor
+@Test(.timeLimit(.minutes(1))) func aNotificationChecksAtOnceAndAtHalfASecondAndTwoSeconds() async {
+    let script = ScriptedCheck([nil, nil, nil])
     let scheduled = Scheduled()
     let center = NotificationCenter()
-    let permission = Permission27(center: center, name: name, read: { false }, after: scheduled.schedule)
+    let permission = permission(center: center, scheduled: scheduled, check: script.call)
     center.post(name: name, object: nil)
+    await script.waitForCalls(1)
     #expect(scheduled.delays.withLock { $0 } == [.milliseconds(500), .seconds(2)])
+    #expect(script.callCount == 1)
+    scheduled.runAll()
+    await script.waitForCalls(3)
+    #expect(script.callCount == 3)
     withExtendedLifetime(permission) {}
 }
 
 @MainActor
-@Test(.timeLimit(.minutes(1))) func aDelayedReadThatFindsTheSameValueEmitsNothing() async {
-    let trusted = Mutex(false)
+@Test(.timeLimit(.minutes(1))) func resultsApplyInCheckOrderEvenWhenAnEarlierCheckIsSlow() async {
+    let (gate, release) = AsyncStream<Void>.makeStream()
+    // Call 1 is slow and answers true; call 2 answers false. Side by side, the late true would win.
+    let script = ScriptedCheck([true, false], holdingCall: 1, until: gate)
     let scheduled = Scheduled()
     let center = NotificationCenter()
-    let permission = Permission27(
-        center: center, name: name, read: { trusted.withLock { $0 } }, after: scheduled.schedule)
-    trusted.withLock { $0 = true }
+    let permission = permission(center: center, scheduled: scheduled, check: script.call)
     center.post(name: name, object: nil)
-    await afterTheNextTurn()
+    await script.waitForCalls(1)
     scheduled.runAll()
-    trusted.withLock { $0 = false }
-    center.post(name: name, object: nil)
-    await afterTheNextTurn()
-    scheduled.runAll()
+    release.finish()
     #expect(await collect(permission.changes, count: 2) == [true, false])
+    #expect(!permission.isTrusted)
+}
+
+@MainActor
+@Test(.timeLimit(.minutes(1))) func aFailedCheckChangesNothing() async {
+    let script = ScriptedCheck([nil, nil, nil])
+    let scheduled = Scheduled()
+    let center = NotificationCenter()
+    let permission = permission(initial: true, center: center, scheduled: scheduled, check: script.call)
+    center.post(name: name, object: nil)
+    scheduled.runAll()
+    await script.waitForCalls(3)
+    #expect(permission.isTrusted)
+}
+
+@MainActor
+@Test(.timeLimit(.minutes(1))) func theStreamEndsWhenThePermissionObjectGoes() async {
+    var held: Permission27? = permission(check: { nil })
+    var changes = held!.changes.makeAsyncIterator()
+    held = nil
+    #expect(await changes.next() == nil)
 }

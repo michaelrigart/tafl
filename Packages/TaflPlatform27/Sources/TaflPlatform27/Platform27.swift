@@ -19,7 +19,12 @@ final class Platform27: WindowPlatform {
     /// Lives as long as the platform, so no reconfiguration callback is lost while observing restarts.
     private let reconfiguration: ReconfigurationMonitor27
 
-    init() {
+    /// The grant as the app last found it: the engine's gates and the app read one value, and an action
+    /// never runs a check of its own.
+    private let accessibilityGranted: @Sendable () -> Bool
+
+    init(accessibilityGranted: @escaping @Sendable () -> Bool) {
+        self.accessibilityGranted = accessibilityGranted
         let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream(bufferingPolicy: .unbounded)
         events = stream
         eventContinuation = continuation
@@ -53,7 +58,7 @@ final class Platform27: WindowPlatform {
     }
 
     func isAccessibilityGranted() async -> Bool {
-        AXIsProcessTrusted()
+        accessibilityGranted()
     }
 
     func appName(pid: Int32) async -> String? {

@@ -3,62 +3,86 @@ import Dispatch
 import Foundation
 import Synchronization
 
+/// Tafl's Accessibility grant, as one value that the checks keep up to date.
+///
+/// A running process's own answer is cached: in tccd's log, `TCCAccessPreflight` never changed from its
+/// first value in an app process, and `AXIsProcessTrusted()` refilled its cache on the change
+/// notification but twice cached the old value for good while System Settings was still writing the
+/// change. A fresh process reads it right, so each check asks a short-lived child copy of Tafl.
+/// Readers get the current value and never spawn a check.
 public final class Permission27: @unchecked Sendable { // reason: `observer` is set once in init and read only in deinit
-    private final class LastValue: Sendable {
-        let value: Mutex<Bool>
+    private final class Current: Sendable {
+        private let value: Mutex<Bool>
         init(_ value: Bool) { self.value = Mutex(value) }
 
-        /// True when `new` differs from the last value seen.
-        func changed(to new: Bool) -> Bool {
-            value.withLock { last in
-                defer { last = new }
-                return last != new
+        var get: Bool { value.withLock { $0 } }
+
+        /// True when `new` differs from the value held.
+        func set(_ new: Bool) -> Bool {
+            value.withLock { current in
+                defer { current = new }
+                return current != new
             }
         }
     }
 
-    private let center: NotificationCenter
-    private let observer: NSObjectProtocol
-    private let continuation: AsyncStream<Bool>.Continuation
-    public let changes: AsyncStream<Bool>
+    /// The argument that makes a Tafl process answer the check with its exit status and nothing else.
+    public static let checkArgument = "-TaflCheckAccessibility"
 
-    /// Delays of the later reads after each notification.
+    /// Delays of the later checks after each notification.
     static let laterReads: [Duration] = [.milliseconds(500), .seconds(2)]
 
-    private let read: @Sendable () -> Bool
+    private let center: NotificationCenter
+    private let observer: NSObjectProtocol
+    private let requests: AsyncStream<Void>.Continuation
+    private let current: Current
+    public let changes: AsyncStream<Bool>
 
-    /// The one trust rule: `AXIsProcessTrusted()` alone. A real Accessibility call is no substitute:
-    /// macOS still answers one in a process that was trusted and then switched off.
-    public var isTrusted: Bool { read() }
+    /// The grant as last checked. It never runs a check.
+    public var isTrusted: Bool { current.get }
 
     public convenience init() {
+        let check: @Sendable () async -> Bool?
+        if let executable = Bundle.main.executableURL {
+            let child = ChildExitStatus(executable: executable, arguments: [Self.checkArgument], timeout: 1)
+            check = { await child.run() }
+        } else {
+            check = { AXIsProcessTrusted() }
+        }
         self.init(
             center: DistributedNotificationCenter.default(),
             name: Notification.Name("com.apple.accessibility.api"),
-            read: { AXIsProcessTrusted() })
+            initial: { AXIsProcessTrusted() },
+            check: check)
     }
 
-    /// The notification can arrive before the change takes effect, so each one is read at once, on the
-    /// next main run-loop turn, and 0.5 s and 2 s later (`after` runs the later reads). A value is
-    /// emitted only when it differs from the last one seen.
+    /// The notification can arrive before the change takes effect, so each one asks for a check at once
+    /// and again 0.5 s and 2 s later (`after` runs the later ones). Checks run one at a time, in the
+    /// order asked, so a late answer never overwrites a later one. A result that differs from the value
+    /// held replaces it and is emitted; nil, a check that failed, changes nothing. `initial` reads the
+    /// first value, which a fresh process gets right.
     init(
-        center: NotificationCenter, name: Notification.Name, read: @escaping @Sendable () -> Bool,
+        center: NotificationCenter, name: Notification.Name, initial: @Sendable () -> Bool,
+        check: @escaping @Sendable () async -> Bool?,
         after: @escaping @Sendable (Duration, @escaping @Sendable () -> Void) -> Void = Permission27.afterOnMain
     ) {
         self.center = center
-        self.read = read
-        let last = LastValue(read())
+        let current = Current(initial())
+        self.current = current
         let (stream, continuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .unbounded)
         changes = stream
-        self.continuation = continuation
-        let emitIfChanged: @Sendable () -> Void = {
-            let value = read()
-            if last.changed(to: value) { continuation.yield(value) }
+        let (checkRequests, requests) = AsyncStream<Void>.makeStream(bufferingPolicy: .unbounded)
+        self.requests = requests
+        Task {
+            for await _ in checkRequests {
+                guard let result = await check() else { continue }
+                if current.set(result) { continuation.yield(result) }
+            }
+            continuation.finish()
         }
         observer = center.addObserver(forName: name, object: nil, queue: .main) { _ in
-            emitIfChanged()
-            DispatchQueue.main.async { emitIfChanged() }
-            for delay in Permission27.laterReads { after(delay) { emitIfChanged() } }
+            requests.yield()
+            for delay in Permission27.laterReads { after(delay) { requests.yield() } }
         }
     }
 
@@ -70,6 +94,6 @@ public final class Permission27: @unchecked Sendable { // reason: `observer` is 
 
     deinit {
         center.removeObserver(observer)
-        continuation.finish()
+        requests.finish()
     }
 }

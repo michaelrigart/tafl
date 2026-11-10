@@ -8,6 +8,9 @@ final class TaflApp: NSObject, NSApplicationDelegate {
     private var root: CompositionRoot?
 
     static func main() {
+        if CommandLine.arguments.contains(Permission27.checkArgument) {
+            exit(AXIsProcessTrusted() ? 0 : 1)
+        }
         let app = NSApplication.shared
         let delegate = TaflApp()
         app.delegate = delegate

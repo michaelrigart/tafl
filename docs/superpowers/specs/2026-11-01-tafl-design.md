@@ -7,7 +7,8 @@
 2026-11-01, after Codex's spec review.
 **Name:** Tafl, after the Norse board game played by placing pieces on a grid.
 **Revised:** 2026-11-06: signing moved to Michael's Personal Team; see
-`docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`.
+`docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`;
+2026-11-10: how Tafl notices the Accessibility switch.
 
 ## Why
 
@@ -658,6 +659,16 @@ Settings shows the configuration in plain language and never edits it.
 - Accessibility is required. Without it, Tafl registers no hotkeys and shows a short
   onboarding window that explains the permission and opens the right page of System
   Settings.
+- **Noticing the switch.** Tafl notices a switch of the Accessibility permission within about
+  2 seconds. A running process's own answer is cached (measured on macOS 27.2.1: the
+  `TCCAccessPreflight` answer never changes, and `AXIsProcessTrusted()` twice cached the old
+  value for good while System Settings was still writing the change), so on each system
+  notification, and again 0.5 s and 2 s later, Tafl asks a short-lived copy of its own
+  executable (`-TaflCheckAccessibility`), which a fresh process answers right and which exits
+  0 for granted and 1 for not, before any AppKit code runs. A copy that fails, or does not
+  answer within 1 s, changes nothing. A grant that arrives in a process that ran without it
+  relaunches Tafl, because observing started in that process right after the grant can fail
+  for every app. Reopen Tafl in the onboarding window is the manual fallback.
 - **Launching for testing.** Start the app with `open` or Finder. Launched from a terminal,
   macOS attributes the Accessibility permission to the terminal (learned on Linger).
 
