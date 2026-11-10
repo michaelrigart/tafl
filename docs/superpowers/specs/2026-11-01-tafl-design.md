@@ -637,8 +637,9 @@ Settings shows the configuration in plain language and never edits it.
   fixed wording: no window, not responding, size refused, can't be moved, fullscreen,
   moved during placement, no display that way, or permission missing. It is also logged.
 - A failure is never retried on its own. The next user action tries again.
-- **Permission lost** (for example after a macOS update): Tafl notices on the next action,
-  shows the onboarding again, and logs it.
+- **Permission lost** (for example after a macOS update): Tafl notices within about 2 s, or on
+  the next action, shows the onboarding again, and logs it. A grant that comes later
+  relaunches Tafl.
 - **Apps Tafl can't observe.** macOS can refuse to deliver an app's window events.
   Shortcuts still work on that app's windows, and so does a layout applied by shortcut or
   from the menu. Without its events, though, Tafl has no last-known frames and doesn't see

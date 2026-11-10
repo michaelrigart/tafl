@@ -18,7 +18,7 @@ points at Xcode, and don't change `xcode-select`.
   Release builds.
 - Without the signing certificate (ad hoc): add `CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=` to
   either build.
-- Install: `rm -rf /Applications/Tafl.app && ditto build/dd.noindex/Build/Products/Debug/Tafl.app /Applications/Tafl.app`
+- Install (quit Tafl first: the running copy's grant check runs the binary on disk): `rm -rf /Applications/Tafl.app && ditto build/dd.noindex/Build/Products/Debug/Tafl.app /Applications/Tafl.app`
   (`ditto` merges into an existing bundle and would keep stale files)
 - Run: `open /Applications/Tafl.app`
 - Script tests: `/usr/bin/python3 -m unittest discover -s scripts/tests -p 'test_*.py'` (the
