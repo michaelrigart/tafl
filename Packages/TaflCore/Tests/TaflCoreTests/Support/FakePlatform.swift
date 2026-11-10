@@ -52,7 +52,7 @@ final class FakeGate: Sendable {
 /// opens, so another app's calls that start later may log ahead of it.
 ///
 /// Tests wait on an observable condition (`waitUntil`, a log entry, a clock's sleeper count or
-/// `task.value`), never on a yield budget.
+/// `task.bounded()`), never on a yield budget.
 actor FakePlatform: WindowPlatform {
     struct UnobservedApp: Equatable, Sendable {
         var pid: Int32

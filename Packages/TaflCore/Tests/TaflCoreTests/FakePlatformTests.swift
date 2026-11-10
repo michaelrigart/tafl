@@ -63,7 +63,7 @@ private final class Taken: Sendable {
     late.open()
     listedLate.open()
     #expect(await read.bounded() == .success(w.frame))
-    #expect(await listing.value.count == 1)
+    #expect(await listing.bounded()?.count == 1)
 }
 
 @Test func fakeLogsFractionalNumbersWithTheirDecimals() async throws {
@@ -104,7 +104,8 @@ private final class Taken: Sendable {
     #expect(await fake.callLog == ["begin", "begin"])
 
     await first.end()
-    let secondSession = try await second.value.get()
+    guard let secondResult = await second.bounded() else { return }
+    let secondSession = try secondResult.get()
     #expect(secondReturned.withLock { $0 })
     #expect(await fake.callLog == ["begin", "begin", "end", "begin"])
     await secondSession.end()
@@ -131,7 +132,7 @@ private final class Taken: Sendable {
     #expect(await fake.windows[w.handle]?.frame == rect(0, 0, 100, 100))
 
     gate.open()
-    #expect(try await write.value.get() == .write)
+    #expect(try await write.bounded()?.get() == .write)
     #expect(await fake.callLog == ["begin", "size 500x400"])
     #expect(await fake.windows[w.handle]?.frame == rect(0, 0, 500, 400))
 }
@@ -254,7 +255,7 @@ private final class Taken: Sendable {
     #expect(await fake.callLog == ["begin"])
 
     gate.open()
-    #expect(try await write.value.get() == .write)
+    #expect(try await write.bounded()?.get() == .write)
     #expect(await fake.callLog == ["begin", "size 500x400"])
 }
 

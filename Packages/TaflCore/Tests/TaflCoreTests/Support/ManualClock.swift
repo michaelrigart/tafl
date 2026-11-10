@@ -8,7 +8,7 @@ import Testing
 /// `advance(by:)` steps time: it moves `now` to each due sleeper's deadline in turn, so a
 /// woken task reads its own deadline and a sleep it starts next counts from there. It does not
 /// promise that a woken task has finished its work when it returns. Tests wait on an observable
-/// condition (a log entry, `waitForSleepers`, or `task.value`), never on a yield budget.
+/// condition (a log entry, `waitForSleepers`, or `task.bounded()`), never on a yield budget.
 final class ManualClock: TaflClock {
     private struct Sleeper {
         let id: Int
