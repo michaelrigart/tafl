@@ -182,9 +182,8 @@ final class CompositionRoot {
     /// Reads the Accessibility grant and acts on a change: starts the engine, or on a regain
     /// restarts observing and activates the shortcuts, or on a loss removes them.
     func syncPermission() {
-        let observation = permission.observe()
-        Log.app.notice("Accessibility check: \(observation.summary, privacy: .public)")
-        let granted = observation.isTrusted
+        let granted = permission.isTrusted
+        Log.app.notice("Accessibility check: reported=\(granted, privacy: .public)")
         let regained = granted && !trusted
         trusted = granted
         defer { refreshMenu() }
