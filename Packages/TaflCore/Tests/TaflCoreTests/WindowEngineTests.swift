@@ -2233,6 +2233,8 @@ private func pollUntilLastKnown(
     let reading = await rig.fake.pauseSnapshot(at: 0)
     let applyingFirst = Task { await rig.engine.applyLayout(named: "First") }
     await rig.fake.waitUntil { _ in reading.waiterCount == 1 }
+    // Without the held read, Second's own read would take the gate and wait for it forever.
+    guard reading.waiterCount == 1 else { return reading.open() }
     await rig.engine.applyLayout(named: "Second")
     reading.open()
     await applyingFirst.bounded()
@@ -2358,6 +2360,8 @@ private func pollUntilLastKnown(
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: quiet)
     await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    // Without the held write, Coding's own write would take the gate and wait for it forever.
+    guard gate.waiterCount == 1 else { return gate.open() }
     await rig.engine.applyLayout(named: "Coding")
     gate.open()
     await rig.waitForReport { if case .displayChangeHandled = $0 { true } else { false } }
