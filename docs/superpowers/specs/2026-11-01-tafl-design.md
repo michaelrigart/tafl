@@ -563,8 +563,8 @@ shortcut = "ctrl+opt+cmd+1"     # optional
   on a display change leaves the window order and focus alone, and so does a run that a
   display change stopped. A run that a newer layout overtook raises nothing, so the newer
   layout's windows stay on top. Raising stops as soon as the run is no longer current: a
-  newer layout, or a display change, that arrives partway through leaves the remaining
-  windows unraised, and each step is checked on its app's queue just before it is made.
+  newer layout, a display change, or Tafl beginning to quit, that arrives partway through
+  leaves the remaining windows unraised, and each step is checked on its app's queue just before it is made.
 - **While a layout is active,** a window created later is placed by it, if an entry
   matches. A layout stops being active at the next display change, or when another layout
   is applied.

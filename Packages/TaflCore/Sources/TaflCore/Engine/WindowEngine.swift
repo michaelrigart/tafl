@@ -117,6 +117,9 @@ public actor WindowEngine {
     let layoutApplications = Generation()
     /// Observation restarts: only the newest commits what it learned.
     let restarts = Generation()
+    /// Begun by `stopPlacing`, for the work that cannot read the engine's `isStopping` from its
+    /// queue: a raise admits each step against it.
+    let stops = Generation()
     private let reportSink: AsyncStream<EngineReport>.Continuation
 
     var config = Config.defaults
@@ -273,6 +276,7 @@ public actor WindowEngine {
     /// restart, which a slow app can hold up. Idempotent.
     public func stopPlacing() async {
         isStopping = true
+        stops.begin()
         eventTask?.cancel()
         settleTask?.cancel()
         rulesTask?.cancel()
@@ -501,7 +505,7 @@ public actor WindowEngine {
 
     /// Last, so the overlay does not wait on an app that does not answer. A newer layout application
     /// raises its own windows, and an older run must not cover them: the platform asks `admit` before
-    /// each step of the raise, so a run that is overtaken or stopped midway raises nothing more.
+    /// each step of the raise, so a run that is overtaken, stopped, or cut off by Tafl stopping raises nothing more.
     private func bringToFront(
         _ placed: Set<WindowHandle>,
         of definition: LayoutDefinition,
@@ -514,8 +518,10 @@ public actor WindowEngine {
         guard !order.isEmpty else { return }
         let reconfigurations = reconfigurations
         let layoutApplications = layoutApplications
+        let stops = stops
+        let stopped = stops.current
         await platform.raise(order, admit: {
-            reconfigurations.isCurrent(since) && layoutApplications.isCurrent(application)
+            reconfigurations.isCurrent(since) && layoutApplications.isCurrent(application) && stops.isCurrent(stopped)
         })
     }
 

@@ -500,6 +500,21 @@ private final class Rig: Sendable {
     #expect(await rig.fake.raised == [b.handle])
 }
 
+@Test(.timeLimit(.minutes(1))) func aRaiseThatTaflsStoppingCutOffRaisesNothingMore() async {
+    let a = window(1, frame: start, pid: 100, bundleID: "com.a")
+    let b = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let desk = layout("Desk", [slot(.leftHalf, app: "com.a"), slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(windows: [a, b], focused: nil)
+    await rig.engine.start(config: config(layouts: [desk]))
+    let gate = await rig.fake.pauseRaise(call: 0, beforeStep: 1)
+    let applying = Task { await rig.engine.applyLayout(named: "Desk") }
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    await rig.engine.stopPlacing()
+    gate.open()
+    await applying.bounded()
+    #expect(await rig.fake.raised == [b.handle])
+}
+
 @Test(.timeLimit(.minutes(1))) func aLayoutRunThatANewerApplicationOvertookRaisesNothing() async {
     let placed = window(1, frame: start, pid: 100, bundleID: "com.a")
     let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
