@@ -86,6 +86,8 @@ actor FakePlatform: WindowPlatform {
     var visibleWindowsGate: FakeGate?
     /// Holds the next `startObserving(notices:)` call until the gate opens.
     var startObservingGate: FakeGate?
+    /// Reads `unobserved` for the next `observeAgain(pids:)` call, then holds its result until the gate opens.
+    var observeAgainGate: FakeGate?
     /// Reads the windows, then holds the result of the next `visibleWindows()` until the gate opens.
     var visibleWindowsLateGate: FakeGate?
     /// Holds the next `snapshot(of:)` call until the gate opens.
@@ -305,8 +307,13 @@ actor FakePlatform: WindowPlatform {
     /// Answers from `unobserved`, as `startObserving` does: a test changes it to say what a retry finds.
     func observeAgain(pids: Set<Int32>) async -> [UnobservableApp] {
         observeAgainCalls.append(pids)
-        return unobserved.filter { pids.contains($0.pid) }
+        let answer = unobserved.filter { pids.contains($0.pid) }
             .map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
+        if let gate = observeAgainGate {
+            observeAgainGate = nil
+            await gate.wait()
+        }
+        return answer
     }
 
     func stopObserving() async { stopObservingCount += 1 }

@@ -1848,6 +1848,38 @@ private func wakeRig() async -> Rig {
     #expect(await rig.fake.observeAgainCalls.count == 2)
 }
 
+@Test(.timeLimit(.minutes(1))) func aRetryResultThatArrivesAfterANewerRestartIsDropped() async {
+    let rig = await wakeRig()
+    let gate = FakeGate()
+    await rig.fake.configure { $0.observeAgainGate = gate }
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: .seconds(3))
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    let stale = await rig.engine.observeRetryTask
+    // The retry read the app failing on moves and resizes; the newer restart finds it failing on creations.
+    await rig.fake.configure { $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.created])] }
+    await rig.engine.restartObserving()
+    gate.open()
+    await stale?.bounded()
+    #expect(await rig.engine.unobservable == [200: [.created]])
+}
+
+@Test(.timeLimit(.minutes(1))) func anAppThatQuitsDuringARetryDoesNotComeBackAsUnobservable() async {
+    let rig = await wakeRig()
+    let gate = FakeGate()
+    await rig.fake.configure { $0.observeAgainGate = gate }
+    await rig.clock.waitForSleepers(1)
+    await rig.clock.advance(by: .seconds(3))
+    await rig.fake.waitUntil { _ in gate.waiterCount == 1 }
+    let retrying = await rig.engine.observeRetryTask
+    await rig.emit(.appQuit(pid: 200))
+    await rig.waitForEvents(1)
+    gate.open()
+    await retrying?.bounded()
+    #expect(await rig.engine.unobservable.isEmpty)
+    #expect(await rig.engine.unobservableAppCount == 0)
+}
+
 @Test(.timeLimit(.minutes(1))) func anAppThatQuitsIsNotRetried() async {
     let rig = await wakeRig()
     await rig.clock.waitForSleepers(1)
