@@ -53,7 +53,7 @@ final class Platform27: WindowPlatform {
     }
 
     func isAccessibilityGranted() async -> Bool {
-        AccessibilityTrust.read()
+        AXIsProcessTrusted()
     }
 
     func appName(pid: Int32) async -> String? {
@@ -71,10 +71,7 @@ final class Platform27: WindowPlatform {
     func capabilities() async -> [CapabilityState] {
         let symbol = WindowIDResolver.privateSymbolAvailable
         let list = symbol || !WindowIDResolver.windowList().isEmpty
-        return [
-            Self.windowIdentityCapability(privateSymbol: symbol, windowList: list),
-            AccessibilityTrust.capability(preflightAvailable: AccessibilityTrust.preflightAvailable),
-        ]
+        return [Self.windowIdentityCapability(privateSymbol: symbol, windowList: list)]
     }
 
     static func windowIdentityCapability(privateSymbol: Bool, windowList: Bool) -> CapabilityState {
