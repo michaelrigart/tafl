@@ -86,9 +86,9 @@ public protocol WindowPlatform: Sendable {
     func beginWriting(_ handle: WindowHandle) async -> Result<any WriteSession, PlatformFailure>
     /// Brings the windows to the front one after the other, so the last one ends on top and its app
     /// is frontmost. A window that cannot be raised is logged and skipped: nothing fails. `admit` is
-    /// asked in the same serial work for the window's app that makes each step, immediately before
-    /// it (each raise, each frontmost write and the activation fallback); once it answers false the
-    /// platform makes no further step.
+    /// asked on the queue where that step's call runs, immediately before it (the app's Accessibility
+    /// queue for each raise and frontmost write, the main actor for the activation fallback); once it
+    /// answers false the platform makes no further step.
     func raise(_ windows: [WindowHandle], admit: @escaping @Sendable () -> Bool) async
     func pointerDisplay() async -> DisplayIdentity?
     func tilingSettings() async -> TilingSettings

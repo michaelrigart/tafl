@@ -154,8 +154,8 @@ final class Platform27: WindowPlatform {
 
     /// One window after another, each on its app's queue, so the last ends on top. A window that is
     /// not registered, or that cannot be raised, is logged and skipped. `admit` is asked on the app's
-    /// queue immediately before each raise and each frontmost write, and before the activation
-    /// fallback; once it answers false nothing more is raised.
+    /// queue immediately before each raise and each frontmost write, and on the main actor before the
+    /// activation fallback; once it answers false nothing more is raised.
     func raise(_ windows: [WindowHandle], admit: @escaping @Sendable () -> Bool) async {
         for handle in windows {
             guard admit() else { return }

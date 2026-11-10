@@ -374,8 +374,10 @@ Names are left to the builder. The contract is:
   an external change (see "Applying a frame").
 - **Raising windows.** Bring given windows to the front in order, and make the last one's
   app frontmost. A failure is logged and never fails the layout. The core passes an
-  admission check that the platform asks on the app's queue before each raise, each
-  frontmost write and the activation fallback; once it answers no, nothing more is raised.
+  admission check that the platform asks, on the queue where that call runs, before each
+  raise, each frontmost write and the activation fallback (the app's Accessibility queue
+  for the raise and the frontmost write, the main actor for the fallback); once it answers
+  no, nothing more is raised.
 - **The pointer's display.**
 - **macOS's tiling settings** (read only).
 - **The Accessibility permission state.**
@@ -564,7 +566,8 @@ shortcut = "ctrl+opt+cmd+1"     # optional
   display change stopped. A run that a newer layout overtook raises nothing, so the newer
   layout's windows stay on top. Raising stops as soon as the run is no longer current: a
   newer layout, a display change, or Tafl beginning to quit, that arrives partway through
-  leaves the remaining windows unraised, and each step is checked on its app's queue just before it is made.
+  leaves the remaining windows unraised, and each step is checked just before it is made, on the queue where
+  that step runs.
 - **While a layout is active,** a window created later is placed by it, if an entry
   matches. A layout stops being active at the next display change, or when another layout
   is applied.
