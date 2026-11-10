@@ -96,3 +96,12 @@ public protocol WindowPlatform: Sendable {
     /// Stops observing. `events` stays open: the engine keeps consuming it across a restart.
     func stopObserving() async
 }
+
+extension WindowPlatform {
+    /// The displays a window is placed on or navigated between: `displays()` without a placeholder
+    /// (see `Display.isPlaceholder`), which is no real display. Only the settle logic reads
+    /// `displays()` itself, to see a placeholder and wait it out.
+    public func usableDisplays() async -> [Display] {
+        await displays().filter { !$0.isPlaceholder }
+    }
+}

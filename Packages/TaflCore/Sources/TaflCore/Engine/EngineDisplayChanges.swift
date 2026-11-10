@@ -80,9 +80,11 @@ extension WindowEngine {
         // so the next real setup is compared with the one before the placeholder.
         guard !new.contains(where: \.isPlaceholder) else { return }
         let old = changeOrigin ?? knownDisplays
-        if DisplaySetup(old) == DisplaySetup(new), !rulesStarted {
-            // A display that dropped out and came back, or a change of geometry: nothing moves, but
-            // frames may have changed while recording was frozen, and no event follows them.
+        if old.isEmpty || DisplaySetup(old) == DisplaySetup(new), !rulesStarted {
+            // No setup known yet (startup saw only a placeholder): this is the first one, recorded and
+            // remembered with no rule run. Or a display that dropped out and came back, or a change of
+            // geometry: nothing moves, but frames may have changed while recording was frozen, and no
+            // event follows them.
             // The origin goes in the step that resumes recording, so a change that begins during the
             // read starts from the geometry being recorded.
             changeOrigin = nil

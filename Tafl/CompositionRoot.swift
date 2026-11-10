@@ -168,7 +168,7 @@ final class CompositionRoot {
     private func refreshPlatformInfo() {
         platformInfoTask?.cancel()
         platformInfoTask = Task { [platform, settingsModel] in
-            let displays = await platform.displays()
+            let displays = await platform.usableDisplays()
             let tiling = await platform.tilingSettings()
             let capabilities = await platform.capabilities()
             guard !Task.isCancelled else { return }

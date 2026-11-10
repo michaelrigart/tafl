@@ -76,7 +76,7 @@ final class SettingsActions {
         }
         // Read only to build the snippet: nothing is recorded from it.
         async let windows = platform.visibleWindows(take: { $0 })
-        async let displays = platform.displays()
+        async let displays = platform.usableDisplays()
         let snippet = CaptureBuilder.snippet(windows: await windows, displays: await displays, gap: gap())
         model.capturedSnippet = snippet
         copy(snippet)
@@ -91,7 +91,7 @@ final class SettingsActions {
         let version = ProcessInfo.processInfo.operatingSystemVersion
         let report = Diagnostics.report(
             macOS: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)",
-            displayCount: await platform.displays().count,
+            displayCount: await platform.usableDisplays().count,
             status: model.status,
             capabilities: await platform.capabilities(),
             unobservableApps: await unobservableApps(),

@@ -132,6 +132,14 @@ private final class Rig: Sendable {
         }
     }
 
+    /// Waits until every report sent so far has been collected: a report that follows is sent after
+    /// them, so a test can say that none of a kind was sent. Leaves Accessibility revoked.
+    func waitForReportsUpToNow(sourceLocation: SourceLocation = #_sourceLocation) async {
+        await fake.configure { $0.accessibilityGranted = false }
+        await engine.perform(.leftHalf)
+        await waitForReport(sourceLocation: sourceLocation) { $0 == .failure(.permissionMissing, display: nil) }
+    }
+
     /// Waits until `count` display changes have been handled in all.
     func waitForChanges(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async {
         let found = await pollUntil {
@@ -755,6 +763,96 @@ private func dockedRig() async -> Rig {
     await rig.waitUntilChangeIsSettled()
     #expect(await rig.log.isEmpty)
     #expect(await rig.frame() == start)
+}
+
+private enum NothingRemembered: CaseIterable {
+    case firstLaunch, memoryThatFailedToLoad
+}
+
+@Test(.timeLimit(.minutes(1)), arguments: NothingRemembered.allCases)
+private func startingOnAPlaceholderWithNothingRememberedRecordsAndStoresNothingAndTheRealSetupIsAFirstSetup(
+    _ case: NothingRemembered
+) async throws {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    if `case` == .memoryThatFailedToLoad {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("{ not a memory".utf8).write(to: directory.appendingPathComponent("memory.json"))
+    }
+    let rig = await Rig(displays: [placeholder], windows: [window(1, frame: start)], store: store)
+    await rig.engine.start(config: config())
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.engine.memory.read().lastDisplays.isEmpty)
+    #expect(await rig.engine.knownDisplays.isEmpty)
+    // What a save writes carries no placeholder, which would decode as a real display.
+    await rig.engine.save()
+    guard case .loaded(let saved) = store.load() else {
+        Issue.record("the save wrote no memory")
+        return
+    }
+    #expect(saved.lastDisplays.isEmpty)
+
+    await rig.changeDisplays(to: [displayA], eventsHandledAfter: 2)
+    await finishSettling(rig)
+    await rig.waitForReportsUpToNow()
+    // A first setup: recorded and remembered, with no rule run against a placeholder.
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.frame() == start)
+    #expect(displayChangesHandled(rig) == 0)
+    #expect(await rig.engine.knownDisplays == [displayA])
+    #expect(await rig.engine.memory.read().lastDisplays == [displayA])
+}
+
+/// A second display that is a placeholder, where the second display of `bothDisplays` is.
+private let placeholderB = Display(
+    identity: displayB.identity, frame: displayB.frame, visibleFrame: displayB.visibleFrame, isPlaceholder: true
+)
+
+@Test(.timeLimit(.minutes(1))) func aShortcutDuringAPlaceholderPeriodNeverTargetsThePlaceholder() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    await rig.changeDisplays(to: [displayA, placeholderB], eventsHandledAfter: 2)
+    await finishSettling(rig)
+    await rig.engine.perform(.rightHalf)
+    await rig.engine.perform(.rightHalf)
+    let frame = await rig.frame()
+    #expect(frame.map { isClose($0, leftHalfB) } == false)
+    #expect(frame.map { $0.origin.x < displayB.frame.origin.x } == true)
+}
+
+@Test(.timeLimit(.minutes(1))) func aWindowOnAPlaceholderDuringAPlaceholderPeriodIsPlacedOnARealDisplay() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    await rig.changeDisplays(to: [displayA, placeholderB], eventsHandledAfter: 2)
+    await finishSettling(rig)
+    await rig.fake.configure { $0.windows[handle]?.frame = rect(1100, 100, 400, 300) }
+    await rig.engine.perform(.leftHalf)
+    #expect(await rig.frame() == leftHalfA)
+}
+
+@Test(.timeLimit(.minutes(1))) func aFailureDuringAPlaceholderPeriodNamesARealDisplay() async {
+    var fixed = window(1, frame: start)
+    fixed.canMove = false
+    let rig = await Rig(windows: [fixed])
+    await rig.engine.start(config: config())
+    await rig.changeDisplays(to: [displayA, placeholderB], eventsHandledAfter: 2)
+    await finishSettling(rig)
+    await rig.fake.configure { $0.windows[handle]?.frame = rect(1100, 100, 400, 300) }
+    await rig.engine.perform(.leftHalf)
+    await rig.waitForReport { $0 == .failure(.cannotMove, display: displayA.identity) }
+}
+
+@Test(.timeLimit(.minutes(1))) func aLayoutAppliedDuringAPlaceholderPeriodNeverTargetsThePlaceholder() async {
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config(layouts: [dock]))
+    await rig.changeDisplays(to: [displayA, placeholderB], eventsHandledAfter: 2)
+    await finishSettling(rig)
+    // The Dock layout puts this window on "Desk", which is the placeholder now: no such display, so
+    // the window stays on the display it is on.
+    await rig.engine.applyLayout(named: "Dock")
+    await rig.waitForReport { $0 == .layoutApplied(name: "Dock", placed: 1, failed: 0) }
+    let frame = await rig.frame()
+    #expect(frame.map { $0.origin.x < displayB.frame.origin.x } == true)
 }
 
 /// A resolution change leaves the setup the same and moves no window: the window keeps its points,

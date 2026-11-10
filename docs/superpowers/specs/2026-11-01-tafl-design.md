@@ -156,7 +156,8 @@ moves end within 0.5 s of the end callback.
   registration. A DarkWake shows a placeholder display (no name, "unkn" and "virt",
   1920 x 1080) for about 1.3 s, shorter than the 1.5 s quiet period. One that lasted longer
   would settle as a new setup, so Tafl never settles on a setup that holds one (see "Display
-  changes").
+  changes"). Known limit: a real display that reports no name with vendor "unkn" and model
+  "virt" would look like the placeholder, and Tafl would never settle on a setup that holds it.
 - **Enhanced UI.** Switching it off returns -25208 in a Gecko browser, yet it works. Tafl
   always attempts it and ignores the status. Skipping the switch failed in 3 of 3 runs in Zen
   (the position write reverted the size, and the frame ended 900 pt off), which is why Tafl
@@ -475,7 +476,11 @@ action put it. `repeat` in the config file sets what a repeat does:
   - a setup that holds a placeholder display (no name, vendor "unkn" and model "virt", which
     macOS shows briefly during a DarkWake) is never a setup: the rules do not run for it, nothing
     moves, the active layout and the last-known setup stay, and the next real setup is handled
-    as usual, compared with the setup before the placeholder.
+    as usual, compared with the setup before the placeholder. Such a setup is never recorded,
+    remembered or saved, so when Tafl starts on one with no setup remembered (a first launch, or a
+    memory that failed to load), the next real setup is a first setup: recorded and remembered,
+    with no rule run. Meanwhile no shortcut or layout targets a placeholder: placement and
+    navigation see only the other displays.
 
 When the display setup changes, each visible window (on any display's current Space) is
 handled by the first rule that applies:

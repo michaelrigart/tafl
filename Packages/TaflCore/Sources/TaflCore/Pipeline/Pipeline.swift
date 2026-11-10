@@ -198,7 +198,7 @@ public actor Pipeline {
             return .skipped
         }
         if !snapshot.canMove { return .failed(.cannotMove) }
-        let displays = await platform.displays()
+        let displays = await platform.usableDisplays()
         guard let current = DisplayLocator.display(containing: snapshot.frame, in: displays) else {
             return .failed(.cannotMove)
         }

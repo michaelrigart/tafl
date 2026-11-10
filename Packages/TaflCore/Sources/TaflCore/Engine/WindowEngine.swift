@@ -187,9 +187,10 @@ public actor WindowEngine {
         // Apps that failed to register are known before any rule or seed looks at a window.
         learn(await platform.startObserving(notices: owner))
         let current = await platform.displays()
-        if remembered.lastSetup != nil, current.contains(where: \.isPlaceholder) {
-            // A placeholder display is no setup (see `settle`): nothing moves and recording stays frozen
-            // on the last real setup, which the next real setup is compared with.
+        if current.contains(where: \.isPlaceholder) {
+            // A placeholder display is no setup (see `settle`): nothing moves, and nothing is recorded or
+            // remembered for it. Recording stays frozen on the last real setup, which the next real setup
+            // is compared with; with none remembered the next real setup is a first setup.
             owner.freezeLastKnown(on: remembered.lastDisplays)
             changeOrigin = remembered.lastDisplays
             listen()
@@ -380,7 +381,7 @@ public actor WindowEngine {
         if case .notResponding = kind {} else if case .success(let current) = await platform.snapshot(of: window.handle, take: owner.take) {
             frame = current.frame
         }
-        return DisplayLocator.display(containing: frame, in: await platform.displays())?.identity
+        return DisplayLocator.display(containing: frame, in: await platform.usableDisplays())?.identity
     }
 
     // MARK: Layouts
@@ -397,7 +398,7 @@ public actor WindowEngine {
         let application = beginLayoutApplication()
         // Taken before anything is read: a reconfiguration that begins during the reads stops the run.
         let since = reconfigurations.current
-        let displays = await platform.displays()
+        let displays = await platform.usableDisplays()
         let windows = await platform.visibleWindows(take: owner.take)
         guard !isStopping, reconfigurations.isCurrent(since) else { return }
         let requests = LayoutPlanner.requests(definition, windows: windows, displays: displays, source: .layout(name))
