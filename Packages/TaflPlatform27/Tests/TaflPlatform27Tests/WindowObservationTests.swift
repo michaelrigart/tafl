@@ -122,6 +122,8 @@ private struct ObservationHarness {
     let isRunning = Flag(true)
     /// How many catch-ups have started.
     let announcements = Counter()
+    /// How many times the registration for a pid was taken back.
+    let stops = Counter()
     let notices = RecordedNotices()
 
     /// `outcomes` answers each registration in turn and then repeats its last answer. A catch-up
@@ -134,6 +136,7 @@ private struct ObservationHarness {
         let registrations = Counter()
         let isRunning = isRunning
         let announcements = announcements
+        let stops = stops
         let axQueue = AXQueue()
         let registry = registry
         observation = WindowObservation27(
@@ -148,6 +151,7 @@ private struct ObservationHarness {
                     let index = registrations.increment()
                     return outcomes[min(index, outcomes.count - 1)]
                 },
+                stop: { _, _ in _ = stops.increment() },
                 windows: { app, announce in
                     _ = announcements.increment()
                     if let catchUpGate { await catchUpGate.wait() }
@@ -274,6 +278,28 @@ func aRetryThatFailsAgainReportsTheAppUnobservable() async {
     harness.isRunning.isSet = false
     #expect(await harness.observation.observeAgain(launching) == nil)
     #expect(harness.registrations.count == 1)
+}
+
+@Test func anAppThatQuitsBeforeItIsRegisteredAgainLeavesNoRegistrationAndNoClaim() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout, [:]])
+    _ = await harness.observation.attempt(launching)
+    // The app is gone, and its quit has not been handled: isRunning is the first to know.
+    harness.isRunning.isSet = false
+    #expect(await harness.observation.observeAgain(launching) == nil)
+    #expect(harness.registrations.count == 1)
+    #expect(harness.stops.count == 1)
+    // The claim went with it: a process that takes the pid is registered afresh.
+    harness.isRunning.isSet = true
+    _ = await harness.observation.attempt(launching)
+    #expect(harness.registrations.count == 2)
+}
+
+@Test func aSuccessfulRegistrationAgainKeepsItsRegistration() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout, [:]])
+    _ = await harness.observation.attempt(launching)
+    #expect(await harness.observation.observeAgain(launching) == nil)
+    #expect(harness.registrations.count == 2)
+    #expect(harness.stops.count == 0)
 }
 
 @Test func anAppIsRegisteredOncePerRunAndNeverForTaflItself() async {

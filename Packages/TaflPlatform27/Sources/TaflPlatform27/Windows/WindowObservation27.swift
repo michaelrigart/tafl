@@ -18,6 +18,8 @@ final class WindowObservation27: Sendable {
         var isLaunching: @Sendable (Int32) -> Bool
         var untilFinishedLaunching: @Sendable (Int32) async -> Void
         var register: @Sendable (AXObserverHub, Int32, String?, @escaping AXObserverHub.Handler) -> [String: AXError]
+        /// Takes back whatever `register` left registered for the pid.
+        var stop: @Sendable (AXObserverHub, Int32) -> Void = { hub, pid in hub.stopObserving(pid: pid) }
         /// The app's windows, registered, each handed to `announce` inside the read that found it.
         var windows: @Sendable (
             AppInfo27,
@@ -126,12 +128,17 @@ final class WindowObservation27: Sendable {
 
     /// The outcome, and the claim it was reached under when there is one.
     private func claimedAttempt(_ app: AppInfo27) async -> (outcome: Outcome, claim: Int?) {
+        guard environment.isRunning(app.pid), let claim = claim(app.pid) else { return (.observed, nil) }
+        return await attempt(app, under: claim)
+    }
+
+    /// The outcome of registering the app under a claim already held on it.
+    private func attempt(_ app: AppInfo27, under claim: Int) async -> (outcome: Outcome, claim: Int?) {
         let pid = app.pid
-        guard environment.isRunning(pid), let claim = claim(pid) else { return (.observed, nil) }
         // The app may have quit between the check and the claim, after its quit was handled: the claim
         // would then never be released.
         guard environment.isRunning(pid) else {
-            release(pid: pid, claim: claim)
+            abandon(pid: pid, claim: claim)
             return (.observed, nil)
         }
         guard let failures = await register(app, claim: claim) else { return (.observed, nil) }
@@ -153,16 +160,14 @@ final class WindowObservation27: Sendable {
     }
 
     /// Registers an app this run already claimed once more, after a registration that failed (for
-    /// about 2 s around a wake, Accessibility calls on live apps fail). The old claim ends, so
-    /// nothing still in flight under it does anything. The app is the result when its events still
+    /// about 2 s around a wake, Accessibility calls on live apps fail). A new claim replaces the old
+    /// one in one step, so nothing still in flight under the old one does anything and the app is
+    /// never without a claim. The app is the result when its events still
     /// cannot be observed; nil when they can, or when the app is gone or was never claimed. Each
     /// outcome is logged.
     func observeAgain(_ app: AppInfo27) async -> UnobservableApp? {
-        let wasClaimed = state.withLock { state in
-            state.isActive && state.claims.removeValue(forKey: app.pid) != nil
-        }
-        guard wasClaimed else { return nil }
-        let attempt = await claimedAttempt(app)
+        guard let claim = replaceClaim(pid: app.pid) else { return nil }
+        let attempt = await attempt(app, under: claim)
         guard attempt.claim != nil else { return nil }
         switch attempt.outcome {
         case .unobservable(let unobservable):
@@ -210,8 +215,9 @@ final class WindowObservation27: Sendable {
         }
         let hub = hub
         let notices = notices
+        let stop = environment.stop
         await axQueue.run(pid: pid) {
-            if wasClaimed { hub.stopObserving(pid: pid) }
+            if wasClaimed { stop(hub, pid) }
             notices.quit(pid: pid)
         }
         translator.closeLane(pid: pid)
@@ -258,9 +264,23 @@ final class WindowObservation27: Sendable {
         return claim
     }
 
-    private func release(pid: Int32, claim: Int) {
+    /// Puts a new claim in place of the one the app holds; nil when it holds none or observing is off.
+    private func replaceClaim(pid: Int32) -> Int? {
+        state.withLock { state -> Int? in
+            guard state.isActive, state.claims[pid] != nil else { return nil }
+            state.nextClaim += 1
+            state.claims[pid] = Claim(id: state.nextClaim)
+            return state.nextClaim
+        }
+    }
+
+    /// An attempt under the claim gives up: the claim is released, if it is still the app's, and so is
+    /// whatever registration the app has. Under the lock, so a claim taken afterwards registers fresh.
+    private func abandon(pid: Int32, claim: Int) {
         state.withLock { state in
-            if state.claims[pid]?.id == claim { state.claims[pid] = nil }
+            guard state.claims[pid]?.id == claim else { return }
+            state.claims[pid] = nil
+            environment.stop(hub, pid)
         }
     }
 
@@ -277,17 +297,24 @@ final class WindowObservation27: Sendable {
     /// (so no queue is made for a dead pid) or while the call was in flight; in the second case the
     /// registration is taken back.
     private func register(_ app: AppInfo27, claim: Int) async -> [String: AXError]? {
-        guard isLive(pid: app.pid, claim: claim) else { return nil }
+        guard isLive(pid: app.pid, claim: claim) else {
+            abandon(pid: app.pid, claim: claim)
+            return nil
+        }
         let hub = hub
         let translator = translator
         let register = environment.register
+        let stop = environment.stop
         let pid = app.pid
         let bundleID = app.bundleID
         return await axQueue.run(pid: pid) { () -> [String: AXError]? in
-            guard self.isLive(pid: pid, claim: claim) else { return nil }
+            guard self.isLive(pid: pid, claim: claim) else {
+                self.abandon(pid: pid, claim: claim)
+                return nil
+            }
             let failures = register(hub, pid, bundleID) { event in translator.enqueue(event) }
             guard self.isCurrent(pid: pid, claim: claim) else {
-                hub.stopObserving(pid: pid)
+                stop(hub, pid)
                 return nil
             }
             return failures
