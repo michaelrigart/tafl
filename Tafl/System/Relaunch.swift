@@ -5,7 +5,9 @@ import AppKit
 enum Relaunch {
     private static let script = #"while kill -0 "$1" 2>/dev/null; do sleep 0.1; done; exec /usr/bin/open "$2""#
 
-    static func perform() {
+    /// Returns false, and leaves Tafl running, when the new copy could not be scheduled.
+    @discardableResult
+    static func perform() -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", script, "sh", String(ProcessInfo.processInfo.processIdentifier), Bundle.main.bundleURL.path]
@@ -16,9 +18,10 @@ enum Relaunch {
             try process.run()
         } catch {
             Log.app.notice("Could not start the relaunch; Tafl keeps running")
-            return
+            return false
         }
         Log.app.notice("Relaunching Tafl")
         NSApp.terminate(nil)
+        return true
     }
 }

@@ -62,9 +62,10 @@ points at Xcode, and don't change `xcode-select`.
   Ad hoc builds (`CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`, which CI and contributors use) need
   the grant again after every rebuild. To grant it: quit Tafl, start it with `open` and switch
   it on in System Settings, Privacy & Security, Device Control and Data Access (the Accessibility
-  permission). The onboarding window's button opens that page and the window closes by
-  itself once Tafl sees the grant. A Tafl that lost the permission while running and got it back
-  needs Reopen Tafl: macOS 27.2.1 keeps answering "not granted" to that process. Whether a
+  permission). The onboarding window's button opens that page, and Tafl relaunches itself once it
+  sees a grant it did not start with (observing started in that process right after the grant can
+  fail for every app). If the window stays open, Reopen Tafl does the same by hand: macOS 27.2.1
+  can keep answering "not granted" to a running Tafl. Whether a
   renewed certificate (yearly) keeps the grant is unconfirmed.
 - Paths: the config is `~/.config/tafl/config.toml` (it may be a symlink; Tafl writes it only
   as a starter file when none exists, on request); the window memory is `~/.local/state/tafl/memory.json`.

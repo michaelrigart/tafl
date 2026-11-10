@@ -19,6 +19,7 @@ final class OnboardingWindow {
             self.window = window
         }
         window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
         NSApp.activate()
     }
 
@@ -45,7 +46,7 @@ private struct OnboardingView: View {
             Text("Tafl moves and resizes windows with keyboard shortcuts. macOS only lets an app do that after you allow it in System Settings › Privacy & Security › Device Control and Data Access.")
             Text("Turn Tafl on in that list. Until you do, Tafl registers no shortcuts and moves nothing.")
                 .foregroundStyle(.secondary)
-            Text("This window closes once Tafl sees the permission. If it stays open after you have turned Tafl on, Reopen Tafl finishes it.")
+            Text("Tafl restarts itself once it sees the permission. If this window stays open after you have turned Tafl on, Reopen Tafl finishes it.")
                 .foregroundStyle(.secondary)
             HStack {
                 Button("Open Accessibility Settings", action: openSettings)

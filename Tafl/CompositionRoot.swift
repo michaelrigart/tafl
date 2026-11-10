@@ -24,6 +24,9 @@ final class CompositionRoot {
     /// Whether Accessibility was granted when last looked at.
     private var trusted = false
     private var engineStarted = false
+    /// Whether this process has run without the grant, so a grant seen now needs a fresh process.
+    private var ranWithoutGrant = false
+    private var relaunching = false
     /// The categories of the last failures, newest last, for diagnostics.
     private var recentFailures: [String] = []
     private var platformInfoTask: Task<Void, Never>?
@@ -179,24 +182,32 @@ final class CompositionRoot {
 
     // MARK: Accessibility
 
-    /// Reads the Accessibility grant and acts on a change: starts the engine, or on a regain
-    /// restarts observing and activates the shortcuts, or on a loss removes them.
+    /// Reads the Accessibility grant and acts on a change: starts the engine, or on a loss removes
+    /// the shortcuts. A grant that arrives in a process that ran without it relaunches Tafl, because
+    /// observing started right after such a grant can fail for every app.
     func syncPermission() {
         let granted = permission.isTrusted
         Log.app.notice("Accessibility check: reported=\(granted, privacy: .public)")
-        let regained = granted && !trusted
         trusted = granted
         defer { refreshMenu() }
         guard granted else {
+            ranWithoutGrant = true
             configController.reactivate()
             onboarding.show()
             return
         }
+        if ranWithoutGrant, !relaunching {
+            relaunching = true
+            Log.app.notice("Accessibility granted to a running Tafl, relaunching")
+            if Relaunch.perform() { return }
+            relaunching = false
+        }
+        guard !relaunching else { return }
         onboarding.close()
         if !engineStarted {
             startEngine()
-        } else if regained {
-            Log.app.notice("Accessibility granted again")
+        } else if ranWithoutGrant {
+            ranWithoutGrant = false
             configController.reactivate()
             restartObserving()
         }
@@ -205,6 +216,7 @@ final class CompositionRoot {
     private func permissionLost() {
         Log.app.notice("Accessibility permission missing")
         trusted = false
+        ranWithoutGrant = true
         configController.reactivate()
         onboarding.show()
     }

@@ -62,9 +62,9 @@ the first time you open it. After the first install:
 1. Open System Settings > Privacy & Security, find the message about Tafl and click
    **Open Anyway**.
 2. Allow Tafl under Privacy & Security > Device Control and Data Access. Tafl's onboarding
-   window opens that page and closes by itself once Tafl sees the permission. If Tafl lost the
-   permission while it was running and you turned it back on, click **Reopen Tafl**: macOS 27.2.1
-   keeps answering "not granted" to that process.
+   window opens that page, and Tafl restarts itself once it sees the permission. If the window
+   stays open after you turned Tafl on, click **Reopen Tafl**: macOS 27.2.1 can keep answering
+   "not granted" to a running Tafl.
 3. Quit Rectangle, or any other app that uses the same shortcuts, before you start Tafl.
    Tafl's defaults are Rectangle's alternate set, so both would register the same keys. If
    another app holds a shortcut, Tafl gets no error when it registers the same key
