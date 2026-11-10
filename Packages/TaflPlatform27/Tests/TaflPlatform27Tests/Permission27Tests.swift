@@ -45,10 +45,11 @@ private final class ScriptedCheck: Sendable {
     }
 
     /// Returns once `count` calls have started. Checks run one at a time, so a call starts only after
-    /// the one before it has been applied.
-    func waitForCalls(_ count: Int) async {
+    /// the one before it has been applied. A wait that is cancelled first (a time limit) records an issue.
+    func waitForCalls(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async {
         if callCount >= count { return }
         for await _ in startedEvents where callCount >= count { return }
+        Issue.record("Wait for \(count) calls ended by cancellation at \(callCount)", sourceLocation: sourceLocation)
     }
 }
 

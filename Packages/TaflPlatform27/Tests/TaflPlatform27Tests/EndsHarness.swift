@@ -1,6 +1,7 @@
 import ApplicationServices
 import Synchronization
 import TaflCore
+import Testing
 @testable import TaflPlatform27
 
 /// An app's serial queue that the test runs by hand: work runs in the order it was queued, when
@@ -22,8 +23,8 @@ final class ManualQueue: Sendable {
     }
 
     /// Waits until `count` pieces of work have been queued, drained or not.
-    func waitForQueued(_ count: Int) async {
-        await queued.wait(for: count)
+    func waitForQueued(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async {
+        await queued.wait(for: count, sourceLocation: sourceLocation)
     }
 }
 

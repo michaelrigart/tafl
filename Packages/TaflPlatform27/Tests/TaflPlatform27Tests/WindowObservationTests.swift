@@ -52,20 +52,45 @@ private final class Flag: Sendable {
     }
 }
 
-/// Holds catch-ups until `release()`, which lets every one waiting go; a later one waits again.
+/// Holds catch-ups until `release()`, which lets every one waiting go; a later one waits again. A
+/// held catch-up that is cancelled goes on, so a test's time limit cannot leave one parked.
 private final class CatchUpGate: Sendable {
-    private let waiting = Mutex<[CheckedContinuation<Void, Never>]>([])
+    private struct State {
+        var nextID = 0
+        var waiting: [(id: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    }
 
-    var waiterCount: Int { waiting.withLock { $0.count } }
+    private let state = Mutex(State())
+
+    var waiterCount: Int { state.withLock { $0.waiting.count } }
 
     func wait() async {
-        await withCheckedContinuation { continuation in waiting.withLock { $0.append(continuation) } }
+        let id = state.withLock { state -> Int in
+            defer { state.nextID += 1 }
+            return state.nextID
+        }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let resumeNow = state.withLock { state in
+                    if Task.isCancelled { return true }
+                    state.waiting.append((id, continuation))
+                    return false
+                }
+                if resumeNow { continuation.resume() }
+            }
+        } onCancel: {
+            let cancelled = state.withLock { state -> CheckedContinuation<Void, Never>? in
+                guard let index = state.waiting.firstIndex(where: { $0.id == id }) else { return nil }
+                return state.waiting.remove(at: index).continuation
+            }
+            cancelled?.resume()
+        }
     }
 
     func release() {
-        let released = waiting.withLock { waiting in
-            defer { waiting = [] }
-            return waiting
+        let released = state.withLock { state in
+            defer { state.waiting = [] }
+            return state.waiting.map(\.continuation)
         }
         for continuation in released { continuation.resume() }
     }
