@@ -22,6 +22,9 @@ public final class Permission27: @unchecked Sendable { // reason: `observer` is 
     private let continuation: AsyncStream<Bool>.Continuation
     public let changes: AsyncStream<Bool>
 
+    /// Delays of the later reads after each notification.
+    static let laterReads: [Duration] = [.milliseconds(500), .seconds(2)]
+
     private let read: @Sendable () -> Bool
 
     /// The one trust rule: `AXIsProcessTrusted()` alone. A real Accessibility call is no substitute:
@@ -35,9 +38,13 @@ public final class Permission27: @unchecked Sendable { // reason: `observer` is 
             read: { AXIsProcessTrusted() })
     }
 
-    /// The notification can arrive before the change takes effect, so each one is read twice: at once
-    /// and on the next main run-loop turn. A value is emitted only when it differs from the last one seen.
-    init(center: NotificationCenter, name: Notification.Name, read: @escaping @Sendable () -> Bool) {
+    /// The notification can arrive before the change takes effect, so each one is read at once, on the
+    /// next main run-loop turn, and 0.5 s and 2 s later (`after` runs the later reads). A value is
+    /// emitted only when it differs from the last one seen.
+    init(
+        center: NotificationCenter, name: Notification.Name, read: @escaping @Sendable () -> Bool,
+        after: @escaping @Sendable (Duration, @escaping @Sendable () -> Void) -> Void = Permission27.afterOnMain
+    ) {
         self.center = center
         self.read = read
         let last = LastValue(read())
@@ -51,7 +58,14 @@ public final class Permission27: @unchecked Sendable { // reason: `observer` is 
         observer = center.addObserver(forName: name, object: nil, queue: .main) { _ in
             emitIfChanged()
             DispatchQueue.main.async { emitIfChanged() }
+            for delay in Permission27.laterReads { after(delay) { emitIfChanged() } }
         }
+    }
+
+    private static func afterOnMain(_ delay: Duration, _ body: @escaping @Sendable () -> Void) {
+        let (seconds, attoseconds) = delay.components
+        let nanoseconds = Int(seconds) * 1_000_000_000 + Int(attoseconds / 1_000_000_000)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .nanoseconds(nanoseconds), execute: body)
     }
 
     deinit {
