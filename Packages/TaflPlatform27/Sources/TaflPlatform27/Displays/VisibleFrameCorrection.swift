@@ -14,7 +14,9 @@ public struct DockState: Equatable, Sendable {
     }
 }
 
-/// Rectangle v2.0.4's Dock and menu bar corrections; provisional until the macOS 27.2 measurements.
+/// Rectangle v2.0.4's Dock and menu bar corrections. On macOS 27.2 the auto-hidden Dock reserved
+/// nothing and `visibleFrame` was current a few seconds after a Dock change, so the corrections
+/// change nothing there; they stay for a later macOS (spec, "Measured on macOS 27.2").
 public enum VisibleFrameCorrection {
     private enum Edge: Equatable {
         case left, right, bottom

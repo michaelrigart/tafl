@@ -8,7 +8,8 @@
 **Name:** Tafl, after the Norse board game played by placing pieces on a grid.
 **Revised:** 2026-11-06: signing moved to Michael's Personal Team; see
 `docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`;
-2026-11-10: how Tafl notices the Accessibility switch.
+2026-11-10: how Tafl notices the Accessibility switch;
+2026-11-10: measured on macOS 27.2 (feasibility probe).
 
 ## Why
 
@@ -67,8 +68,8 @@ pull requests, Rectangle Pro's public feature list, and the competing tools.
 ## What macOS allows
 
 These are facts from Rectangle's source and documentation and from Apple's documentation.
-**None is verified on macOS 27.2.** The plan's first task checks the ones Tafl depends on
-(see Delivery).
+**None was verified on macOS 27.2 when this spec was signed off.** The plan's first task
+checked the ones Tafl depends on (see Delivery); "Measured on macOS 27.2" records the result.
 
 - **Windows are controlled through Accessibility** (`AXUIElement`): read and set position
   and size, check whether each is settable, raise. This needs the Accessibility
@@ -104,6 +105,54 @@ These are facts from Rectangle's source and documentation and from Apple's docum
   `EnableTopTilingByEdgeDrag`, `EnableTiledWindowMargins`.
 - **Global hotkeys** work through Carbon's `RegisterEventHotKey` without any permission or
   event tap.
+
+## Measured on macOS 27.2
+
+The feasibility probe ran on 2026-11-05 and 2026-11-10, on the built-in display alone and
+docked to a 21:9 ultrawide. No stop rule triggered: windows read and move reliably; the one
+change to the part Tafl didn't write is exact and computable; the begin callback arrives
+before macOS moves any window; macOS's own restore matches rule 2 stepping aside; and macOS's
+moves end within 0.5 s of the end callback.
+
+- **The named macOS adjustment.** A position write that moves a window onto a display whose
+  visible frame is shorter than the window clamps its height so it ends at the destination's
+  visible bottom: 1410 became 1130 at the visible top, in 5 of 5 apps. Moving onto a taller
+  display never changed the size. A size write is clamped by the app at the window's current
+  origin, to the bottom of the display it is on; that is the written part, and
+  size-position-size recovers it. Every cross-display and single-display run ended on the
+  target frame (shortfall 0) except the 1 pt below.
+- **Reapply.** Nothing changed 25 ms after the last read-back in 45 of 45 runs, on one display
+  and across displays. On 27.2 there is no reapply (`reapplyDelay` is nil); the mechanism stays
+  for a later macOS.
+- **Size shortfall.** At most 1 pt (TextEdit and an Electron app, Dock visible). A terminal's
+  cell rounding reads 2 pt off when tiled.
+- **Quiet period.** macOS's moves ended 70 to 400 ms after the end callback, never later than
+  0.5 s. The quiet period stays 1.5 s for margin; the 3 s cap is not near.
+- **Recognition tolerance.** 2 pt. macOS's tiles match Rectangle's gap rule exactly. With
+  tiling margins on they are recognised only when `gap` is 8.
+- **Space coverage.** Accessibility lists only the current Space's windows. Minimized windows
+  are listed.
+- **Dock.** The auto-hidden Dock reserves nothing. `visibleFrame` was current a few seconds
+  after a Dock change, so no correction beyond reading the visible frame is needed at that
+  latency; the Dock reader stays. The Dock sits on the main display: the built-in when docked,
+  the external alone with the lid closed.
+- **A taken shortcut does not show up.** An exclusive registration succeeds silently while
+  another app (Rectangle) holds the chord, and Tafl takes every press (45 of 45). Tafl cannot
+  detect it. The README tells users to quit Rectangle.
+- **Display identity.** Name, vendor, model and serial were stable across reconnect, lid
+  close and open, wake and reboot. The CoreGraphics display id changed across a reboot (3 to
+  2), so Tafl never keys on it.
+- **macOS restores windows itself** to their per-setup frames when a known setup returns
+  (replug, lid, wake), within about 100 ms.
+- **Wake.** For about 2 s around wake, Accessibility reads of live windows fail with -25202
+  (invalid element). A DarkWake shows a placeholder display (no name, "unkn" and "virt",
+  1920 x 1080) for about 1.3 s. So only a window's destroyed notification and its app's quit
+  end a window; a read that finds the element invalid fails that read only and keeps the
+  registration.
+- **Enhanced UI.** Switching it off returns -25208 in a Gecko browser, yet it works. Tafl
+  always attempts it and ignores the status.
+- **Timing.** Reads take 0.06 to 0.7 ms (up to 168 ms right after a cross-display write);
+  writes take 0.1 to 38 ms.
 
 ## Success
 

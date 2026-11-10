@@ -58,7 +58,7 @@ final class CompositionRoot {
             platform: platform,
             store: MemoryStore(fileURL: Self.memoryURL),
             clock: clock,
-            timing: .provisional,
+            timing: .measured27,
             steps: [GapStep(), MinimumSizeStep(), OnScreenStep()],
             adjustments: MacOSAdjustment.measured27)
         activator = ShortcutActivator(registrar: registrar)

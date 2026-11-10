@@ -19,9 +19,11 @@ public struct EngineTiming: Sendable {
         self.reconfigurationTimeout = reconfigurationTimeout
     }
 
-    /// Until Task 2's measurements on macOS 27.2 replace them.
-    public static let provisional = EngineTiming(
+    /// Measured on macOS 27.2 (spec, "Measured on macOS 27.2"): macOS's own window moves end within
+    /// 0.5 s of a reconfiguration's end, so 1.5 s leaves margin; nothing changed 25 ms after a
+    /// write's last read-back, so there is no reapply.
+    public static let measured27 = EngineTiming(
         quietPeriod: .milliseconds(1500),
-        reapplyDelay: .milliseconds(25)
+        reapplyDelay: nil
     )
 }

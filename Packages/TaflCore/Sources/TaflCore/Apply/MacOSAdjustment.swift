@@ -28,19 +28,24 @@ public struct MacOSAdjustment: Sendable {
         self.explains = explains
     }
 
-    /// A position write moved the window onto another display, and each dimension of the
-    /// size became `min(before, that display's visible size)`.
+    /// A position write moved the window onto another display (measured on macOS 27.2). A width
+    /// wider than that display's visible frame became its visible width. A height taller than the
+    /// visible frame became the height that ends at the visible bottom; a window that already fits
+    /// keeps its height.
     public static let sizeClampedToDisplay = MacOSAdjustment(name: "sizeClampedToDisplay") { adjustment in
         guard adjustment.written == .position,
               let before = DisplayLocator.display(containing: adjustment.before, in: adjustment.displays),
               let after = DisplayLocator.display(containing: adjustment.after, in: adjustment.displays),
               before != after
         else { return false }
-        let visible = after.visibleFrame.size
+        let visible = after.visibleFrame
+        let height = adjustment.before.height > visible.height
+            ? visible.maxY - adjustment.after.minY
+            : adjustment.before.height
         return abs(adjustment.after.width - min(adjustment.before.width, visible.width)) <= 1
-            && abs(adjustment.after.height - min(adjustment.before.height, visible.height)) <= 1
+            && abs(adjustment.after.height - height) <= 1
     }
 
-    /// Provisional until the macOS 27.2 measurements.
+    /// The adjustments measured on macOS 27.2 (spec, "Measured on macOS 27.2").
     public static let measured27: [MacOSAdjustment] = [.sizeClampedToDisplay]
 }
