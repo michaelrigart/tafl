@@ -181,32 +181,51 @@ enum Probe {
 
     // MARK: raise
 
-    /// Raises the first window of each app, in the order given, then logs the window server's order
-    /// (front to back) and the frontmost app: the last app should be in front and frontmost.
+    /// Raises the first window of each app, in the order given, as the platform does (`Raise27`:
+    /// raise, frontmost write, then the activation fallback), then waits up to 1 s for the last app
+    /// to become frontmost, as activation is asynchronous, and logs the window server's order (front
+    /// to back): the last app should be in front and frontmost.
     private static func raise(_ bundleIDs: [String]) async {
         guard !bundleIDs.isEmpty else {
             ProbeLog.write("usage: raise <bundle-id> [<bundle-id> ...]  (the last one ends on top)")
             return
         }
         var raised: Set<pid_t> = []
+        var last: (bundleID: String, pid: pid_t)?
         for bundleID in bundleIDs {
             guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
                 ProbeLog.write("raise: \(bundleID) is not running")
                 continue
             }
             let pid = app.processIdentifier
-            let statuses = await queue.run(pid: pid) { () -> String in
-                guard let window = AXWindowAccess.windows(of: pid).first else { return "no window" }
-                let raise = AXWindowAccess.raise(window).rawValue
-                let frontmost = AXWindowAccess.setFrontmost(app: pid).rawValue
-                return "raise=\(raise) frontmost=\(frontmost)"
+            let outcome = await queue.run(pid: pid) { () -> Raise27.Outcome? in
+                guard let window = AXWindowAccess.windows(of: pid).first else { return nil }
+                return Raise27.bringForward(
+                    admit: { true },
+                    raise: { AXWindowAccess.raise(window) },
+                    makeFrontmost: { AXWindowAccess.setFrontmost(app: pid) })
             }
+            var line = "raise: bundle=\(bundleID) pid=\(pid) outcome=\(outcome.map { "\($0)" } ?? "no window")"
+            if outcome == .raisedWithoutFrontmost {
+                let activated = Raise27.activate(pid: pid, admit: { true })
+                line += " activated=\(activated)"
+            }
+            ProbeLog.write(line)
+            guard outcome == .raised || outcome == .raisedWithoutFrontmost else { continue }
             raised.insert(pid)
-            ProbeLog.write("raise: bundle=\(bundleID) pid=\(pid) \(statuses)")
+            last = (bundleID, pid)
+        }
+        var waited = 0
+        while let last, NSWorkspace.shared.frontmostApplication?.processIdentifier != last.pid, waited < 1000 {
+            try? await SuspendingClock().sleep(for: .milliseconds(50))
+            waited += 50
         }
         let order = WindowIDResolver.windowList().filter { $0.layer == 0 && raised.contains($0.pid) }
         ProbeLog.write("raise: front to back \(order.map { "pid=\($0.pid) id=\($0.id)" }.joined(separator: ", "))")
-        ProbeLog.write("raise: frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil")")
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let matched = last.map { frontmost?.processIdentifier == $0.pid } ?? false
+        ProbeLog.write(
+            "raise: frontmost=\(frontmost?.bundleIdentifier ?? "nil") expected=\(last?.bundleID ?? "nil") matched=\(matched) after \(waited) ms")
     }
 
     // MARK: displays

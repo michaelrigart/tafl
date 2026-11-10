@@ -175,12 +175,7 @@ final class Platform27: WindowPlatform {
             case .stopped: return
             case .raisedWithoutFrontmost:
                 PlatformLog.windows.notice("Raise: the app refused to come forward, activating it")
-                let admitted = await MainActor.run { () -> Bool in
-                    guard admit() else { return false }
-                    _ = NSRunningApplication(processIdentifier: pid)?.activate()
-                    return true
-                }
-                if !admitted { return }
+                if !(await Raise27.activate(pid: pid, admit: admit)) { return }
             case .failed(let code):
                 PlatformLog.windows.notice("Raise failed, Accessibility error \(code.rawValue, privacy: .private)")
             }
