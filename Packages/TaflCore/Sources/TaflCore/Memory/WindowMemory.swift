@@ -77,15 +77,21 @@ public struct WindowPlacement: Equatable, Sendable {
         restore = nil
     }
 
-    /// Where Restore puts the window: the chain's start, on its display, or mapped onto `current`
-    /// when that display is no longer connected.
+    /// Where Restore puts the window: the chain's start, on its display, mapped onto the display as it
+    /// is now when its visible frame has changed, or onto `current` when that display is no longer
+    /// connected.
     public func restoreTarget(current: Display, displays: [Display]) -> (ScreenRect, Display)? {
         guard let record = restore else { return nil }
-        if let home = displays.first(where: { $0.identity == record.display }) {
-            return (record.frame, home)
+        let home = displays.first(where: { $0.identity == record.display })
+        let target = home ?? current
+        let frame: ScreenRect
+        if home?.visibleFrame == record.visibleFrame {
+            frame = record.frame
+        } else {
+            let recorded = Display(identity: record.display, frame: record.visibleFrame, visibleFrame: record.visibleFrame)
+            frame = DisplayTransfer.relative(record.frame, from: recorded, to: target)
         }
-        let origin = Display(identity: record.display, frame: record.visibleFrame, visibleFrame: record.visibleFrame)
-        return (DisplayTransfer.relative(record.frame, from: origin, to: current), current)
+        return (DisplayTransfer.keptOnScreen(frame, on: target, among: displays), target)
     }
 }
 

@@ -22,4 +22,19 @@ struct DisplayTransferTests {
         let to = display(v)
         #expect(DisplayTransfer.relative(rect(900, 700, 300, 200), from: from, to: to) == rect(700, 600, 300, 200))
     }
+
+    @Test func aFrameSpreadAcrossTwoDisplaysCountsOnBoth() {
+        // A sixth of it on each display, with a gap between them: a third on screen in all.
+        let left = display(rect(0, 0, 1000, 800))
+        var right = display(rect(1400, 0, 1000, 800))
+        right.identity.serial = 9
+        let frame = rect(900, 100, 600, 100)
+        #expect(DisplayTransfer.keptOnScreen(frame, on: left, among: [left, right]) == frame)
+    }
+
+    @Test func aFrameWithLessThanAQuarterOnScreenIsPulledOn() {
+        let only = display(v)
+        #expect(DisplayTransfer.keptOnScreen(rect(950, 100, 400, 300), on: only, among: [only]) == rect(600, 100, 400, 300))
+        #expect(DisplayTransfer.keptOnScreen(rect(700, 100, 400, 300), on: only, among: [only]) == rect(700, 100, 400, 300))
+    }
 }

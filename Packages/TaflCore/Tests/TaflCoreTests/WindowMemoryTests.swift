@@ -63,6 +63,57 @@ struct WindowMemoryTests {
         #expect(target.1 == displayA)
     }
 
+    private func movedB() -> Display {
+        var moved = displayB
+        moved.frame = rect(-2000, 0, 2000, 1550)
+        moved.visibleFrame = moved.frame
+        return moved
+    }
+
+    @Test func restoreFollowsADisplayThatMoved() throws {
+        var memory = WindowMemory()
+        memory.openChain(w1, before: rect(1500, 100, 400, 300), on: displayB)
+        let moved = movedB()
+        let target = try #require(memory.restoreTarget(w1, current: moved, displays: [displayA, moved]))
+        #expect(target.0 == rect(-1500, 100, 400, 300))
+        #expect(target.1 == moved)
+    }
+
+    @Test func restoreFollowsADisplayThatChangedResolution() throws {
+        var memory = WindowMemory()
+        memory.openChain(w1, before: rect(1500, 100, 400, 300), on: displayB)
+        var smaller = displayB
+        smaller.frame = rect(1000, 0, 1000, 775)
+        smaller.visibleFrame = smaller.frame
+        let target = try #require(memory.restoreTarget(w1, current: smaller, displays: [displayA, smaller]))
+        #expect(target.0 == rect(1250, 50, 200, 150))
+        #expect(target.1 == smaller)
+    }
+
+    @Test func restoreFromAFileFollowsAnArrangementThatChangedSinceTheSave() throws {
+        var saved = WindowMemory()
+        saved.openChain(w1, before: rect(1500, 100, 400, 300), on: displayB)
+        let memory = try JSONDecoder().decode(WindowMemory.self, from: JSONEncoder().encode(saved))
+        let moved = movedB()
+        let target = try #require(memory.restoreTarget(w1, current: moved, displays: [displayA, moved]))
+        #expect(target.0 == rect(-1500, 100, 400, 300))
+    }
+
+    @Test func restoreOnAnUnchangedDisplayIsExactEvenPartlyOffScreen() throws {
+        var memory = WindowMemory()
+        // A quarter of the window hangs off the display's right edge.
+        memory.openChain(w1, before: rect(2700, 100, 400, 300), on: displayB)
+        let target = try #require(memory.restoreTarget(w1, current: displayB, displays: [displayA, displayB]))
+        #expect(target.0 == rect(2700, 100, 400, 300))
+    }
+
+    @Test func restoreOfAFrameMostlyOffEveryDisplayIsKeptOnScreen() throws {
+        var memory = WindowMemory()
+        memory.openChain(w1, before: rect(2950, 100, 400, 300), on: displayB)
+        let target = try #require(memory.restoreTarget(w1, current: displayB, displays: [displayA, displayB]))
+        #expect(target.0 == rect(2600, 100, 400, 300))
+    }
+
     @Test func restoreWithoutARecordHasNoTarget() {
         let memory = WindowMemory()
         #expect(memory.restoreTarget(w1, current: displayA, displays: [displayA]) == nil)

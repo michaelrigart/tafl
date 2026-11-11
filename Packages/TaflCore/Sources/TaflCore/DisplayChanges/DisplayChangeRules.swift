@@ -39,7 +39,8 @@ public enum DisplayChangeRules {
                 // macOS restores a window to its frame on a known setup itself (measured on 27.2), and
                 // this rule steps aside for it: no move, and no later rule.
                 if snapshot.frame.isClose(to: frame, within: FrameCheck.tolerance) { return nil }
-                return request(snapshot, .remembered(frame), on: home)
+                let kept = DisplayTransfer.keptOnScreen(frame, on: home, among: newDisplays)
+                return request(snapshot, .remembered(kept), on: home)
             }
             if let previous = entry.previous,
                !newDisplays.contains(where: { $0.identity == previous.display }),

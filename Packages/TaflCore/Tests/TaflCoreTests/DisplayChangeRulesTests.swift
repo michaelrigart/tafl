@@ -64,6 +64,13 @@ struct DisplayChangeRulesTests {
         ])
     }
 
+    @Test func aRememberedFrameMostlyOffTheDisplayIsKeptOnScreen() {
+        let w = window(1, frame: rect(0, 25, 400, 300))
+        let remembered = StoredFrame(display: displayB.identity, relative: UnitRect(x: 0.975, y: 0, width: 0.2, height: 0.2))
+        let requests = plan(new: [displayA, displayB], [atChange(w, remembered: remembered)])
+        #expect(requests.map(\.spec) == [.remembered(rect(2600, 0, 400, 310))])
+    }
+
     @Test func rememberedSetupStepsAsideForAWindowMacOSRestored() {
         // macOS put the window back at its last frame on this setup: the rule sends no move, and the
         // window is not handed on to the rules below it either.

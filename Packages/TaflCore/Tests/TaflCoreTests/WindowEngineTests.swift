@@ -186,6 +186,22 @@ private final class Rig: Sendable {
     #expect(await rig.frame() == start)
 }
 
+@Test func restoreAfterTheHomeDisplayMovedLandsOnIt() async {
+    let first = window(1, frame: rect(1500, 100, 400, 300))
+    let rig = await Rig(displays: bothDisplays, windows: [first])
+    await rig.engine.start(config: config())
+    await rig.engine.perform(.leftHalf)
+    #expect(await rig.frame() == leftHalfB)
+    // Display B moves to the left of A, carrying the window.
+    var movedB = displayB
+    movedB.frame = rect(-2000, 0, 2000, 1550)
+    movedB.visibleFrame = movedB.frame
+    await rig.fake.configure { $0.windows[handle]?.frame = rect(-2000, 0, 1000, 1550) }
+    await rig.changeDisplays(to: [displayA, movedB])
+    await rig.engine.perform(.restore)
+    #expect(await rig.frame() == rect(-1500, 100, 400, 300))
+}
+
 @Test func revokedPermissionIsReported() async {
     let rig = await Rig(windows: [window(1, frame: start)]) { $0.accessibilityGranted = false }
     await rig.engine.start(config: config())
