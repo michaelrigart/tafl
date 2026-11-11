@@ -22,11 +22,11 @@ marker='// lint-tests: allow'
 # Each rule: the name an allow marker uses, what it catches, the pattern (POSIX extended), then a
 # pattern for a line that is not a violation although the first matches ("" for none).
 rules=(
-  "task-yield" "Task.yield()" 'Task\.yield\(\)' ""
+  "task-yield" "Task.yield()" 'Task\.yield[[:space:]]*\(\)' ""
   "task-sleep" "Task.sleep" 'Task\.sleep' ""
   "thread-sleep" "Thread.sleep" 'Thread\.sleep' ""
   "usleep" "usleep" '(^|[^[:alnum:]_])usleep[[:space:]]*\(' ""
-  "sleep" "sleep()" '(^|[^[:alnum:]_.])(Darwin\.)?sleep[[:space:]]*\(' 'func[[:space:]]+sleep[[:space:]]*\('
+  "sleep" "sleep()" '(^|[^[:alnum:]_.])((Darwin|Foundation)\.)?sleep[[:space:]]*\(' 'func[[:space:]]+sleep[[:space:]]*\('
   "date" "Date() as a clock" '(^|[^[:alnum:]_])Date\(\)' ""
   "date-now" "Date.now as a clock" '(^|[^[:alnum:]_])Date\.now([^[:alnum:]_]|$)' ""
   "continuous-clock" "ContinuousClock as a clock" '(^|[^[:alnum:]_])ContinuousClock' ""
@@ -35,9 +35,9 @@ rules=(
   "task-result" "a task's .result" 'await.*\.result([^[:alnum:]_]|$)' ""
   "semaphore" "a DispatchSemaphore" '(^|[^[:alnum:]_])DispatchSemaphore' ""
   "dispatch-group" "a DispatchGroup" '(^|[^[:alnum:]_])DispatchGroup' ""
-  "blocking-wait" "a blocking .wait()" '\.wait\(\)|\.wait\((until|(wall)?[tT]imeout):' ""
+  "blocking-wait" "a blocking .wait()" '\.wait[[:space:]]*(\(\)|\((until|(wall)?[tT]imeout):)' ""
   "async-after" "DispatchQueue asyncAfter" '\.asyncAfter' ""
-  "run-loop" "a RunLoop run" '\.run\(until:|RunLoop[^;]*\.run\(' ""
+  "run-loop" "a RunLoop run" '\.run[[:space:]]*\(until:|RunLoop[^;]*\.run[[:space:]]*\(|(^|[^[:alnum:]_])CFRunLoopRun(InMode)?[[:space:]]*\(' ""
   "continuation" "a continuation of its own" 'with(Checked|Unsafe)(Throwing)?Continuation' ""
 )
 
