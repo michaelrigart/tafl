@@ -23,6 +23,10 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_27.1.app
       - name: Test the changelog tool
         run: /usr/bin/python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Check that tests wait only through TaflTestSupport
+        run: |
+          scripts/tests/test-lint-tests
+          scripts/lint-tests
       - name: Test TaflCore
         run: swift test --package-path Packages/TaflCore
       - name: Test TaflPlatform27

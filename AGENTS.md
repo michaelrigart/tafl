@@ -22,8 +22,9 @@ points at Xcode, and don't change `xcode-select`.
   (`ditto` merges into an existing bundle and would keep stale files)
 - Run: `open /Applications/Tafl.app`
 - Script tests: `/usr/bin/python3 -m unittest discover -s scripts/tests -p 'test_*.py'` (the
-  changelog tool), `scripts/tests/test-release-dry-run` and
+  changelog tool), `scripts/tests/test-release-dry-run`, `scripts/tests/test-lint-tests` and
   `scripts/tests/test-verify-app <Release Tafl.app> <Debug Tafl.app>`
+- Check that the tests wait only through TaflTestSupport: `scripts/lint-tests`
 - Verify a built app: `scripts/verify-app [--team <ID>] <Tafl.app> [<version>]`. It fails on a
   bad signature, non-empty entitlements, `LSUIElement` not true, a wrong bundle identifier or
   version, the probe in the executable, or (with `--team`) a different `TeamIdentifier`.
@@ -84,6 +85,11 @@ points at Xcode, and don't change `xcode-select`.
   up in Spotlight or Alfred. The default is `build/dd.noindex`; a parallel or scratch build uses
   `build/dd-<name>.noindex`.
 - Never open Loop's source. Rectangle ports keep its notice in `LICENSE`.
+- Tests wait only through `TaflTestSupport`: `waitUntil` for a named condition, `task.bounded()`,
+  a `Gate` in a `.gated` test, a `Tally`, a `Collector` for a stream, and in engine tests the
+  rig's `quiescent()`. Never a yield, a sleep, the wall clock, a task's `.value` or a continuation
+  of the test's own; `scripts/lint-tests` checks it in CI, and a justified exception carries
+  `// lint-tests: allow <reason>` on its line.
 
 ## Probe
 

@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Runs scripts/lint-tests against fixture repositories: each way of waiting it forbids fails, and a
+# clean file, a comment and a line allowed with a reason pass.
+set -euo pipefail
+
+if [[ $# -ne 0 ]]; then
+  echo "usage: $0" >&2
+  exit 2
+fi
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+lint="$root/scripts/lint-tests"
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/tafl-lint-tests.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+
+failures=0
+cases=0
+
+pass() {
+  cases=$((cases + 1))
+  echo "ok   $1"
+}
+
+fail() {
+  cases=$((cases + 1))
+  failures=$((failures + 1))
+  echo "FAIL $1" >&2
+}
+
+# A repository whose one test file holds `body`; prints its root.
+fixture() {
+  local name="$1" body="$2"
+  local repo="$work/$name"
+  mkdir -p "$repo/Packages/Kit/Tests/KitTests"
+  printf '%s\n' "$body" >"$repo/Packages/Kit/Tests/KitTests/KitTests.swift"
+  echo "$repo"
+}
+
+# The lint fails on `body`, naming the file and its line.
+expect_failure() {
+  local name="$1" body="$2"
+  local repo output
+  repo="$(fixture "$name" "$body")"
+  if output="$("$lint" "$repo" 2>&1)"; then
+    fail "$name: the lint passed"
+  elif [[ "$output" == *"Packages/Kit/Tests/KitTests/KitTests.swift:2:"* ]]; then
+    pass "$name"
+  else
+    fail "$name: the failure does not name the line: $output"
+  fi
+}
+
+# The lint passes on `body`, and its output contains `expected` when given.
+expect_success() {
+  local name="$1" body="$2" expected="${3:-}"
+  local repo output
+  repo="$(fixture "$name" "$body")"
+  if ! output="$("$lint" "$repo" 2>&1)"; then
+    fail "$name: the lint failed: $output"
+  elif [[ -n "$expected" && "$output" != *"$expected"* ]]; then
+    fail "$name: the output does not list $expected: $output"
+  else
+    pass "$name"
+  fi
+}
+
+expect_failure "a yield" $'@Test func t() async {\n    await Task.yield()\n}'
+expect_failure "a task sleep" $'@Test func t() async throws {\n    try await Task.sleep(for: .seconds(1))\n}'
+expect_failure "a thread sleep" $'@Test func t() {\n    Thread.sleep(forTimeInterval: 1)\n}'
+expect_failure "usleep" $'@Test func t() {\n    usleep(1000)\n}'
+expect_failure "Date() polled" $'@Test func t() {\n    let start = Date()\n}'
+expect_failure "ContinuousClock polled" $'@Test func t() {\n    let start = ContinuousClock.now\n}'
+expect_failure "a task's value" $'@Test func t() async {\n    _ = await Task { 1 }.value\n}'
+expect_failure "a checked continuation" $'@Test func t() async {\n    await withCheckedContinuation { $0.resume() }\n}'
+expect_failure "an unsafe continuation" $'@Test func t() async {\n    await withUnsafeContinuation { $0.resume() }\n}'
+expect_failure "a throwing continuation" $'@Test func t() async throws {\n    try await withCheckedThrowingContinuation { $0.resume() }\n}'
+expect_failure "an allow marker without a reason" $'@Test func t() async {\n    await Task.yield() // lint-tests: allow\n}'
+
+expect_success "a clean file" $'@Test func t() async {\n    await waitUntil("a flag") { flag.isSet }\n    #expect(tally.value == 2)\n}'
+expect_success "a name that ends in Date()" $'@Test func aProcessHasNoLaunchDate() {\n    #expect(launchDate() == nil)\n}'
+expect_success "a comment that names a forbidden wait" $'/// Never waits with Task.sleep or Task.yield().\n@Test func t() {}'
+expect_success "a line allowed with a reason" \
+  $'@Test func t() async throws {\n    try await Task.sleep(for: .seconds(1)) // lint-tests: allow nothing to wait on but time\n}' \
+  "KitTests.swift:2: Task.sleep: nothing to wait on but time"
+
+# Build products are not the repository's tests.
+repo="$(fixture "a build checkout" $'@Test func t() {}')"
+mkdir -p "$repo/Packages/Kit/.build/checkouts/Dep/Tests"
+printf '%s\n' 'let start = Date()' >"$repo/Packages/Kit/.build/checkouts/Dep/Tests/DepTests.swift"
+if output="$("$lint" "$repo" 2>&1)"; then pass "a build checkout"; else fail "a build checkout: $output"; fi
+
+echo "$((cases - failures))/$cases passed"
+[[ $failures -eq 0 ]]

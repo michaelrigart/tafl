@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Fails when a test waits other than through TaflTestSupport: a yield, a sleep, the wall clock, a
+# task's value, or a continuation of its own. TaflTestSupport lives under Sources, so it is not
+# scanned. A justified exception carries `// lint-tests: allow <reason>` on its line; the script
+# lists every one.
+set -euo pipefail
+
+if [[ $# -gt 1 ]]; then
+  echo "usage: $0 [<repository root>]" >&2
+  exit 2
+fi
+
+root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+marker='// lint-tests: allow'
+
+# Each rule: what it catches, then the pattern (POSIX extended).
+rules=(
+  "Task.yield()" 'Task\.yield\(\)'
+  "Task.sleep" 'Task\.sleep'
+  "Thread.sleep" 'Thread\.sleep'
+  "usleep" '(^|[^[:alnum:]_])usleep\('
+  "Date() as a clock" '(^|[^[:alnum:]_])Date\(\)'
+  "ContinuousClock as a clock" '(^|[^[:alnum:]_])ContinuousClock'
+  "a task's .value" 'await.*\.value([^[:alnum:]_]|$)'
+  "a continuation of its own" 'with(Checked|Unsafe)(Throwing)?Continuation'
+)
+
+files=()
+for tests in "$root"/Packages/*/Tests; do
+  [[ -d "$tests" ]] || continue
+  while IFS= read -r -d '' file; do
+    files+=("$file")
+  done < <(find "$tests" -name '*.swift' -print0 | sort -z)
+done
+
+failures=0
+allowed=()
+for file in "${files[@]}"; do
+  relative="${file#"$root"/}"
+  number=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    number=$((number + 1))
+    # Comments may name what they forbid.
+    [[ "$line" =~ ^[[:space:]]*// ]] && continue
+    for ((i = 0; i < ${#rules[@]}; i += 2)); do
+      name="${rules[i]}"
+      pattern="${rules[i + 1]}"
+      [[ "$line" =~ $pattern ]] || continue
+      if [[ "$line" == *"$marker"* ]]; then
+        reason="${line#*"$marker"}"
+        reason="${reason#"${reason%%[![:space:]]*}"}"
+        if [[ -z "$reason" ]]; then
+          echo "$relative:$number: an allow marker needs a reason: $name" >&2
+          failures=$((failures + 1))
+        else
+          allowed+=("$relative:$number: $name: $reason")
+        fi
+      else
+        echo "$relative:$number: waits with $name; wait through TaflTestSupport instead" >&2
+        failures=$((failures + 1))
+      fi
+      break
+    done
+  done < "$file"
+done
+
+if [[ ${#allowed[@]} -gt 0 ]]; then
+  echo "Allowed (${#allowed[@]}):"
+  printf '  %s\n' "${allowed[@]}"
+fi
+if [[ $failures -gt 0 ]]; then
+  echo "lint-tests: $failures line(s) wait outside TaflTestSupport" >&2
+  exit 1
+fi
+echo "lint-tests: ${#files[@]} test files wait only through TaflTestSupport"

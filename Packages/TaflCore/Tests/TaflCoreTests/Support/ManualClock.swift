@@ -95,7 +95,7 @@ final class ManualClock: TaflClock {
     }
 
     private func park(id: Int, for duration: Duration, cancellable: Bool) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in // lint-tests: allow the fake clock's sleep, which only advance(by:) or cancellation ends
             let outcome: Result<Void, any Error>? = state.withLock { state in
                 if cancellable, Task.isCancelled { return .failure(CancellationError()) }
                 let deadline = state.now + duration

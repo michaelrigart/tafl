@@ -175,7 +175,7 @@ private func exitedPID() throws -> Int32 {
     defer { if old.isRunning { old.terminate() } }
     let fakes = try Fakes(oldPID: old.processIdentifier)
     let helper = Task { await fakes.run() }
-    try await Task.sleep(for: .milliseconds(400))
+    try await Task.sleep(for: .milliseconds(400)) // lint-tests: allow asserts that nothing opens while the helper polls for the old process, which leaves no sign but time
     #expect(fakes.openLog.isEmpty)
     old.terminate()
     old.waitUntilExit()

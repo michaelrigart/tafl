@@ -134,9 +134,9 @@ final class MemoryKeeperTests {
     @Test func aSaveRecordsWhenItWasMade() async throws {
         let (keeper, _) = makeKeeper()
         #expect(await keeper.load() == .fresh)
-        let before = Date()
+        let before = Date() // lint-tests: allow bounds the time the save records, not a wait
         #expect(isSuccess(await keeper.save()))
-        let after = Date()
+        let after = Date() // lint-tests: allow bounds the time the save records, not a wait
         guard case .loaded(let saved) = store.load() else { Issue.record("Nothing was written"); return }
         let savedAt = try #require(saved.savedAt)
         #expect(before <= savedAt && savedAt <= after)
