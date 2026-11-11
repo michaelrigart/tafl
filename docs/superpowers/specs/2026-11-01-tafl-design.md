@@ -451,8 +451,13 @@ has a name used in the config file.
     frame, as in Rectangle.
   - Shortcut, menu and layout placements count. Display-change rules don't, because their
     old frame was on a display that may be gone.
-  - A restore frame on a display that is no longer connected is mapped onto the window's
-    current display.
+  - Where the frame goes follows the display it was recorded on. While that display is
+    unchanged, the frame is exact: a Dock or menu bar change (shown, hidden, resized, moved)
+    counts as unchanged. When the display only moved, the frame is translated by the move,
+    with its size kept. When its resolution changed, the frame is mapped onto the display as
+    it is now. When the display is no longer connected, the frame is mapped onto the
+    window's current display. A target with less than a quarter of it on any display is kept
+    on screen; this is the only pull onto the screen, for restore and for rule 2.
 
 ### Repeats
 
@@ -474,8 +479,9 @@ action put it. `repeat` in the config file sets what a repeat does:
 - **Last-known frames.** macOS gives no reliable notice before a display disconnects. So
   Tafl keeps every window's last-known frame per display setup, from window-moved and
   window-resized events. It stops recording for a setup as soon as a reconfiguration
-  begins. Frames are stored relative to their display's visible frame, so a restore
-  survives a change of resolution.
+  begins. A frame is stored with its display's frame and visible frame, and relative to the
+  visible frame. It is placed back by the Restore rule above (exact, translated or mapped),
+  so a change of resolution maps it and a Dock change leaves it where it was.
 - **Settling.** macOS signals neither the end of a docking sequence, which often fires
   several reconfigurations, nor the end of its own window relocation. Tafl treats a
   display change as settled after a quiet period with no reconfiguration and no
