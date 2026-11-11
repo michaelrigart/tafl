@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Fails when a test waits other than through TaflTestSupport: a yield, a sleep, the wall clock, a
-# task's value or result, a semaphore, or a continuation of its own. TaflTestSupport lives under
-# Sources, so it is not scanned. Every rule is checked on every line, and a justified exception
-# names the rules it allows: `// lint-tests: allow <rule>[, <rule>]: <reason>` on the line, so it
-# cannot hide a second violation there. The script lists every exception.
+# task's value or result, a semaphore, a dispatch group, a blocking wait, a delayed dispatch, a run
+# loop, or a continuation of its own. TaflTestSupport lives under Sources, so it is not scanned.
+# Every rule is checked on every line, and a justified exception names the rules it allows:
+# `// lint-tests: allow <rule>[, <rule>]: <reason>` on the line, so it cannot hide a second
+# violation there. A marker on a line with no violation is an error (a stale marker). The script
+# lists every exception.
 #
 # It reads one line at a time, so it cannot see a wait split over lines: `await` on one line and
 # `.value` or `.result` on the next, or a clock or semaphore held in a variable and used later.
@@ -17,20 +19,26 @@ fi
 root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 marker='// lint-tests: allow'
 
-# Each rule: the name an allow marker uses, what it catches, then the pattern (POSIX extended).
+# Each rule: the name an allow marker uses, what it catches, the pattern (POSIX extended), then a
+# pattern for a line that is not a violation although the first matches ("" for none).
 rules=(
-  "task-yield" "Task.yield()" 'Task\.yield\(\)'
-  "task-sleep" "Task.sleep" 'Task\.sleep'
-  "thread-sleep" "Thread.sleep" 'Thread\.sleep'
-  "usleep" "usleep" '(^|[^[:alnum:]_])usleep\('
-  "date" "Date() as a clock" '(^|[^[:alnum:]_])Date\(\)'
-  "date-now" "Date.now as a clock" '(^|[^[:alnum:]_])Date\.now([^[:alnum:]_]|$)'
-  "continuous-clock" "ContinuousClock as a clock" '(^|[^[:alnum:]_])ContinuousClock'
-  "suspending-clock" "SuspendingClock as a clock" '(^|[^[:alnum:]_])SuspendingClock'
-  "task-value" "a task's .value" 'await.*\.value([^[:alnum:]_]|$)'
-  "task-result" "a task's .result" 'await.*\.result([^[:alnum:]_]|$)'
-  "semaphore" "a DispatchSemaphore" '(^|[^[:alnum:]_])DispatchSemaphore'
-  "continuation" "a continuation of its own" 'with(Checked|Unsafe)(Throwing)?Continuation'
+  "task-yield" "Task.yield()" 'Task\.yield\(\)' ""
+  "task-sleep" "Task.sleep" 'Task\.sleep' ""
+  "thread-sleep" "Thread.sleep" 'Thread\.sleep' ""
+  "usleep" "usleep" '(^|[^[:alnum:]_])usleep\(' ""
+  "sleep" "sleep()" '(^|[^[:alnum:]_.])sleep\(' 'func[[:space:]]+sleep\('
+  "date" "Date() as a clock" '(^|[^[:alnum:]_])Date\(\)' ""
+  "date-now" "Date.now as a clock" '(^|[^[:alnum:]_])Date\.now([^[:alnum:]_]|$)' ""
+  "continuous-clock" "ContinuousClock as a clock" '(^|[^[:alnum:]_])ContinuousClock' ""
+  "suspending-clock" "SuspendingClock as a clock" '(^|[^[:alnum:]_])SuspendingClock' ""
+  "task-value" "a task's .value" 'await.*\.value([^[:alnum:]_]|$)' ""
+  "task-result" "a task's .result" 'await.*\.result([^[:alnum:]_]|$)' ""
+  "semaphore" "a DispatchSemaphore" '(^|[^[:alnum:]_])DispatchSemaphore' ""
+  "dispatch-group" "a DispatchGroup" '(^|[^[:alnum:]_])DispatchGroup' ""
+  "blocking-wait" "a blocking .wait()" '\.wait\(\)|\.wait\((wall)?[tT]imeout:' ""
+  "async-after" "DispatchQueue asyncAfter" '\.asyncAfter' ""
+  "run-loop" "RunLoop run(until:)" '\.run\(until:' ""
+  "continuation" "a continuation of its own" 'with(Checked|Unsafe)(Throwing)?Continuation' ""
 )
 
 files=()
@@ -64,11 +72,15 @@ for file in "${files[@]}"; do
       reason="${reason#"${reason%%[![:space:]]*}"}"
       allows="${allows//,/ }"
     fi
-    for ((i = 0; i < ${#rules[@]}; i += 3)); do
+    violations=0
+    for ((i = 0; i < ${#rules[@]}; i += 4)); do
       id="${rules[i]}"
       name="${rules[i + 1]}"
       pattern="${rules[i + 2]}"
+      except="${rules[i + 3]}"
       [[ "$code" =~ $pattern ]] || continue
+      [[ -n "$except" && "$code" =~ $except ]] && continue
+      violations=$((violations + 1))
       if [[ $marked -eq 0 ]]; then
         echo "$relative:$number: waits with $name; wait through TaflTestSupport instead" >&2
         failures=$((failures + 1))
@@ -82,6 +94,10 @@ for file in "${files[@]}"; do
         allowed+=("$relative:$number: $name: $reason")
       fi
     done
+    if [[ $marked -eq 1 && $violations -eq 0 ]]; then
+      echo "$relative:$number: a stale allow marker: nothing on this line waits" >&2
+      failures=$((failures + 1))
+    fi
   done < "$file"
 done
 
