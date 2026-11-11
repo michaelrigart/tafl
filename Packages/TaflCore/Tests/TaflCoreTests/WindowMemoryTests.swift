@@ -234,6 +234,22 @@ struct WindowMemoryTests {
         #expect(memory.lastKnown(w1, setup: DisplaySetup([displayB])) == nil)
     }
 
+    @Test func aLastKnownFrameFromBeforeTheRecordedFrameDecodesWithoutIt() throws {
+        var memory = WindowMemory()
+        memory.recordLastKnown(w1, frame: rect(100, 100, 400, 300), display: displayA, setup: DisplaySetup([displayA]))
+        let stored = try #require(memory.lastKnown(w1, setup: DisplaySetup([displayA])))
+        let current = try JSONEncoder().encode(stored)
+        #expect(try JSONDecoder().decode(StoredFrame.self, from: current).recorded != nil)
+        var object = try #require(JSONSerialization.jsonObject(with: current) as? [String: Any])
+        object["recorded"] = nil
+        let old = try JSONDecoder().decode(StoredFrame.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(old.recorded == nil)
+        #expect(old.display == displayA.identity)
+        var docked = displayA
+        docked.visibleFrame = rect(100, 25, 900, 775)
+        #expect(old.absolute(on: docked) == rect(190, 100, 360, 300))
+    }
+
     @Test func lastSetupDerivesFromLastDisplays() {
         var memory = WindowMemory()
         #expect(memory.lastSetup == nil)
