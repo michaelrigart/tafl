@@ -16,7 +16,7 @@ extension PlacementSpec {
     var appliesGap: Bool {
         switch self {
         case .named, .cell, .maximizeHeight: true
-        case .center, .frame, .relative: false
+        case .center, .frame, .remembered, .relative: false
         }
     }
 }
@@ -47,7 +47,7 @@ public enum PlacementCalculator {
                 ),
                 cell: nil
             )
-        case .frame(let rect):
+        case .frame(let rect), .remembered(let rect):
             return CalculatedPlacement(rect: rect, cell: nil)
         case .relative(let unit):
             return CalculatedPlacement(rect: unit.absolute(in: visible), cell: nil)
@@ -68,7 +68,7 @@ public enum PlacementCalculator {
             if cell.row == 0 { edges.insert(.top) }
             if cell.row + cell.rowSpan == cell.rows { edges.insert(.bottom) }
             return edges
-        case .center, .frame, .relative:
+        case .center, .frame, .remembered, .relative:
             return []
         }
     }

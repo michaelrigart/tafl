@@ -44,6 +44,11 @@ struct PlacementCalculatorTests {
         #expect(result.rect == rect(5, 6, 7, 8))
     }
 
+    @Test func rememberedIsAsGiven() {
+        let result = PlacementCalculator.calculate(.remembered(rect(5, 6, 7, 8)), window: rect(0, 0, 1, 1), on: vDisplay)
+        #expect(result.rect == rect(5, 6, 7, 8))
+    }
+
     @Test func relativeIsAbsoluteInTheVisibleFrame() {
         let unit = UnitRect(x: 0.1, y: 0.2, width: 0.5, height: 0.5)
         let result = PlacementCalculator.calculate(.relative(unit), window: rect(0, 0, 1, 1), on: vDisplay)
@@ -62,5 +67,6 @@ struct PlacementCalculatorTests {
         #expect(edges(.maximizeHeight) == [.top, .bottom])
         #expect(edges(.center) == [])
         #expect(edges(.frame(rect(0, 25, 10, 10))) == [])
+        #expect(edges(.remembered(rect(0, 25, 10, 10))) == [])
     }
 }

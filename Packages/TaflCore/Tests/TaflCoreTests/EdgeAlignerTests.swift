@@ -6,6 +6,13 @@ import Testing
     #expect(origin == ScreenPoint(x: 0, y: 25))
 }
 
+@Test func anAcceptedSizeKeepsTheTargetOriginEvenOffTheVisibleFrame() {
+    for target in [rect(300, 600, 400, 400), rect(800, 100, 400, 300), rect(-100, 100, 400, 300)] {
+        let origin = EdgeAligner.origin(for: target, actualSize: target.size, visible: v)
+        #expect(origin == target.origin)
+    }
+}
+
 @Test func aSizeAgainstTheLeftEdgeStaysThere() {
     let origin = EdgeAligner.origin(for: rect(0, 25, 500, 775), actualSize: ScreenSize(width: 400, height: 775), visible: v)
     #expect(origin == ScreenPoint(x: 0, y: 25))

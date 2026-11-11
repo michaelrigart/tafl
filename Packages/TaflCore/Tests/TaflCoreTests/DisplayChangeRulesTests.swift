@@ -49,7 +49,7 @@ struct DisplayChangeRulesTests {
         let w = window(1, frame: rect(0, 25, 400, 300))
         let remembered = StoredFrame(display: displayA.identity, relative: UnitRect(x: 0.5, y: 0, width: 0.5, height: 0.5))
         let requests = plan([atChange(w, remembered: remembered)], claiming: layout(.leftHalf, app: "other"))
-        #expect(requests.map(\.spec) == [.frame(rect(500, 25, 500, 388))])
+        #expect(requests.map(\.spec) == [.remembered(rect(500, 25, 500, 388))])
     }
 
     @Test func rememberedSetup() {
@@ -58,7 +58,7 @@ struct DisplayChangeRulesTests {
         let requests = plan(new: [displayA, displayB], [atChange(w, remembered: remembered)])
         #expect(requests == [
             MoveRequest(
-                window: w.handle, spec: .frame(rect(2000, 0, 1000, 775)), display: displayB.identity,
+                window: w.handle, spec: .remembered(rect(2000, 0, 1000, 775)), display: displayB.identity,
                 placement: nil, cycleStep: 0, source: .displayChange
             ),
         ])
@@ -74,7 +74,7 @@ struct DisplayChangeRulesTests {
         let offByAPoint = window(2, frame: rect(2001, 0, 1000, 775))
         #expect(plan(new: [displayB], [atChange(offByAPoint, remembered: remembered)]).isEmpty)
         let offByTwo = window(3, frame: rect(2002, 0, 1000, 775))
-        #expect(plan(new: [displayB], [atChange(offByTwo, remembered: remembered)]).map(\.spec) == [.frame(rect(2000, 0, 1000, 775))])
+        #expect(plan(new: [displayB], [atChange(offByTwo, remembered: remembered)]).map(\.spec) == [.remembered(rect(2000, 0, 1000, 775))])
     }
 
     @Test func aClaimingLayoutStillPlacesAWindowMacOSRestored() {
@@ -148,7 +148,7 @@ struct DisplayChangeRulesTests {
         let requests = plan([atChange(w, previous: previous, remembered: remembered)])
         #expect(requests == [
             MoveRequest(
-                window: w.handle, spec: .frame(rect(500, 25, 500, 388)), display: displayA.identity,
+                window: w.handle, spec: .remembered(rect(500, 25, 500, 388)), display: displayA.identity,
                 placement: nil, cycleStep: 0, source: .displayChange
             ),
         ])

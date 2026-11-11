@@ -27,7 +27,7 @@ struct AdjustStepTests {
     }
 
     @Test func gapLeavesCenterFrameAndRelativeAlone() {
-        for spec in [PlacementSpec.center, .frame(rect(1, 2, 3, 4)), .relative(UnitRect(x: 0, y: 0, width: 1, height: 1))] {
+        for spec in [PlacementSpec.center, .frame(rect(1, 2, 3, 4)), .remembered(rect(1, 2, 3, 4)), .relative(UnitRect(x: 0, y: 0, width: 1, height: 1))] {
             let input = placement(rect(300, 263, 400, 300))
             #expect(GapStep().adjust(input, context(spec, gap: 10)) == input)
         }
@@ -86,6 +86,13 @@ struct AdjustStepTests {
     @Test func shrinksAnOversizedRectToTheVisibleFrame() {
         let result = OnScreenStep().adjust(placement(rect(0, 0, 1200, 900)), context(.frame(rect(0, 0, 1, 1))))
         #expect(result.rect == rect(0, 25, 1000, 775))
+    }
+
+    @Test func aRememberedFrameStaysWhereTheWindowWas() {
+        for input in [rect(900, 700, 300, 200), rect(-100, 100, 300, 200), rect(0, 0, 1200, 900)] {
+            let result = OnScreenStep().adjust(placement(input), context(.remembered(input)))
+            #expect(result.rect == input)
+        }
     }
 
     @Test func aRectInsideStaysPut() {

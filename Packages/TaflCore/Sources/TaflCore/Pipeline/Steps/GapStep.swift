@@ -15,7 +15,7 @@ public struct GapStep: AdjustStep {
             result.rect = ScreenRect(
                 x: rect.x, y: rect.y + context.gap, width: rect.width, height: rect.height - 2 * context.gap
             )
-        case .center, .frame, .relative:
+        case .center, .frame, .remembered, .relative:
             break
         }
         return result

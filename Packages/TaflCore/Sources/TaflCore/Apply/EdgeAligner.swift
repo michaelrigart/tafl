@@ -41,6 +41,10 @@ public enum EdgeAligner {
         edges: AlignmentEdges = [],
         gap: Double = 0
     ) -> ScreenPoint {
+        // An accepted size leaves nothing to align: the window stays where the target put it, even
+        // partly off the visible frame (a restore).
+        if abs(actualSize.width - target.width) <= alignmentTolerance,
+           abs(actualSize.height - target.height) <= alignmentTolerance { return target.origin }
         // Rectangle leaves an oversized window at the target's origin.
         guard actualSize.width <= visible.width, actualSize.height <= visible.height else { return target.origin }
         let edges = edges.isEmpty ? AlignmentEdges.touching(target, in: visible) : edges

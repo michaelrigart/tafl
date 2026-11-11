@@ -57,7 +57,7 @@ public enum ActionResolver {
             return .move(.frame(smaller(context)), to: context.display, placement: nil, cycleStep: 0)
         case .restore:
             guard let target = context.restoreTarget else { return .nothing }
-            return .move(.frame(target.frame), to: target.display, placement: nil, cycleStep: 0)
+            return .move(.remembered(target.frame), to: target.display, placement: nil, cycleStep: 0)
         case .displayLeft: return moveToDisplay(.left, context)
         case .displayRight: return moveToDisplay(.right, context)
         case .displayUp: return moveToDisplay(.up, context)

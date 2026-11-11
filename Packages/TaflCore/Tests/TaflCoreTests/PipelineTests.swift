@@ -568,7 +568,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let rig = await Rig(start: leftHalf, memory: memory)
     let outcome = await rig.pipeline.run(handle, config: config()) { resolved in
         guard let target = resolved.restoreTarget else { return .nothing }
-        return .request(request(.frame(target.frame), on: target.display, source: .action(.restore)))
+        return .request(request(.remembered(target.frame), on: target.display, source: .action(.restore)))
     }
     #expect(outcome == .placed(rect(100, 100, 400, 300)))
     #expect(rig.stored.restore[handle] == nil)
@@ -578,7 +578,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
 @Test func restoreAlreadyThereCompletes() async {
     let memory = WindowMemory(restore: [handle: chain(leftHalf)])
     let rig = await Rig(start: leftHalf, memory: memory)
-    let outcome = await rig.run(request(.frame(leftHalf), source: .action(.restore)))
+    let outcome = await rig.run(request(.remembered(leftHalf), source: .action(.restore)))
     #expect(outcome == .unchanged)
     #expect(rig.stored.restore[handle] == nil)
     #expect(rig.stored.placed[handle]?.action == .restore)
@@ -586,7 +586,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
 
 @Test func restoreDoesNotOpenAChain() async {
     let rig = await Rig(start: leftHalf)
-    _ = await rig.run(request(.frame(rect(100, 100, 400, 300)), source: .action(.restore)))
+    _ = await rig.run(request(.remembered(rect(100, 100, 400, 300)), source: .action(.restore)))
     #expect(rig.stored.restore[handle] == nil)
 }
 
@@ -596,7 +596,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let rig = await Rig(start: leftHalf, memory: memory) {
         $0.sizeRule = { window, _ in window.frame.size }
     }
-    let outcome = await rig.run(request(.frame(target), source: .action(.restore)))
+    let outcome = await rig.run(request(.remembered(target), source: .action(.restore)))
     #expect(outcome == .failed(.sizeRefused(app: "Terminal")))
     #expect(rig.stored.restore[handle] == chain(target))
 }
@@ -608,7 +608,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     let rig = await Rig(start: rect(0, 25, 400, 300), memory: memory) { $0.beforeCall = [2: { $0.canMove = false }] }
     let restore: @Sendable (ResolvedWindow) -> PlanResult = { resolved in
         guard let found = resolved.restoreTarget else { return .nothing }
-        return .request(request(.frame(found.frame), on: found.display, source: .action(.restore)))
+        return .request(request(.remembered(found.frame), on: found.display, source: .action(.restore)))
     }
     let failed = await rig.pipeline.run(handle, config: config(), plan: restore)
     #expect(failed == .failed(.cannotMove))

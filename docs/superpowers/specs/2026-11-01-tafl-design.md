@@ -444,7 +444,8 @@ has a name used in the config file.
   - With a single display, nothing moves and the overlay says so.
 - **Larger and smaller** stop at the visible frame and at the window's minimum size.
 - **Restore** returns the window to the frame it had before a chain of Tafl placements
-  began.
+  began, as it was, even partly off-screen (display-change rule 2 places a remembered frame
+  the same way; larger, smaller and the named placements keep the window on screen).
   - A chain starts when Tafl places a window that the user placed last (or never placed).
     So once the user moves or resizes the window, the next placement records a new restore
     frame, as in Rectangle.

@@ -172,7 +172,7 @@ struct ActionResolverTests {
         #expect(ActionResolver.plan(.restore, context()) == .nothing)
         let ctx = context(restore: (frame: rect(5, 40, 600, 500), display: b))
         #expect(ActionResolver.plan(.restore, ctx)
-            == .move(.frame(rect(5, 40, 600, 500)), to: b, placement: nil, cycleStep: 0))
+            == .move(.remembered(rect(5, 40, 600, 500)), to: b, placement: nil, cycleStep: 0))
     }
 
     @Test func displayMoveKeepsPlacement() {

@@ -1056,6 +1056,27 @@ private let placeholderB = Display(
     #expect(await rig.frame(of: onA.handle).map { isClose($0, start) } == true)
 }
 
+@Test(.gated, .timeLimit(.minutes(1))) func aRememberedFramePartlyOffScreenComesBackExactly() async {
+    // Partly past B's right and bottom edges.
+    let remembered = rect(2800, 1240, 400, 465)
+    let rig = await Rig(
+        displays: bothDisplays, windows: [window(1, frame: remembered)], focused: nil,
+        steps: [GapStep(), MinimumSizeStep(), OnScreenStep()]
+    )
+    await rig.engine.start(config: config())
+    await rig.fake.configure { $0.displays = [displayA]; $0.windows[handle]?.frame = rect(50, 50, 300, 300) }
+    await rig.emit(.reconfigurationBegan)
+    await rig.emit(.windowMoved(handle))
+    await rig.emit(.reconfigurationEnded)
+    await rig.quiescent()
+    await rig.clock.advance(by: quiet)
+    await rig.quiescent()
+
+    await rig.changeDisplays(to: bothDisplays)
+    #expect(await displayChangesHandled(rig) == 2)
+    #expect(await rig.frame() == remembered)
+}
+
 @Test func untouchedWindowCarriesOverAfterUndock() async {
     let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: leftHalfB)])
     await rig.engine.start(config: config())
@@ -2861,6 +2882,38 @@ func anActionAfterADragStartsANewChainAtTheDraggedFrame(eventReadFirst: Bool) as
     #expect(restore?.chainOpen == true)
     await rig.engine.perform(.restore)
     #expect(await rig.frame() == dragged)
+}
+
+/// Restore puts the window back as it was, even partly off the screen; with `onScreenSteps` the
+/// pipeline has the steps the app ships, without them only the writer's own placement is in play.
+private let restoreDrags = [
+    rect(300, 600, 400, 400), rect(800, 100, 400, 300), rect(-100, 100, 400, 300), rect(300, 10, 400, 900),
+]
+
+@Test(.gated, .timeLimit(.minutes(1)), arguments: restoreDrags, [false, true])
+func restoreReturnsADraggedFrameExactlyEvenPartlyOffScreen(drag: ScreenRect, onScreenSteps: Bool) async {
+    let rig = await Rig(
+        windows: [window(1, frame: start)],
+        steps: onScreenSteps ? [GapStep(), MinimumSizeStep(), OnScreenStep()] : []
+    )
+    await rig.engine.start(config: config())
+    await rig.engine.perform(.maximize)
+    await rig.fake.configure { $0.windows[handle]?.frame = drag }
+    await rig.emit(.windowMoved(handle))
+    await rig.quiescent()
+    await rig.engine.perform(.leftHalf)
+    #expect(await rig.engine.memory.read().restore[handle]?.frame == drag)
+    await rig.engine.perform(.restore)
+    #expect(await rig.frame() == drag)
+}
+
+@Test(.gated, .timeLimit(.minutes(1)), arguments: [Action.larger, .smaller])
+func largerAndSmallerPullAnOffScreenWindowOntoTheScreen(action: Action) async {
+    let rig = await Rig(windows: [window(1, frame: rect(800, 500, 400, 300))], steps: [GapStep(), MinimumSizeStep(), OnScreenStep()])
+    await rig.engine.start(config: config())
+    await rig.engine.perform(action)
+    let frame = await rig.frame()
+    #expect(frame.map { $0.minX >= 0 && $0.minY >= 25 && $0.maxX <= 1000 && $0.maxY <= 800 } == true)
 }
 
 /// Resolve's read is the first Tafl has of the drag: the action's focused read came before it, and
