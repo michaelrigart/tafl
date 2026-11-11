@@ -159,7 +159,9 @@ public actor WindowEngine {
     var frameReads: [WindowHandle: Task<Void, Never>] = [:]
     var background: [Int: Task<Void, Never>] = [:]
     var nextBackgroundID = 0
-    /// How many platform events have been dealt with, for tests to wait on.
+    /// How many platform events have been dealt with, each counted when its own work is done, for
+    /// tests to wait on. `activity.eventsReceived` counts the same events when `handle` returns,
+    /// whether or not the work they started is done; the two agree whenever no work is held.
     var eventsHandled = 0
     /// The engine's work in progress, for tests to wait until there is none (`quiescent`).
     let activity = EngineActivity()

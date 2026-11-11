@@ -217,3 +217,23 @@ private let parking: ParkHook = {
     #expect(await engine.isFrozen == false)
     #expect(clock.sleeperCount == 0)
 }
+
+/// The engine counts each event twice, once when `handle` returns (what `quiescent` waits on) and once
+/// when the work it started is done (what `waitForEvents` waits on). With no work held they agree.
+@Test(.timeLimit(.minutes(1))) func theEnginesTwoEventCountsAgreeOnceNothingIsHeld() async {
+    let clock = ManualClock()
+    let fake = FakePlatform(clock: clock, displays: [displayA])
+    let engine = WindowEngine(
+        platform: fake, store: nil, clock: clock, timing: EngineTiming(quietPeriod: .milliseconds(1500), reapplyDelay: nil),
+        steps: [], adjustments: []
+    )
+    await engine.start(config: .defaults)
+    let w = window(1, frame: rect(100, 100, 400, 300))
+    await fake.configure { $0.windows[w.handle] = w }
+    for event in [PlatformEvent.windowMoved(w.handle), .windowMoved(w.handle), .appLaunched(pid: 100, bundleID: "com.example.app"), .windowDestroyed(w.handle)] {
+        await fake.emit(event)
+    }
+    await Task { await engine.quiescent(afterEvents: 4) }.bounded()
+    #expect(await engine.activity.eventsReceived == 4)
+    #expect(await engine.eventsHandled == 4)
+}
