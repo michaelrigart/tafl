@@ -33,7 +33,7 @@ private struct Failure: Error, Equatable {}
 @Test(.timeLimit(.minutes(1))) func aTimedOutWaitCancelsTheTask() async {
     let sawCancellation = Flag()
     let task = Task {
-        await waitUntil("the bounded wait to cancel the task", timeout: .seconds(30)) { Task.isCancelled }
+        await waitUntilCancelled("the bounded wait to cancel the task", timeout: .seconds(30))
         sawCancellation.set()
     }
     await withKnownIssue("a wait that passes its bound records an issue") {

@@ -27,6 +27,22 @@ public func waitUntil(
     return false
 }
 
+/// Waits until the calling task is cancelled, for at most `timeout` of wall-clock time: the task's
+/// cancellation is the condition, so it ends the wait as success however late it arrives. When the
+/// bound passes first it records an issue naming `condition` and opens every gate of the test.
+public func waitUntilCancelled(
+    _ condition: String,
+    timeout: Duration = defaultWaitBound,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async {
+    switch await reach(timeout: timeout, { Task.isCancelled }) {
+    case .held, .cancelled:
+        return
+    case .boundPassed:
+        waitFailed("Waited \(timeout) for \(condition)", sourceLocation: sourceLocation)
+    }
+}
+
 enum Reached {
     case held, boundPassed, cancelled
 }

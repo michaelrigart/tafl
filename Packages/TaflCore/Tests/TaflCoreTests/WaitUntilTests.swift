@@ -33,6 +33,25 @@ private final class Flag: Sendable {
     await waiting.bounded()
 }
 
+/// A cancellation that lands between the wait's checks is the condition arriving, not the wait being
+/// abandoned: `waitUntil { Task.isCancelled }` reports it as a cancelled wait and records an issue.
+@Test(.timeLimit(.minutes(1))) func aWaitForCancellationEndsWithoutAnIssueHoweverLateTheCancelArrives() async {
+    for yields in 0..<300 {
+        let waiting = Task { await waitUntilCancelled("the task to be cancelled", timeout: .seconds(30)) }
+        for _ in 0..<yields % 40 { await Task.yield() }
+        waiting.cancel()
+        await waiting.bounded()
+    }
+}
+
+@Test(.timeLimit(.minutes(1))) func aWaitForCancellationThatNeverComesFailsAtItsBoundNamingTheCondition() async {
+    await withKnownIssue("a wait that passes its bound records an issue") {
+        await waitUntilCancelled("a cancel nobody sends", timeout: .milliseconds(50))
+    } matching: { issue in
+        issue.comments.contains { $0.rawValue.contains("a cancel nobody sends") }
+    }
+}
+
 @Test(.gated, .timeLimit(.minutes(1))) func aFailedWaitOpensTheTestsGates() async {
     let gate = Gate()
     let held = Task { await gate.hold() }

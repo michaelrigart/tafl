@@ -19,7 +19,7 @@ private func waitForRequests(_ queue: WindowRequestQueue, _ count: Int, sourceLo
 
 /// Holds a request's body until a newer request cancels it.
 private func untilCancelled(sourceLocation: SourceLocation = #_sourceLocation) async {
-    await waitUntil("a newer request to cancel this one", sourceLocation: sourceLocation) { Task.isCancelled }
+    await waitUntilCancelled("a newer request to cancel this one", sourceLocation: sourceLocation)
 }
 
 @Test(.gated) func newerRequestWaitsForTheCallInFlight() async throws {
