@@ -53,60 +53,6 @@ private final class Flag: Sendable {
     }
 }
 
-/// Holds catch-ups until `release()`, which lets every one waiting go; a later one waits again. A
-/// held catch-up that is cancelled goes on, so a test's time limit cannot leave one parked.
-private final class CatchUpGate: Sendable {
-    private struct State {
-        var nextID = 0
-        var waiting: [(id: Int, continuation: CheckedContinuation<Void, Never>)] = []
-    }
-
-    private let state = Mutex(State())
-
-    var waiterCount: Int { state.withLock { $0.waiting.count } }
-
-    func wait() async {
-        let id = state.withLock { state -> Int in
-            defer { state.nextID += 1 }
-            return state.nextID
-        }
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                let resumeNow = state.withLock { state in
-                    if Task.isCancelled { return true }
-                    state.waiting.append((id, continuation))
-                    return false
-                }
-                if resumeNow { continuation.resume() }
-            }
-        } onCancel: {
-            let cancelled = state.withLock { state -> CheckedContinuation<Void, Never>? in
-                guard let index = state.waiting.firstIndex(where: { $0.id == id }) else { return nil }
-                return state.waiting.remove(at: index).continuation
-            }
-            cancelled?.resume()
-        }
-    }
-
-    func release() {
-        let released = state.withLock { state in
-            defer { state.waiting = [] }
-            return state.waiting.map(\.continuation)
-        }
-        for continuation in released { continuation.resume() }
-    }
-
-    /// Waits until `count` catch-ups are held, for up to 2 s of wall-clock time.
-    func waitForWaiters(_ count: Int) async -> Bool {
-        let begun = ContinuousClock.now
-        while waiterCount < count {
-            if begun.duration(to: .now) > .seconds(2) { return false }
-            await Task.yield()
-        }
-        return true
-    }
-}
-
 private func windowBox(_ id: UInt32) -> AXElementBox { AXElementBox(AXUIElementCreateApplication(pid_t(id))) }
 
 private let catchUpAttributes = WindowAttributes27(
@@ -116,7 +62,7 @@ private let catchUpAttributes = WindowAttributes27(
 private struct ObservationHarness {
     let observation: WindowObservation27
     let continuation: AsyncStream<PlatformEvent>.Continuation
-    var iterator: AsyncStream<PlatformEvent>.Iterator
+    let events: Collector<PlatformEvent>
     let registry = WindowRegistry()
     let registrations: Counter
     let isRunning = Flag(true)
@@ -127,10 +73,11 @@ private struct ObservationHarness {
     let notices = RecordedNotices()
 
     /// `outcomes` answers each registration in turn and then repeats its last answer. A catch-up
-    /// registers the windows `found` names, once `catchUpGate` releases it when there is one.
+    /// registers the windows `found` names, once `catchUpGate` releases it when there is one. The
+    /// wait for a launch to finish is held at `gate` when there is one.
     init(
-        isLaunching: Bool = true, gate: AsyncStream<Void>? = nil, outcomes: [[String: AXError]],
-        found: [UInt32] = [], catchUpGate: CatchUpGate? = nil
+        isLaunching: Bool = true, gate: Gate? = nil, outcomes: [[String: AXError]],
+        found: [UInt32] = [], catchUpGate: Gate? = nil
     ) {
         let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
         let registrations = Counter()
@@ -146,7 +93,7 @@ private struct ObservationHarness {
             environment: .init(
                 isRunning: { _ in isRunning.isSet },
                 isLaunching: { _ in isLaunching },
-                untilFinishedLaunching: { _ in if let gate { for await _ in gate { break } } },
+                untilFinishedLaunching: { _ in await gate?.hold() },
                 register: { _, _, _, _ in
                     let index = registrations.increment()
                     return outcomes[min(index, outcomes.count - 1)]
@@ -154,7 +101,7 @@ private struct ObservationHarness {
                 stop: { _, _ in _ = stops.increment() },
                 windows: { app, announce in
                     _ = announcements.increment()
-                    if let catchUpGate { await catchUpGate.wait() }
+                    await catchUpGate?.hold()
                     var steps: [WindowObservation27.Found] = []
                     for id in found {
                         let registration = registry.register(
@@ -167,23 +114,25 @@ private struct ObservationHarness {
                 }))
         self.continuation = continuation
         self.registrations = registrations
-        iterator = stream.makeAsyncIterator()
+        events = Collector(stream)
         observation.begin()
     }
 
-    mutating func next() async -> PlatformEvent? { await iterator.next() }
+    func next(sourceLocation: SourceLocation = #_sourceLocation) async -> PlatformEvent? {
+        await events.next(sourceLocation: sourceLocation)
+    }
 }
 
-@Test(.timeLimit(.minutes(1)))
+@Test(.gated, .timeLimit(.minutes(1)))
 func anAppThatQuitDuringTheLaunchWaitIsNeverReportedUnobservable() async {
-    let (gate, open) = AsyncStream<Void>.makeStream()
-    var harness = ObservationHarness(gate: gate, outcomes: [timeout])
+    let gate = Gate()
+    let harness = ObservationHarness(gate: gate, outcomes: [timeout])
     guard case .retrying(let retry) = await harness.observation.attempt(launching) else {
         Issue.record("expected a retry")
         return
     }
     await harness.observation.appQuit(pid: launching.pid)
-    open.yield()
+    gate.open()
     await retry.bounded()
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .appQuit(pid: 4242))
@@ -191,10 +140,10 @@ func anAppThatQuitDuringTheLaunchWaitIsNeverReportedUnobservable() async {
     #expect(harness.registrations.count == 1)
 }
 
-@Test(.timeLimit(.minutes(1)))
+@Test(.gated, .timeLimit(.minutes(1)))
 func aNewAppOnTheSamePidIsNotTakenOverByTheOldRetry() async {
-    let (gate, open) = AsyncStream<Void>.makeStream()
-    var harness = ObservationHarness(gate: gate, outcomes: [timeout, timeout, timeout])
+    let gate = Gate()
+    let harness = ObservationHarness(gate: gate, outcomes: [timeout, timeout, timeout])
     guard case .retrying(let retry) = await harness.observation.attempt(launching) else {
         Issue.record("expected a retry")
         return
@@ -204,8 +153,7 @@ func aNewAppOnTheSamePidIsNotTakenOverByTheOldRetry() async {
         Issue.record("the reused pid is claimed afresh")
         return
     }
-    open.yield()
-    open.yield()
+    gate.open()
     await retry.bounded()
     await second.bounded()
     harness.continuation.yield(.reconfigurationEnded)
@@ -216,7 +164,7 @@ func aNewAppOnTheSamePidIsNotTakenOverByTheOldRetry() async {
 
 @Test(.timeLimit(.minutes(1)))
 func aRetryThatSucceedsReportsNothing() async {
-    var harness = ObservationHarness(outcomes: [timeout, [:]])
+    let harness = ObservationHarness(outcomes: [timeout, [:]])
     guard case .retrying(let retry) = await harness.observation.attempt(launching) else {
         Issue.record("expected a retry")
         return
@@ -230,7 +178,7 @@ func aRetryThatSucceedsReportsNothing() async {
 
 @Test(.timeLimit(.minutes(1)))
 func aRetryThatFailsAgainReportsTheAppUnobservable() async {
-    var harness = ObservationHarness(outcomes: [timeout])
+    let harness = ObservationHarness(outcomes: [timeout])
     guard case .retrying(let retry) = await harness.observation.attempt(launching) else {
         Issue.record("expected a retry")
         return
@@ -318,17 +266,17 @@ func aRetryThatFailsAgainReportsTheAppUnobservable() async {
     #expect(harness.registrations.count == 0)
 }
 
-@Test(.timeLimit(.minutes(1)))
+@Test(.gated, .timeLimit(.minutes(1)))
 func anAppThatIsGoneButNotYetQuitIsNeitherRegisteredNorReportedWhenTheWaitEnds() async {
-    let (gate, open) = AsyncStream<Void>.makeStream()
-    var harness = ObservationHarness(gate: gate, outcomes: [timeout])
+    let gate = Gate()
+    let harness = ObservationHarness(gate: gate, outcomes: [timeout])
     guard case .retrying(let retry) = await harness.observation.attempt(launching) else {
         Issue.record("expected a retry")
         return
     }
     // The wait ends because the app terminated, before the quit has been handled: its claim is still held.
     harness.isRunning.isSet = false
-    open.yield()
+    gate.open()
     await retry.bounded()
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .reconfigurationEnded)
@@ -339,7 +287,7 @@ func anAppThatIsGoneButNotYetQuitIsNeitherRegisteredNorReportedWhenTheWaitEnds()
 @Test(.timeLimit(.minutes(1)))
 func aQueryThatMetAnAppBeforeItQuitRegistersAndReportsNothing() async {
     // Not launching: a timeout would otherwise start a retry that races the count below.
-    var harness = ObservationHarness(isLaunching: false, outcomes: [timeout])
+    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout])
     harness.isRunning.isSet = false
     await harness.observation.discover(launching)
     harness.continuation.yield(.reconfigurationEnded)
@@ -382,7 +330,7 @@ private let foundWindow = WindowHandle(pid: 4242, windowID: 5001, isStable: true
 
 @Test(.timeLimit(.minutes(1)))
 func aLaunchMissingOnlyTitleChangesStillAnnouncesItsWindows() async {
-    var harness = ObservationHarness(
+    let harness = ObservationHarness(
         isLaunching: false, outcomes: [[kAXTitleChangedNotification: .notificationUnsupported]], found: [5001])
     await harness.observation.appLaunched(launching)
     harness.continuation.yield(.reconfigurationEnded)
@@ -399,7 +347,7 @@ func aLaunchMissingOnlyTitleChangesStillAnnouncesItsWindows() async {
 
 @Test(.timeLimit(.minutes(1)))
 func aCatchUpAnnouncesAWindowAQueryRegisteredFirst() async {
-    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
     _ = harness.registry.register(windowBox(5001), pid: 4242, windowID: ResolvedWindowID(id: 5001, by: .privateSymbol))
     await harness.observation.appLaunched(launching)
     harness.continuation.yield(.reconfigurationEnded)
@@ -416,7 +364,7 @@ func aCatchUpAnnouncesAWindowAQueryRegisteredFirst() async {
 /// registration of the app and tells the notices and the core.
 @Test(.timeLimit(.minutes(1)))
 func anAppsQuitEndsItsRegisteredWindows() async {
-    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]])
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]])
     let window = harness.registry.handle(
         for: windowBox(5001), pid: 4242, windowID: ResolvedWindowID(id: 5001, by: .privateSymbol))
     await harness.observation.appQuit(pid: 4242)
@@ -425,13 +373,13 @@ func anAppsQuitEndsItsRegisteredWindows() async {
     #expect(harness.notices.all == [.quit(4242)])
 }
 
-@Test(.timeLimit(.minutes(1)))
+@Test(.gated, .timeLimit(.minutes(1)))
 func aCatchUpForAnAppThatQuitMeanwhilePublishesAndKeepsNothing() async {
-    let gate = CatchUpGate()
-    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001], catchUpGate: gate)
+    let gate = Gate()
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001], catchUpGate: gate)
     let observation = harness.observation
     let launch = Task { await observation.appLaunched(launching) }
-    #expect(await gate.waitForWaiters(1))
+    await gate.waitUntilHolding(1)
     harness.isRunning.isSet = false
     await observation.appQuit(pid: 4242)
     gate.release()
@@ -445,13 +393,13 @@ func aCatchUpForAnAppThatQuitMeanwhilePublishesAndKeepsNothing() async {
     #expect(harness.notices.all == [.quit(4242)])
 }
 
-@Test(.timeLimit(.minutes(1)))
+@Test(.gated, .timeLimit(.minutes(1)))
 func aCatchUpOvertakenByARestartLeavesItsWindowsToTheNewRun() async {
-    let gate = CatchUpGate()
-    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001], catchUpGate: gate)
+    let gate = Gate()
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001], catchUpGate: gate)
     let observation = harness.observation
     let launch = Task { await observation.appLaunched(launching) }
-    #expect(await gate.waitForWaiters(1))
+    await gate.waitUntilHolding(1)
     observation.end()
     observation.begin()
     gate.release()
@@ -460,7 +408,7 @@ func aCatchUpOvertakenByARestartLeavesItsWindowsToTheNewRun() async {
     #expect(harness.registry.knownHandle(of: windowBox(5001)) == foundWindow)
     // The new run observes the app, adopts the window and owes it its announcement still.
     let observing = Task { await observation.attempt(launching) }
-    #expect(await gate.waitForWaiters(1))
+    await gate.waitUntilHolding(1)
     gate.release()
     _ = await observing.bounded()
     harness.continuation.yield(.reconfigurationEnded)
@@ -475,7 +423,7 @@ func aCatchUpOvertakenByARestartLeavesItsWindowsToTheNewRun() async {
 
 @Test(.timeLimit(.minutes(1)))
 func aLaunchAQueryMetFirstStillAnnouncesItsWindows() async {
-    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
     // A query claims and registers the app before its launch is handled.
     await harness.observation.discover(launching)
     await harness.observation.appLaunched(launching)
@@ -510,10 +458,10 @@ private func movedEvent(_ id: UInt32) -> AXObserverHub.Event {
 
 @Test(.timeLimit(.minutes(1)))
 func aWindowTheCatchUpAnnouncedFirstIsNotAnnouncedAgainByItsCreation() async {
-    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
     let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
     let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation, notices: harness.notices)
-    var translated = stream.makeAsyncIterator()
+    let translated = Collector(stream)
     await harness.observation.appLaunched(launching)
     translator.enqueue(createdEvent(5001))
     translator.enqueue(movedEvent(5001))
@@ -528,10 +476,10 @@ func aWindowTheCatchUpAnnouncedFirstIsNotAnnouncedAgainByItsCreation() async {
 
 @Test(.timeLimit(.minutes(1)))
 func aWindowItsCreationAnnouncedFirstIsNotAnnouncedAgainByTheCatchUp() async {
-    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
     let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
     let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation, notices: harness.notices)
-    var translated = stream.makeAsyncIterator()
+    let translated = Collector(stream)
     translator.enqueue(createdEvent(5001))
     guard case .windowCreated? = await translated.next() else {
         Issue.record("expected the creation to be announced")
@@ -546,18 +494,18 @@ func aWindowItsCreationAnnouncedFirstIsNotAnnouncedAgainByTheCatchUp() async {
 
 // MARK: Announcing is one step
 
-@Test(.timeLimit(.minutes(1)))
+@Test(.gated, .timeLimit(.minutes(1)))
 func aCatchUpOvertakenByARestartAfterItsEnumerationLeavesExactlyOneAnnouncement() async {
-    let gate = CatchUpGate()
-    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001], catchUpGate: gate)
+    let gate = Gate()
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001], catchUpGate: gate)
     let observation = harness.observation
     // The launch's catch-up has enumerated; its claim is checked only in the announcing step.
     let launch = Task { await observation.appLaunched(launching) }
-    #expect(await gate.waitForWaiters(1))
+    await gate.waitUntilHolding(1)
     observation.end()
     observation.begin()
     let observing = Task { await observation.attempt(launching) }
-    #expect(await gate.waitForWaiters(2))
+    await gate.waitUntilHolding(2)
     // The stale catch-up and the new run's go on together; only the new claim's step announces.
     gate.release()
     await launch.bounded()
@@ -573,23 +521,23 @@ func aCatchUpOvertakenByARestartAfterItsEnumerationLeavesExactlyOneAnnouncement(
     // The mark stays: the window's own creation notification announces nothing more.
     let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
     let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation, notices: harness.notices)
-    var translated = stream.makeAsyncIterator()
+    let translated = Collector(stream)
     translator.enqueue(createdEvent(5001))
     translator.enqueue(movedEvent(5001))
     #expect(await translated.next() == .windowMoved(foundWindow))
     translator.closeAll()
 }
 
-@Test(.timeLimit(.minutes(1)))
+@Test(.gated, .timeLimit(.minutes(1)))
 func twoCatchUpsRacingOnOneWindowAnnounceItOnce() async {
-    let gate = CatchUpGate()
-    var harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001], catchUpGate: gate)
+    let gate = Gate()
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001], catchUpGate: gate)
     let observation = harness.observation
     // A query observes the app; two launch notifications then each owe and start a catch-up under its claim.
     await observation.discover(launching)
     let first = Task { await observation.appLaunched(launching) }
     let second = Task { await observation.appLaunched(launching) }
-    #expect(await gate.waitForWaiters(2))
+    await gate.waitUntilHolding(2)
     gate.release()
     await first.bounded()
     await second.bounded()

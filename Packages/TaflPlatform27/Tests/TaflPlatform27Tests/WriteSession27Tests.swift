@@ -50,16 +50,16 @@ private func aStopArrivingWhileThePositionsSettabilityQueryBlocksRefusesTheWrite
     let pid = pid_t(Int32.max)
     let stopped = Mutex(false)
     let release = DispatchSemaphore(value: 0)
-    let (entered, enteredQuery) = AsyncStream.makeStream(of: Void.self)
+    let entered = Tally()
     let session = session(pid: pid, queue: AXQueue(), settable: { _, _ in
-        enteredQuery.yield()
+        entered.increment()
         release.wait()
         return .success(true)
     })
     let write = Task {
         await session.setPosition(ScreenPoint(x: 0, y: 25), admit: { stopped.withLock { $0 } ? .cancelled : .write })
     }
-    for await _ in entered { break }
+    await entered.wait(for: 1, "settability queries")
     stopped.withLock { $0 = true }
     release.signal()
     #expect(await write.bounded() == .success(.cancelled))

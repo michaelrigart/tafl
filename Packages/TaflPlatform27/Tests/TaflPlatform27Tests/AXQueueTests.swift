@@ -20,24 +20,24 @@ import TaflTestSupport
 func forgettingWaitsForWorkAlreadyOnTheQueue() async {
     let queue = AXQueue()
     let order = Mutex<[String]>([])
-    let (started, didStart) = AsyncStream<Void>.makeStream()
+    let started = Tally()
     let release = DispatchSemaphore(value: 0)
     let work = Task {
         await queue.run(pid: 7) {
-            didStart.yield()
+            started.increment()
             release.wait()
             order.withLock { $0.append("work finished") }
         }
     }
-    for await _ in started { break }
-    let (queued, didQueue) = AsyncStream<Void>.makeStream()
+    await started.wait(for: 1, "work started")
+    let queued = Tally()
     let forgetting = Task {
-        await queue.forget(pid: 7, whenQueued: { didQueue.yield() })
+        await queue.forget(pid: 7, whenQueued: { queued.increment() })
         order.withLock { $0.append("forgotten") }
     }
     // Once forget has queued its drop behind the work, which is still running, the queue must still
-    // be registered and forget must not have returned. A forget that never queues one fails the bound.
-    await Task { for await _ in queued { break } }.bounded(timeout: .seconds(2))
+    // be registered and forget must not have returned. A forget that never queues one fails the wait.
+    await queued.wait(for: 1, "drops queued")
     #expect(queue.queueCount == 1)
     #expect(order.withLock { $0 }.isEmpty)
     release.signal()

@@ -2,7 +2,7 @@ import Synchronization
 import Testing
 
 /// Collects what a stream sends, as it arrives, so a test reads it with a bound: the next element
-/// in order (`next`), or everything sent up to now (`drain`).
+/// in order (`next`), everything sent up to now (`drain`), or the stream's end (`waitForEnd`).
 public final class Collector<Element: Sendable & Equatable>: Sendable {
     private struct State {
         var collected: [Element] = []
@@ -12,6 +12,7 @@ public final class Collector<Element: Sendable & Equatable>: Sendable {
         var pendingMarkers: [Element] = []
         var arrivedMarkers: [Element] = []
         var drains = 0
+        var hasEnded = false
     }
 
     private final class Storage: Sendable {
@@ -20,11 +21,12 @@ public final class Collector<Element: Sendable & Equatable>: Sendable {
 
     private let storage: Storage
     private let reader: Task<Void, Never>
-    private let makeMarker: @Sendable (Int) -> Element
+    private let makeMarker: (@Sendable (Int) -> Element)?
 
     /// `marker` makes the element each drain sends to find where "up to now" ends; each drain asks
-    /// for one with a number of its own, so a drain never matches an earlier drain's marker.
-    public init(_ stream: AsyncStream<Element>, marker: @escaping @Sendable (Int) -> Element) {
+    /// for one with a number of its own, so a drain never matches an earlier drain's marker. A
+    /// collector without one cannot drain.
+    public init(_ stream: AsyncStream<Element>, marker: (@Sendable (Int) -> Element)? = nil) {
         let storage = Storage()
         self.storage = storage
         makeMarker = marker
@@ -39,6 +41,7 @@ public final class Collector<Element: Sendable & Equatable>: Sendable {
                     }
                 }
             }
+            storage.state.withLock { $0.hasEnded = true }
         }
     }
 
@@ -73,6 +76,10 @@ public final class Collector<Element: Sendable & Equatable>: Sendable {
         timeout: Duration = defaultWaitBound,
         sourceLocation: SourceLocation = #_sourceLocation
     ) async -> [Element] {
+        guard let makeMarker else {
+            Issue.record("A collector made without a marker cannot drain", sourceLocation: sourceLocation)
+            return all
+        }
         let storage = storage
         let marker = storage.state.withLock { state in
             state.drains += 1
@@ -85,5 +92,17 @@ public final class Collector<Element: Sendable & Equatable>: Sendable {
             storage.state.withLock { $0.arrivedMarkers.contains(marker) }
         }
         return all
+    }
+
+    /// Waits until the stream has ended, after everything it sent was collected.
+    @discardableResult
+    public func waitForEnd(
+        timeout: Duration = defaultWaitBound,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async -> Bool {
+        let storage = storage
+        return await waitUntil("a stream to end", timeout: timeout, sourceLocation: sourceLocation) {
+            storage.state.withLock { $0.hasEnded }
+        }
     }
 }

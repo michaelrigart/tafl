@@ -1,6 +1,7 @@
 import Synchronization
 import Testing
 import TaflCore
+import TaflTestSupport
 
 /// Keeps every notice the platform hands the core, in order.
 final class RecordedNotices: WindowNotices {
@@ -11,13 +12,13 @@ final class RecordedNotices: WindowNotices {
     }
 
     private let notices = Mutex<[Notice]>([])
-    private let received = CountWaiters()
+    private let received = Tally()
 
     var all: [Notice] { notices.withLock { $0 } }
 
     /// Waits until `count` notices have been received.
     func waitForNotices(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async {
-        await received.wait(for: count, sourceLocation: sourceLocation)
+        await received.wait(for: count, "notices", sourceLocation: sourceLocation)
     }
 
     func announced(_ snapshot: WindowSnapshot) { record(.announced(snapshot.handle)) }

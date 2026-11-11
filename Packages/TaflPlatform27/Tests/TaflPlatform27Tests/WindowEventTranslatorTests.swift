@@ -2,6 +2,7 @@ import ApplicationServices
 import CoreGraphics
 import Testing
 import TaflCore
+import TaflTestSupport
 @testable import TaflPlatform27
 
 private let app = AppInfo27(pid: 10, bundleID: "com.example.App", name: "Example", isHidden: false)
@@ -21,11 +22,11 @@ private func attributes(subrole: String = "AXStandardWindow") -> WindowAttribute
 /// A reader for elements named by the pid they were made from; `untracked` and `gone` shape what it answers,
 /// and `gate` holds back every read for one app until the test opens it. Work for an app's queue runs at once.
 private func reader(
-    untracked: Set<pid_t> = [], gone: Set<pid_t> = [], gatedApp: pid_t? = nil, gate: AsyncStream<Void>? = nil
+    untracked: Set<pid_t> = [], gone: Set<pid_t> = [], gatedApp: pid_t? = nil, gate: Gate? = nil
 ) -> WindowReader27 {
     WindowReader27(
         readTracked: { element, pid, _, then in
-            if pid == gatedApp, let gate { for await _ in gate { break } }
+            if pid == gatedApp, let gate { await gate.hold() }
             let elementPID = AXWindowAccess.pid(element.element) ?? 0
             guard !untracked.contains(elementPID) else { return nil }
             return then(ElementRead(element: element, attributes: attributes(), windowID: ResolvedWindowID(id: UInt32(elementPID), by: .privateSymbol)))
@@ -43,22 +44,24 @@ private struct Harness {
     let translator: WindowEventTranslator
     let registry = WindowRegistry()
     let notices = RecordedNotices()
-    var iterator: AsyncStream<PlatformEvent>.Iterator
+    let events: Collector<PlatformEvent>
 
     init(_ reader: WindowReader27) {
         let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
         translator = WindowEventTranslator(registry: registry, reader: reader, events: continuation, notices: notices)
-        iterator = stream.makeAsyncIterator()
+        events = Collector(stream)
     }
 
-    mutating func next() async -> PlatformEvent? { await iterator.next() }
+    func next(sourceLocation: SourceLocation = #_sourceLocation) async -> PlatformEvent? {
+        await events.next(sourceLocation: sourceLocation)
+    }
 }
 
 // Events of one app arrive in order, so an event the translator drops shows as the next one arriving first.
 
 @Test(.timeLimit(.minutes(1)))
 func aDestroyForAnUnknownWindowIsDropped() async {
-    var harness = Harness(reader())
+    let harness = Harness(reader())
     harness.translator.enqueue(event(kAXUIElementDestroyedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
     #expect(await harness.next() == .windowMoved(handle(10, 2020)))
@@ -67,7 +70,7 @@ func aDestroyForAnUnknownWindowIsDropped() async {
 
 @Test(.timeLimit(.minutes(1)))
 func eventsForWindowsThatAreNotStandardOrSheetsAreDropped() async {
-    var harness = Harness(reader(untracked: [1010]))
+    let harness = Harness(reader(untracked: [1010]))
     for notification in [kAXWindowCreatedNotification, kAXWindowMovedNotification, kAXWindowResizedNotification, kAXTitleChangedNotification] {
         harness.translator.enqueue(event(notification, pid: 10, element: box(1010)))
     }
@@ -79,7 +82,7 @@ func eventsForWindowsThatAreNotStandardOrSheetsAreDropped() async {
 
 @Test(.timeLimit(.minutes(1)))
 func aWindowOfAProcessThatIsGoneIsNotRegistered() async {
-    var harness = Harness(reader(gone: [10]))
+    let harness = Harness(reader(gone: [10]))
     _ = harness.registry.register(box(2020), pid: 10, windowID: ResolvedWindowID(id: 2020, by: .privateSymbol))
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
@@ -90,7 +93,7 @@ func aWindowOfAProcessThatIsGoneIsNotRegistered() async {
 
 @Test(.timeLimit(.minutes(1)))
 func aCreatedWindowIsAnnouncedOnceAndItsTitleIsReadFresh() async {
-    var harness = Harness(reader())
+    let harness = Harness(reader())
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXTitleChangedNotification, pid: 10, element: box(1010)))
@@ -108,7 +111,7 @@ func aCreatedWindowIsAnnouncedOnceAndItsTitleIsReadFresh() async {
 
 @Test(.timeLimit(.minutes(1)))
 func aWindowTheCatchUpAlreadyAnnouncedIsNotAnnouncedByItsNotification() async {
-    var harness = Harness(reader())
+    let harness = Harness(reader())
     let registered = harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
     let found = WindowSnapshot(
         handle: registered.handle, bundleID: nil, appName: "App", title: "Doc", frame: ScreenRect(x: 0, y: 0, width: 100, height: 100),
@@ -123,7 +126,7 @@ func aWindowTheCatchUpAlreadyAnnouncedIsNotAnnouncedByItsNotification() async {
 
 @Test(.timeLimit(.minutes(1)))
 func aWindowAQueryRegisteredIsAnnouncedOnceByItsCreation() async {
-    var harness = Harness(reader())
+    let harness = Harness(reader())
     // A query met the window before its creation notification was handled.
     _ = harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
@@ -140,7 +143,7 @@ func aWindowAQueryRegisteredIsAnnouncedOnceByItsCreation() async {
 
 @Test(.timeLimit(.minutes(1)))
 func aKnownWindowIsMovedResizedAndDestroyedInOrderAndForgotten() async {
-    var harness = Harness(reader())
+    let harness = Harness(reader())
     _ = harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
     for notification in [kAXWindowMovedNotification, kAXWindowResizedNotification, kAXUIElementDestroyedNotification] {
         harness.translator.enqueue(event(notification, pid: 10, element: box(1010)))
@@ -154,16 +157,16 @@ func aKnownWindowIsMovedResizedAndDestroyedInOrderAndForgotten() async {
     harness.translator.closeAll()
 }
 
-@Test(.timeLimit(.minutes(1)))
+@Test(.gated, .timeLimit(.minutes(1)))
 func aSlowAppDelaysOnlyItselfAndKeepsItsOwnOrder() async {
-    let (gate, open) = AsyncStream<Void>.makeStream()
-    var harness = Harness(reader(gatedApp: 10, gate: gate))
+    let gate = Gate()
+    let harness = Harness(reader(gatedApp: 10, gate: gate))
     harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXTitleChangedNotification, pid: 10, element: box(1010)))
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 11, element: box(1011)))
     #expect(await harness.next() == .windowMoved(handle(11, 1011)))
 
-    open.yield()
+    gate.open()
     guard case .windowCreated(let snapshot)? = await harness.next() else {
         Issue.record("the created window must come before its title change")
         return
@@ -175,7 +178,7 @@ func aSlowAppDelaysOnlyItselfAndKeepsItsOwnOrder() async {
 
 @Test(.timeLimit(.minutes(1)))
 func aLateCallbackAfterTheLaneClosedStartsNoLaneUntilTheNextClaim() async {
-    var harness = Harness(reader())
+    let harness = Harness(reader())
     harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
     #expect(await harness.next() == .windowMoved(handle(10, 1010)))
     harness.translator.closeLane(pid: 10)

@@ -1,6 +1,7 @@
 import ApplicationServices
 import Synchronization
 import TaflCore
+import TaflTestSupport
 import Testing
 @testable import TaflPlatform27
 
@@ -8,7 +9,7 @@ import Testing
 /// `drain()` is called.
 final class ManualQueue: Sendable {
     private let work = Mutex<[@Sendable () -> Void]>([])
-    private let queued = CountWaiters()
+    private let queued = Tally()
 
     func enqueue(_ body: @escaping @Sendable () -> Void) {
         work.withLock { $0.append(body) }
@@ -22,7 +23,7 @@ final class ManualQueue: Sendable {
 
     /// Waits until `count` pieces of work have been queued, drained or not.
     func waitForQueued(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async {
-        await queued.wait(for: count, sourceLocation: sourceLocation)
+        await queued.wait(for: count, "work queued", sourceLocation: sourceLocation)
     }
 }
 
@@ -35,7 +36,7 @@ struct EndsHarness {
     let registry = WindowRegistry()
     let notices = RecordedNotices()
     let translator: WindowEventTranslator
-    private var iterator: AsyncStream<PlatformEvent>.Iterator
+    private let delivered: Collector<PlatformEvent>
 
     init(queue: ManualQueue? = nil) {
         let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
@@ -47,7 +48,7 @@ struct EndsHarness {
         let reader = WindowReader27(
             readTracked: { _, _, _, _ in nil }, title: { _, _ in "" }, app: { _ in nil }, afterReads: afterReads)
         translator = WindowEventTranslator(registry: registry, reader: reader, events: continuation, notices: notices)
-        iterator = stream.makeAsyncIterator()
+        delivered = Collector(stream)
     }
 
     var ends: WindowEnds { translator.ends }
@@ -68,9 +69,9 @@ struct EndsHarness {
     }
 
     /// The events delivered from here up to and including `last`.
-    mutating func events(through last: PlatformEvent) async -> [PlatformEvent] {
+    func events(through last: PlatformEvent, sourceLocation: SourceLocation = #_sourceLocation) async -> [PlatformEvent] {
         var seen: [PlatformEvent] = []
-        while let event = await iterator.next() {
+        while let event = await delivered.next(sourceLocation: sourceLocation) {
             seen.append(event)
             if event == last { break }
         }

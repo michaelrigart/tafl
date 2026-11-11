@@ -215,7 +215,7 @@ private final class Taken: Sendable {
     await fake.configure { $0.unobserved = [.init(pid: 7, bundleID: "com.example.slow", missing: [.created])] }
     await fake.emit(.windowMoved(w.handle))
     await fake.emitUnobserved()
-    let events = Collector(fake.events, marker: markerEvent)
+    let events = Collector(fake.events)
     #expect(await events.next() == .windowMoved(w.handle))
     #expect(await events.next() == .unobservable(pid: 7, bundleID: "com.example.slow", missing: [.created]))
     #expect(await fake.eventsSent == 2)

@@ -12,7 +12,7 @@ private let gone: Result<Int, AXFailure> = .failure(AXFailure(.invalidUIElement)
 /// and the owner is not told. Its destruction notification then ends it, once.
 @Test(.timeLimit(.minutes(1)))
 func aWindowAReadFindsInvalidIsEndedOnlyByItsDestruction() async {
-    var harness = EndsHarness()
+    let harness = EndsHarness()
     let window = harness.register(1010)
     let marker = harness.register(2020)
     let result = await Platform27.readRegistered(window, registry: harness.registry) { _ in gone }
@@ -31,7 +31,7 @@ func aWindowAReadFindsInvalidIsEndedOnlyByItsDestruction() async {
 /// ends the window once, and the read that then finds the element invalid adds nothing.
 @Test(.timeLimit(.minutes(1)))
 func aDestructionHandledDuringAReadEndsTheWindowOnce() async {
-    var harness = EndsHarness()
+    let harness = EndsHarness()
     let window = harness.register(1010)
     let marker = harness.register(2020)
     let result = await Platform27.readRegistered(window, registry: harness.registry) { _ in
@@ -51,7 +51,7 @@ func aDestructionHandledDuringAReadEndsTheWindowOnce() async {
 /// is announced as destroyed.
 @Test(.timeLimit(.minutes(1)))
 func aReplacementRegisteredBeforeAnEndStaysAndIsNotEnded() async {
-    var harness = EndsHarness()
+    let harness = EndsHarness()
     let window = harness.register(1010)
     let marker = harness.register(2020)
     let looked = harness.registry.knownHandle(of: harness.element(1010))
@@ -73,7 +73,7 @@ func aReplacementRegisteredBeforeAnEndStaysAndIsNotEnded() async {
 @Test(.timeLimit(.minutes(1)))
 func aRegistrationForTheIDQueuedAheadOfAnEndKeepsItsState() async {
     let queue = ManualQueue()
-    var harness = EndsHarness(queue: queue)
+    let harness = EndsHarness(queue: queue)
     let window = harness.register(1010)
     let marker = harness.register(2020)
     let registry = harness.registry

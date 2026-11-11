@@ -1,55 +1,50 @@
 import Foundation
 import Synchronization
 import Testing
+import TaflTestSupport
 @testable import TaflPlatform27
 
 private let name = Notification.Name("com.apple.accessibility.api.test")
 
-private func collect(_ stream: AsyncStream<Bool>, count: Int) async -> [Bool] {
-    var values: [Bool] = []
-    for await value in stream {
-        values.append(value)
-        if values.count == count { break }
-    }
+/// The first `count` values the permission sends.
+private func values(_ changes: Collector<Bool>, count: Int, sourceLocation: SourceLocation = #_sourceLocation) async -> [Bool?] {
+    var values: [Bool?] = []
+    for _ in 0..<count { values.append(await changes.next(sourceLocation: sourceLocation)) }
     return values
 }
 
-/// Answers each call from a script, in call order, and says when a call starts. A call can be held
-/// until a gate stream finishes.
+/// Answers each call from a script, in call order, and counts the calls that start. One call can be
+/// held at a gate, as a slow child check is.
 private final class ScriptedCheck: Sendable {
     private let answers: Mutex<[Bool?]>
-    private let started = Mutex(0)
-    private let startedEvents: AsyncStream<Void>
-    private let startedContinuation: AsyncStream<Void>.Continuation
-    private let hold: (call: Int, gate: AsyncStream<Void>)?
+    private let calls = Mutex(0)
+    private let started = Tally()
+    private let hold: (call: Int, gate: Gate)?
 
-    init(_ answers: [Bool?], holdingCall call: Int? = nil, until gate: AsyncStream<Void> = AsyncStream { $0.finish() }) {
+    init(_ answers: [Bool?], holdingCall call: Int? = nil, at gate: Gate? = nil) {
         self.answers = Mutex(answers)
-        (startedEvents, startedContinuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .unbounded)
-        hold = call.map { ($0, gate) }
+        hold = call.flatMap { call in gate.map { (call, $0) } }
     }
 
-    var callCount: Int { started.withLock { $0 } }
+    var callCount: Int { started.value }
 
     func call() async -> Bool? {
-        let number = started.withLock { count in
+        let number = calls.withLock { count in
             count += 1
             return count
         }
         let answer = answers.withLock { $0.isEmpty ? nil : $0.removeFirst() }
-        startedContinuation.yield()
+        started.increment()
         if let hold, hold.call == number {
-            for await _ in hold.gate {}
+            await hold.gate.hold()
         }
         return answer
     }
 
     /// Returns once `count` calls have started. Checks run one at a time, so a call starts only after
-    /// the one before it has been applied. A wait that is cancelled first (a time limit) records an issue.
+    /// the one before it has been applied.
     func waitForCalls(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async {
-        if callCount >= count { return }
-        for await _ in startedEvents where callCount >= count { return }
-        Issue.record("Wait for \(count) calls ended by cancellation at \(callCount)", sourceLocation: sourceLocation)
+        await started.wait(for: count, "checks started", sourceLocation: sourceLocation)
     }
 }
 
@@ -94,7 +89,7 @@ private func permission(
     center.post(name: name, object: nil)
     await script.waitForCalls(1)
     scheduled.runAll()
-    #expect(await collect(permission.changes, count: 2) == [true, false])
+    #expect(await values(Collector(permission.changes), count: 2) == [true, false])
     #expect(!permission.isTrusted)
 }
 
@@ -132,18 +127,18 @@ private func permission(
 }
 
 @MainActor
-@Test(.timeLimit(.minutes(1))) func resultsApplyInCheckOrderEvenWhenAnEarlierCheckIsSlow() async {
-    let (gate, release) = AsyncStream<Void>.makeStream()
+@Test(.gated, .timeLimit(.minutes(1))) func resultsApplyInCheckOrderEvenWhenAnEarlierCheckIsSlow() async {
+    let gate = Gate()
     // Call 1 is slow and answers true; call 2 answers false. Side by side, the late true would win.
-    let script = ScriptedCheck([true, false], holdingCall: 1, until: gate)
+    let script = ScriptedCheck([true, false], holdingCall: 1, at: gate)
     let scheduled = Scheduled()
     let center = NotificationCenter()
     let permission = permission(center: center, scheduled: scheduled, check: script.call)
     center.post(name: name, object: nil)
     await script.waitForCalls(1)
     scheduled.runAll()
-    release.finish()
-    #expect(await collect(permission.changes, count: 2) == [true, false])
+    gate.open()
+    #expect(await values(Collector(permission.changes), count: 2) == [true, false])
     #expect(!permission.isTrusted)
 }
 
@@ -156,7 +151,7 @@ private func permission(
         initial: true, center: center, scheduled: scheduled, check: script.call, fallback: { false })
     center.post(name: name, object: nil)
     scheduled.runAll()
-    #expect(await collect(permission.changes, count: 1) == [false])
+    #expect(await values(Collector(permission.changes), count: 1) == [false])
     #expect(!permission.isTrusted)
 }
 
@@ -166,34 +161,36 @@ private func permission(
     let center = NotificationCenter()
     let permission = permission(initial: true, center: center, check: script.call, fallback: { true })
     center.post(name: name, object: nil)
-    #expect(await collect(permission.changes, count: 1) == [false])
+    #expect(await values(Collector(permission.changes), count: 1) == [false])
     #expect(!permission.isTrusted)
 }
 
 @MainActor
-@Test(.timeLimit(.minutes(1))) func requestsDuringACheckLeadToExactlyOneMoreCheck() async {
-    let (gate, release) = AsyncStream<Void>.makeStream()
-    let script = ScriptedCheck([true, false, false, false], holdingCall: 1, until: gate)
+@Test(.gated, .timeLimit(.minutes(1))) func requestsDuringACheckLeadToExactlyOneMoreCheck() async {
+    let gate = Gate()
+    let script = ScriptedCheck([true, false, false, false], holdingCall: 1, at: gate)
     let scheduled = Scheduled()
     let center = NotificationCenter()
     var held: Permission27? = permission(center: center, scheduled: scheduled, check: script.call)
-    var changes = held!.changes.makeAsyncIterator()
+    let changes = Collector(held!.changes)
     center.post(name: name, object: nil)
     await script.waitForCalls(1)
     for _ in 0..<4 { center.post(name: name, object: nil) }
     scheduled.runAll()
-    release.finish()
+    gate.open()
     #expect(await changes.next() == true)
     #expect(await changes.next() == false)
     held = nil
-    #expect(await changes.next() == nil)
+    #expect(await changes.waitForEnd())
+    #expect(changes.all == [true, false])
     #expect(script.callCount == 2)
 }
 
 @MainActor
 @Test(.timeLimit(.minutes(1))) func theStreamEndsWhenThePermissionObjectGoes() async {
     var held: Permission27? = permission(check: { nil })
-    var changes = held!.changes.makeAsyncIterator()
+    let changes = Collector(held!.changes)
     held = nil
-    #expect(await changes.next() == nil)
+    #expect(await changes.waitForEnd())
+    #expect(changes.all.isEmpty)
 }

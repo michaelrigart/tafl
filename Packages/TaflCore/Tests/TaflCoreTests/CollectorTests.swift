@@ -47,3 +47,18 @@ private func numbers() -> (Collector<Int>, AsyncStream<Int>.Continuation) {
         _ = await collector.drain(through: { _ in }, timeout: .milliseconds(50))
     }
 }
+
+@Test(.timeLimit(.minutes(1))) func aCollectorSeesItsStreamEndAfterWhatItSent() async {
+    let (collector, sink) = numbers()
+    sink.yield(1)
+    sink.finish()
+    #expect(await collector.waitForEnd())
+    #expect(collector.all == [1])
+}
+
+@Test(.timeLimit(.minutes(1))) func waitingForAStreamThatGoesOnFailsAtTheBound() async {
+    let (collector, _) = numbers()
+    await withKnownIssue("a wait that passes its bound records an issue") {
+        #expect(await collector.waitForEnd(timeout: .milliseconds(50)) == false)
+    }
+}
