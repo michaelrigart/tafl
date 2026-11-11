@@ -86,6 +86,15 @@ expect_failure "a blocking wait" $'@Test func t() {\n    group.wait()\n}'
 expect_failure "a blocking wait with a timeout" $'@Test func t() {\n    _ = group.wait(timeout: .now() + 1)\n}'
 expect_failure "a delayed dispatch" $'@Test func t() {\n    queue.asyncAfter(deadline: .now() + 1) {}\n}'
 expect_failure "a run loop" $'@Test func t() {\n    RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))\n}'
+expect_failure "a plain sleep through Darwin" $'@Test func t() {\n    Darwin.sleep(1)\n}'
+expect_failure "a plain sleep with a space before the parenthesis" $'@Test func t() {\n    sleep (1)\n}'
+expect_failure "a usleep with a space before the parenthesis" $'@Test func t() {\n    usleep (1000)\n}'
+expect_failure "a run loop run in a mode" $'@Test func t() {\n    RunLoop.current.run(mode: .default, before: .distantFuture)\n}'
+expect_failure "a run loop run" $'@Test func t() {\n    RunLoop.main.run()\n}'
+expect_failure "an NSCondition wait until a date" $'@Test func t() {\n    _ = condition.wait(until: .distantFuture)\n}'
+expect_failure "an NSCondition wait" $'@Test func t() {\n    condition.wait()\n}'
+expect_failure "an allow marker that names a rule nothing on its line matches" \
+  $'@Test func t() async {\n    await Task.yield() // lint-tests: allow task-yield, task-sleep: the second matches nothing\n}'
 expect_failure "a stale allow marker" $'@Test func t() {\n    let n = 1 // lint-tests: allow task-sleep: there is no sleep here\n}'
 expect_failure "an allow marker for a violation that moved away" $'@Test func t() async {\n    await waitUntil("a flag") { flag.isSet } // lint-tests: allow task-yield: once yielded here\n}'
 expect_failure "an allow marker without a reason" $'@Test func t() async {\n    await Task.yield() // lint-tests: allow task-yield\n}'
@@ -109,6 +118,7 @@ expect_success "a reason that names a forbidden wait" \
   "KitTests.swift:2: Date() as a clock: not a Task.sleep or a Task.yield()"
 
 expect_success "a clock's own sleep method" $'final class Clock {\n    func sleep(for duration: Duration) async throws {}\n}'
+expect_success "a clock's own sleep method with a space" $'final class Clock {\n    func sleep (for duration: Duration) async throws {}\n}'
 expect_success "a sleep on a clock" $'@Test func t() async throws {\n    try await clock.sleep(for: .seconds(1))\n}'
 expect_success "a wait on a tally" $'@Test func t() async {\n    await tally.wait(for: 2, "calls", timeout: .milliseconds(50))\n}'
 

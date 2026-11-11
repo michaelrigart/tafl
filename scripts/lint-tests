@@ -4,8 +4,8 @@
 # loop, or a continuation of its own. TaflTestSupport lives under Sources, so it is not scanned.
 # Every rule is checked on every line, and a justified exception names the rules it allows:
 # `// lint-tests: allow <rule>[, <rule>]: <reason>` on the line, so it cannot hide a second
-# violation there. A marker on a line with no violation is an error (a stale marker). The script
-# lists every exception.
+# violation there. A marker on a line with no violation is an error (a stale marker), and so is a
+# rule it names that nothing on the line matches. The script lists every exception.
 #
 # It reads one line at a time, so it cannot see a wait split over lines: `await` on one line and
 # `.value` or `.result` on the next, or a clock or semaphore held in a variable and used later.
@@ -25,8 +25,8 @@ rules=(
   "task-yield" "Task.yield()" 'Task\.yield\(\)' ""
   "task-sleep" "Task.sleep" 'Task\.sleep' ""
   "thread-sleep" "Thread.sleep" 'Thread\.sleep' ""
-  "usleep" "usleep" '(^|[^[:alnum:]_])usleep\(' ""
-  "sleep" "sleep()" '(^|[^[:alnum:]_.])sleep\(' 'func[[:space:]]+sleep\('
+  "usleep" "usleep" '(^|[^[:alnum:]_])usleep[[:space:]]*\(' ""
+  "sleep" "sleep()" '(^|[^[:alnum:]_.])(Darwin\.)?sleep[[:space:]]*\(' 'func[[:space:]]+sleep[[:space:]]*\('
   "date" "Date() as a clock" '(^|[^[:alnum:]_])Date\(\)' ""
   "date-now" "Date.now as a clock" '(^|[^[:alnum:]_])Date\.now([^[:alnum:]_]|$)' ""
   "continuous-clock" "ContinuousClock as a clock" '(^|[^[:alnum:]_])ContinuousClock' ""
@@ -35,9 +35,9 @@ rules=(
   "task-result" "a task's .result" 'await.*\.result([^[:alnum:]_]|$)' ""
   "semaphore" "a DispatchSemaphore" '(^|[^[:alnum:]_])DispatchSemaphore' ""
   "dispatch-group" "a DispatchGroup" '(^|[^[:alnum:]_])DispatchGroup' ""
-  "blocking-wait" "a blocking .wait()" '\.wait\(\)|\.wait\((wall)?[tT]imeout:' ""
+  "blocking-wait" "a blocking .wait()" '\.wait\(\)|\.wait\((until|(wall)?[tT]imeout):' ""
   "async-after" "DispatchQueue asyncAfter" '\.asyncAfter' ""
-  "run-loop" "RunLoop run(until:)" '\.run\(until:' ""
+  "run-loop" "a RunLoop run" '\.run\(until:|RunLoop[^;]*\.run\(' ""
   "continuation" "a continuation of its own" 'with(Checked|Unsafe)(Throwing)?Continuation' ""
 )
 
@@ -73,6 +73,7 @@ for file in "${files[@]}"; do
       allows="${allows//,/ }"
     fi
     violations=0
+    matched=" "
     for ((i = 0; i < ${#rules[@]}; i += 4)); do
       id="${rules[i]}"
       name="${rules[i + 1]}"
@@ -81,6 +82,7 @@ for file in "${files[@]}"; do
       [[ "$code" =~ $pattern ]] || continue
       [[ -n "$except" && "$code" =~ $except ]] && continue
       violations=$((violations + 1))
+      matched+="$id "
       if [[ $marked -eq 0 ]]; then
         echo "$relative:$number: waits with $name; wait through TaflTestSupport instead" >&2
         failures=$((failures + 1))
@@ -97,6 +99,14 @@ for file in "${files[@]}"; do
     if [[ $marked -eq 1 && $violations -eq 0 ]]; then
       echo "$relative:$number: a stale allow marker: nothing on this line waits" >&2
       failures=$((failures + 1))
+    elif [[ $marked -eq 1 ]]; then
+      # A name that matched nothing here would allow a later violation of that rule on this line.
+      for name in $allows; do
+        if [[ "$matched" != *" $name "* ]]; then
+          echo "$relative:$number: the allow marker names $name, which nothing on this line matches" >&2
+          failures=$((failures + 1))
+        fi
+      done
     fi
   done < "$file"
 done
