@@ -3091,7 +3091,11 @@ func aNewWindowMovedBeforeItsPlacementReadsItKeepsTheMovedFrame(eventReadFirst: 
     let rig = await Rig(windows: [window(1, frame: start)], focused: nil)
     await rig.engine.start(config: config(layouts: [desk]))
     await rig.engine.applyLayout(named: "Desk")
-    #expect(await rig.engine.memory.read().placed[handle] != nil)
+    // All three records held the window before its end, so their absence after it means something.
+    let before = await rig.engine.memory.read()
+    #expect(before.placed[handle] != nil)
+    #expect(before.restore[handle] != nil)
+    #expect(before.lastKnown(handle, setup: DisplaySetup([displayA])) != nil)
     // The window is destroyed: a frame read finds no window, and the platform delivers its end.
     await rig.fake.configure { $0.windows[handle] = nil }
     await rig.emit(.windowMoved(handle))
