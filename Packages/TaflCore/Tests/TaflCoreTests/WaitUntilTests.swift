@@ -36,9 +36,10 @@ private final class Flag: Sendable {
 /// A cancellation that lands between the wait's checks is the condition arriving, not the wait being
 /// abandoned: `waitUntil { Task.isCancelled }` reports it as a cancelled wait and records an issue.
 @Test(.timeLimit(.minutes(1))) func aWaitForCancellationEndsWithoutAnIssueHoweverLateTheCancelArrives() async {
+    // The cancel is sent after a different number of yields each time, to land at different points of the wait.
     for yields in 0..<300 {
         let waiting = Task { await waitUntilCancelled("the task to be cancelled", timeout: .seconds(30)) }
-        for _ in 0..<yields % 40 { await Task.yield() }
+        for _ in 0..<yields % 40 { await Task.yield() } // lint-tests: allow task-yield: paces the cancel against the wait under test, which a condition cannot
         waiting.cancel()
         await waiting.bounded()
     }
