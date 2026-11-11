@@ -20,8 +20,13 @@ struct DisplayTransferTests {
         #expect(DisplayTransfer.pulledOnScreen(rect(100, 100, 300, 200), into: v) == rect(100, 100, 300, 200))
     }
 
-    @Test func degenerateSourceKeepsSize() {
-        #expect(DisplayTransfer.mapped(rect(900, 700, 300, 200), from: rect(0, 0, 0, 0), to: v) == rect(700, 600, 300, 200))
+    @Test func aSourceWithNoWidthOrHeightLeavesTheFrameWhereItIsForKeptOnScreenToJudge() {
+        let frame = rect(900, 700, 300, 200)
+        #expect(DisplayTransfer.mapped(frame, from: rect(0, 0, 0, 0), to: v) == frame)
+        #expect(DisplayTransfer.mapped(frame, from: rect(0, 25, 0, 775), to: v) == frame)
+        #expect(DisplayTransfer.mapped(frame, from: rect(0, 25, 1000, 0), to: v) == frame)
+        let only = display(v)
+        #expect(DisplayTransfer.keptOnScreen(frame, on: only, among: [only]) == rect(700, 600, 300, 200))
     }
 
     @Test func aFrameSpreadAcrossTwoDisplaysCountsOnBoth() {

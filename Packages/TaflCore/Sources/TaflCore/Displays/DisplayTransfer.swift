@@ -1,9 +1,10 @@
 import Foundation
 
 public enum DisplayTransfer {
-    /// `frame` mapped by its share of `source` onto the same share of `target`, with no pull onto the screen.
+    /// `frame` mapped by its share of `source` onto the same share of `target`, with no pull onto the
+    /// screen. A `source` with no width or height has no share to map by: `frame` stays as it is.
     public static func mapped(_ frame: ScreenRect, from source: ScreenRect, to target: ScreenRect) -> ScreenRect {
-        guard source.width > 0, source.height > 0 else { return pulledOnScreen(frame, into: target) }
+        guard source.width > 0, source.height > 0 else { return frame }
         return frame.relative(to: source).absolute(in: target)
     }
 
