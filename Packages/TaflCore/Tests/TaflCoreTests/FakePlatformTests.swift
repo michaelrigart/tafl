@@ -86,7 +86,7 @@ private final class Taken: Sendable {
     _ = try await session(fake, w.handle)
 }
 
-@Test func sessionsForOneAppSerialize() async throws {
+@Test(.gated) func sessionsForOneAppSerialize() async throws {
     let a = window(1, frame: rect(0, 0, 100, 100), pid: 100)
     let b = window(2, frame: rect(0, 0, 100, 100), pid: 100)
     let other = window(3, frame: rect(0, 0, 100, 100), pid: 200)
@@ -111,6 +111,19 @@ private final class Taken: Sendable {
     #expect(await fake.callLog == ["begin", "begin", "end", "begin"])
     await secondSession.end()
     await otherApp.end()
+}
+
+/// A session that never ends would park the next one for good; the test's scope lets it through.
+@Test(.gated, .timeLimit(.minutes(1))) func aSessionWaitingForALeakedOneIsLetThroughWhenTheTestsScopeOpens() async throws {
+    let a = window(1, frame: rect(0, 0, 100, 100), pid: 100)
+    let b = window(2, frame: rect(0, 0, 100, 100), pid: 100)
+    let (fake, _) = await makeFake(a, b)
+    _ = try await session(fake, a.handle)
+    let second = Task { await fake.beginWriting(b.handle) }
+    await waitUntil("the second session to wait for the first") { await fake.waitingSessionCount == 1 }
+
+    try #require(GateScope.current).openAll()
+    #expect(await second.bounded() != nil)
 }
 
 @Test func beforeCallInjectsExternalChange() async throws {
@@ -138,7 +151,7 @@ private final class Taken: Sendable {
     #expect(await fake.windows[w.handle]?.frame == rect(0, 0, 500, 400))
 }
 
-@Test func hungAppFailsReadsThroughTheSessionAndFreesTheSlot() async throws {
+@Test(.gated) func hungAppFailsReadsThroughTheSessionAndFreesTheSlot() async throws {
     let w = window(1, frame: rect(0, 0, 100, 100), pid: 100)
     let (fake, clock) = await makeFake(w)
     let s = try await session(fake, w.handle)
@@ -239,7 +252,7 @@ private final class Taken: Sendable {
     #expect(await fake.callLog == ["begin", "size 500x400"])
 }
 
-@Test func cancelledHungCallStillTakesHalfASecond() async {
+@Test(.gated) func cancelledHungCallStillTakesHalfASecond() async {
     let w = window(1, frame: rect(0, 0, 100, 100), pid: 100)
     let (fake, clock) = await makeFake(w)
     await fake.configure { $0.hung = [100] }
@@ -265,7 +278,7 @@ private final class Taken: Sendable {
     #expect(failure == .notResponding)
 }
 
-@Test func hungAppEndWaitsAndStillFreesTheSlot() async throws {
+@Test(.gated) func hungAppEndWaitsAndStillFreesTheSlot() async throws {
     let w = window(1, frame: rect(0, 0, 100, 100), pid: 100)
     let (fake, clock) = await makeFake(w)
     let s = try await session(fake, w.handle)
@@ -307,7 +320,7 @@ private final class Admissions: Sendable {
 
 /// A position write asks whether the position is settable before it asks `admit`, so a write that
 /// cannot be made is never admitted.
-@Test(.timeLimit(.minutes(1))) func aPositionWriteThatFailsItsSettabilityQueryIsNotAdmitted() async throws {
+@Test(.gated, .timeLimit(.minutes(1))) func aPositionWriteThatFailsItsSettabilityQueryIsNotAdmitted() async throws {
     let window = window(1, frame: rect(10, 10, 400, 300))
     let (fake, clock) = await makeFake(window)
     await fake.configure { $0.windows[window.handle]?.canMove = false }

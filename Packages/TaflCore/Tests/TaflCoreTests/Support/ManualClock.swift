@@ -20,6 +20,8 @@ final class ManualClock: TaflClock {
         let continuation: CheckedContinuation<Void, any Error>
         /// The engine's task that sleeps, when one does.
         let parked: EngineActivity.Parked?
+        /// Whether cancellation cuts the sleep short.
+        let cancellable: Bool
 
         func wake(with result: Result<Void, any Error>) {
             parked?.unpark()
@@ -34,6 +36,14 @@ final class ManualClock: TaflClock {
     }
 
     private let state = Mutex(State())
+    /// Whether the test's `GateScope` lets go the sleeps that ignore cancellation when it opens.
+    private let scoped: Bool
+
+    init() {
+        let scope = GateScope.current
+        scoped = scope != nil
+        scope?.onOpen { [self] in releaseUncancellableSleepers() }
+    }
 
     var now: Duration { state.withLock { $0.now } }
 
@@ -56,6 +66,12 @@ final class ManualClock: TaflClock {
     /// A sleep that cancellation does not cut short, as a call in flight to an app that does not
     /// answer takes its whole timeout.
     func sleepIgnoringCancellation(for duration: Duration) async {
+        // Without a scope nothing would end a sleep the test never advances, so it is skipped and the
+        // test fails instead of hanging.
+        guard scoped else {
+            Issue.record("A sleep that ignores cancellation needs a test marked .gated, which lets it go when the test ends")
+            return
+        }
         try? await park(id: nextID(), for: duration, cancellable: false)
     }
 
@@ -87,6 +103,17 @@ final class ManualClock: TaflClock {
         }
     }
 
+    /// Ends every sleep that ignores cancellation, as the test's scope opens its gates: nothing else
+    /// would end one for a test that never advances the clock far enough.
+    private func releaseUncancellableSleepers() {
+        let stuck = state.withLock { state -> [Sleeper] in
+            let stuck = state.sleepers.filter { !$0.cancellable }
+            state.sleepers.removeAll { !$0.cancellable }
+            return stuck
+        }
+        for sleeper in stuck { sleeper.wake(with: .success(())) }
+    }
+
     private func nextID() -> Int {
         state.withLock { state in
             defer { state.nextID += 1 }
@@ -101,7 +128,7 @@ final class ManualClock: TaflClock {
                 let deadline = state.now + duration
                 if deadline <= state.now { return .success(()) }
                 let parked = EngineActivity.parkCurrentTask()
-                state.sleepers.append(Sleeper(id: id, deadline: deadline, continuation: continuation, parked: parked))
+                state.sleepers.append(Sleeper(id: id, deadline: deadline, continuation: continuation, parked: parked, cancellable: cancellable))
                 return nil
             }
             if let outcome { continuation.resume(with: outcome) }

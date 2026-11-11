@@ -233,7 +233,7 @@ private final class Rig: Sendable {
 // MARK: Layouts
 
 // The hung app has the lowest pid, so a run that went through the apps one by one would wait for it first.
-@Test(.timeLimit(.minutes(1))) func hungAppDoesNotBlockOthers() async {
+@Test(.gated, .timeLimit(.minutes(1))) func hungAppDoesNotBlockOthers() async {
     let a = window(1, frame: start, pid: 100, bundleID: "com.a")
     let b = window(2, frame: start, pid: 200, bundleID: "com.b")
     let c = window(3, frame: start, pid: 50, bundleID: "com.c")
@@ -407,7 +407,7 @@ private final class Rig: Sendable {
     #expect(await rig.fake.raised == [b.handle])
 }
 
-@Test(.timeLimit(.minutes(1))) func aLayoutRunThatANewerApplicationOvertookRaisesNothing() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aLayoutRunThatANewerApplicationOvertookRaisesNothing() async {
     let placed = window(1, frame: start, pid: 100, bundleID: "com.a")
     let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
     let other = window(2, frame: start, pid: 200, bundleID: "com.b")
@@ -1133,7 +1133,7 @@ private let placeholderB = Display(
     #expect(await rig.frame() == leftHalfA)
 }
 
-@Test(.timeLimit(.minutes(1))) func aDisplayChangeCountsItsFailuresWithoutAnOverlay() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aDisplayChangeCountsItsFailuresWithoutAnOverlay() async {
     let slow = window(5, frame: rect(1500, 500, 400, 300), pid: 50, bundleID: "com.c")
     let rig = await Rig(displays: bothDisplays, windows: [strayB1, slow], focused: nil) { $0.hung = [50] }
     await rig.engine.start(config: config())
@@ -1966,7 +1966,7 @@ private func wakeRig() async -> Rig {
 
 // MARK: Failures and saving
 
-@Test(.timeLimit(.minutes(1))) func aHungFocusedAppIsNotReportedAsNoWindow() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aHungFocusedAppIsNotReportedAsNoWindow() async {
     let rig = await Rig(windows: [window(1, frame: start)]) { $0.hung = [100] }
     await rig.engine.start(config: config())
     let acting = Task { await rig.engine.perform(.leftHalf) }
@@ -2013,7 +2013,7 @@ private func wakeRig() async -> Rig {
     }
 }
 
-@Test(.timeLimit(.minutes(1))) func aWindowDraggedWhileTheRestOfALayoutRunsKeepsItsDraggedFrame() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aWindowDraggedWhileTheRestOfALayoutRunsKeepsItsDraggedFrame() async {
     let a = window(1, frame: start, pid: 100, bundleID: "com.a")
     let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
     let desk = layout("Work", [slot(.leftHalf, app: "com.a"), slot(.topHalf, app: "com.c")])
@@ -2035,7 +2035,7 @@ private func wakeRig() async -> Rig {
     #expect(await rig.engine.memory.read().lastKnown(a.handle, setup: setup)?.relative == dragged.relative(to: v))
 }
 
-@Test(.timeLimit(.minutes(1))) func aWindowDestroyedDuringALayoutRunGetsNoLastKnownFrame() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aWindowDestroyedDuringALayoutRunGetsNoLastKnownFrame() async {
     let a = window(1, frame: start, pid: 100, bundleID: "com.a")
     let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
     let desk = layout("Work", [slot(.leftHalf, app: "com.a"), slot(.topHalf, app: "com.c")])
@@ -2160,7 +2160,7 @@ private func wakeRig() async -> Rig {
 
 // MARK: The newest operation of a kind wins
 
-@Test(.timeLimit(.minutes(1))) func theNewestLayoutApplicationIsActiveAndSaved() async {
+@Test(.gated, .timeLimit(.minutes(1))) func theNewestLayoutApplicationIsActiveAndSaved() async {
     let (store, directory) = temporaryStore()
     defer { try? FileManager.default.removeItem(at: directory) }
     let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
@@ -2183,7 +2183,7 @@ private func wakeRig() async -> Rig {
     #expect(saved.activeLayout == "Second")
 }
 
-@Test(.timeLimit(.minutes(1))) func anOvertakenLayoutRunSendsNoMoreRequests() async {
+@Test(.gated, .timeLimit(.minutes(1))) func anOvertakenLayoutRunSendsNoMoreRequests() async {
     let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
     let slowNext = window(4, frame: start, pid: 50, bundleID: "com.c")
     let other = window(2, frame: start, pid: 200, bundleID: "com.b")
@@ -2249,7 +2249,7 @@ private func wakeRig() async -> Rig {
     #expect(await rig.engine.activeLayoutName == "Second")
 }
 
-@Test(.timeLimit(.minutes(1))) func aReloadThatRemovesARunningLayoutKeepsItInactiveAndUnsaved() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aReloadThatRemovesARunningLayoutKeepsItInactiveAndUnsaved() async {
     let (store, directory) = temporaryStore()
     defer { try? FileManager.default.removeItem(at: directory) }
     let slow = window(3, frame: start, pid: 50, bundleID: "com.c")
@@ -2270,7 +2270,7 @@ private func wakeRig() async -> Rig {
     #expect(await rig.engine.activeLayoutName == nil)
 }
 
-@Test(.timeLimit(.minutes(1))) func aReloadThatKeepsARunningLayoutLetsItBecomeActiveAndSaved() async {
+@Test(.gated, .timeLimit(.minutes(1))) func aReloadThatKeepsARunningLayoutLetsItBecomeActiveAndSaved() async {
     let (store, directory) = temporaryStore()
     defer { try? FileManager.default.removeItem(at: directory) }
     let slow = window(3, frame: start, pid: 50, bundleID: "com.c")

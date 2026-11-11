@@ -821,7 +821,7 @@ func aReadingAroundAClampIsOwn(call: Int) async {
 
 // MARK: Failures and exits
 
-@Test func hungAppFailsWithoutWriting() async {
+@Test(.gated) func hungAppFailsWithoutWriting() async {
     let rig = await Rig(start: crossStart) { $0.hung = [100] }
     let task = rig.start(crossJob(firstWrite: FirstWrite(opensChainOn: displayA)))
     await rig.clock.waitForSleepers(1)

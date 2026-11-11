@@ -116,3 +116,17 @@ private actor Hopper {
         await clock.waitForSleepers(1, timeout: .milliseconds(50))
     }
 }
+
+/// A hung call's wait ignores cancellation and only `advance` ends it; a test that never advances far
+/// enough must still end, so its scope lets the wait go.
+@Test(.gated, .timeLimit(.minutes(1))) func aSleepThatIgnoresCancellationEndsWhenTheTestsScopeOpens() async throws {
+    let clock = ManualClock()
+    let slept = Task { await clock.sleepIgnoringCancellation(for: .milliseconds(500)) }
+    await clock.waitForSleepers(1)
+    slept.cancel()
+    #expect(clock.sleeperCount == 1)
+
+    try #require(GateScope.current).openAll()
+    await slept.bounded()
+    #expect(clock.sleeperCount == 0)
+}

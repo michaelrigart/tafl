@@ -95,7 +95,7 @@ actor FakePlatform: WindowPlatform {
     private var callCount = 0
     private var gates: [Int: Gate] = [:]
     private var busyPids: Set<Int32> = []
-    private var waiters: [Int32: [CheckedContinuation<Void, Never>]] = [:]
+    private var waiters: [Int32: [Gate]] = [:]
 
     init(clock: ManualClock, displays: [Display] = [displayA]) {
         self.clock = clock
@@ -435,12 +435,20 @@ actor FakePlatform: WindowPlatform {
             busyPids.insert(pid)
             return
         }
-        await withCheckedContinuation { waiters[pid, default: []].append($0) } // lint-tests: allow models the app's session slot, released by the session before it
+        // The session ahead of this one opens the gate when it ends; the test's scope opens it if that never comes.
+        // Without a scope nothing would, so the wait is skipped and the test fails instead of hanging.
+        guard GateScope.current != nil else {
+            Issue.record("Two sessions of one app overlap in a test not marked .gated")
+            return
+        }
+        let turn = Gate()
+        waiters[pid, default: []].append(turn)
+        await turn.hold()
     }
 
     private func releaseSlot(_ pid: Int32) {
         if var queue = waiters[pid], !queue.isEmpty {
-            queue.removeFirst().resume()
+            queue.removeFirst().open()
             waiters[pid] = queue.isEmpty ? nil : queue
         } else {
             busyPids.remove(pid)

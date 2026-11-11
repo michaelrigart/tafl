@@ -195,7 +195,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(await rig.log == [])
 }
 
-@Test func anAppThatDoesNotAnswerFailsWithTheNameThePlatformGives() async {
+@Test(.gated) func anAppThatDoesNotAnswerFailsWithTheNameThePlatformGives() async {
     let rig = await Rig(start: leftHalf) {
         $0.hung = [100]
         $0.appNames = [100: "Hung App"]
@@ -207,7 +207,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     #expect(await rig.log == [])
 }
 
-@Test func anAppWithNoKnownNameIsCalledTheApp() async {
+@Test(.gated) func anAppWithNoKnownNameIsCalledTheApp() async {
     let rig = await Rig(start: leftHalf) { $0.hung = [100] }
     await rig.fake.configure { $0.windows[handle] = nil }
     let task = rig.start(request(.named(.rightHalf), source: .action(.rightHalf)))

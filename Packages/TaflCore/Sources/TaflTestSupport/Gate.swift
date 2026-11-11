@@ -94,17 +94,30 @@ public final class Gate: Sendable {
 public final class GateScope: Sendable {
     @TaskLocal public static var current: GateScope?
 
-    private let gates = Mutex<[Gate]>([])
+    private struct State {
+        var gates: [Gate] = []
+        var releases: [@Sendable () -> Void] = []
+    }
+
+    private let state = Mutex(State())
 
     fileprivate init() {}
 
     fileprivate func add(_ gate: Gate) {
-        gates.withLock { $0.append(gate) }
+        state.withLock { $0.gates.append(gate) }
     }
 
-    /// Opens every gate the test has made.
+    /// Registers what lets go a wait that no gate holds and cancellation cannot end (a fake's own
+    /// timeout, say), called with the gates when the scope opens them.
+    public func onOpen(_ release: @escaping @Sendable () -> Void) {
+        state.withLock { $0.releases.append(release) }
+    }
+
+    /// Opens every gate the test has made, and lets go what was registered with `onOpen`.
     public func openAll() {
-        for gate in gates.withLock({ $0 }) { gate.open() }
+        let (gates, releases) = state.withLock { ($0.gates, $0.releases) }
+        for gate in gates { gate.open() }
+        for release in releases { release() }
     }
 
     fileprivate func run(bound: Duration, _ body: () async throws -> Void) async throws {
