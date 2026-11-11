@@ -56,7 +56,7 @@ private func placed(_ achieved: ScreenRect, action: Action? = .leftHalf, on show
 }
 
 private func chain(_ frame: ScreenRect, open: Bool = true) -> RestoreRecord {
-    RestoreRecord(frame: frame, display: displayA.identity, visibleFrame: displayA.visibleFrame, chainOpen: open)
+    RestoreRecord(frame: frame, display: displayA.identity, visibleFrame: displayA.visibleFrame, displayFrame: displayA.frame, chainOpen: open)
 }
 
 private final class Seen: Sendable {

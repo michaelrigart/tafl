@@ -64,6 +64,43 @@ struct DisplayChangeRulesTests {
         ])
     }
 
+    private func recorded(_ frame: ScreenRect, on display: Display) -> StoredFrame {
+        StoredFrame(
+            display: display.identity,
+            relative: frame.relative(to: display.visibleFrame),
+            recorded: RecordedFrame(frame: frame, displayFrame: display.frame, visibleFrame: display.visibleFrame)
+        )
+    }
+
+    @Test func aRememberedFrameIsExactAfterTheDockChangedOnItsDisplay() {
+        let w = window(1, frame: rect(0, 25, 400, 300))
+        let remembered = recorded(rect(100, 100, 400, 300), on: displayA)
+        var docked = displayA
+        docked.visibleFrame = rect(100, 25, 900, 775)
+        let requests = plan(new: [docked], [atChange(w, remembered: remembered)])
+        #expect(requests.map(\.spec) == [.remembered(rect(100, 100, 400, 300))])
+    }
+
+    @Test func aRememberedFrameFollowsADisplayThatMovedAndStaysPartlyOffScreen() {
+        let w = window(1, frame: rect(0, 25, 400, 300))
+        let remembered = recorded(rect(2900, 100, 400, 300), on: displayB)
+        var moved = displayB
+        moved.frame = rect(-5000, 0, 2000, 1550)
+        moved.visibleFrame = moved.frame
+        let requests = plan(new: [displayA, moved], [atChange(w, remembered: remembered)])
+        #expect(requests.map(\.spec) == [.remembered(rect(-3100, 100, 400, 300))])
+    }
+
+    @Test func aRememberedFrameIsMappedWhenItsDisplayChangedResolution() {
+        let w = window(1, frame: rect(0, 25, 400, 300))
+        let remembered = recorded(rect(1500, 100, 400, 300), on: displayB)
+        var smaller = displayB
+        smaller.frame = rect(1000, 0, 1000, 775)
+        smaller.visibleFrame = smaller.frame
+        let requests = plan(new: [displayA, smaller], [atChange(w, remembered: remembered)])
+        #expect(requests.map(\.spec) == [.remembered(rect(1250, 50, 200, 150))])
+    }
+
     @Test func aRememberedFrameMostlyOffTheDisplayIsKeptOnScreen() {
         let w = window(1, frame: rect(0, 25, 400, 300))
         let remembered = StoredFrame(display: displayB.identity, relative: UnitRect(x: 0.975, y: 0, width: 0.2, height: 0.2))

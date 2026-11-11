@@ -35,7 +35,7 @@ public enum DisplayChangeRules {
             }
             if let remembered = entry.remembered,
                let home = newDisplays.first(where: { $0.identity == remembered.display }) {
-                let frame = remembered.relative.absolute(in: home.visibleFrame)
+                let frame = remembered.absolute(on: home)
                 // macOS restores a window to its frame on a known setup itself (measured on 27.2), and
                 // this rule steps aside for it: no move, and no later rule.
                 if snapshot.frame.isClose(to: frame, within: FrameCheck.tolerance) { return nil }

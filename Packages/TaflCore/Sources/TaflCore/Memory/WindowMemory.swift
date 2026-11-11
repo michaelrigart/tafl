@@ -29,12 +29,22 @@ public struct RestoreRecord: Codable, Equatable, Sendable {
     public var frame: ScreenRect
     public var display: DisplayIdentity
     public var visibleFrame: ScreenRect
+    /// The display's full frame, which the Dock and the menu bar don't change; nil in a file from
+    /// before Tafl kept it, which a restore then judges by the visible frame.
+    public var displayFrame: ScreenRect?
     public var chainOpen: Bool
 
-    public init(frame: ScreenRect, display: DisplayIdentity, visibleFrame: ScreenRect, chainOpen: Bool) {
+    public init(
+        frame: ScreenRect,
+        display: DisplayIdentity,
+        visibleFrame: ScreenRect,
+        displayFrame: ScreenRect? = nil,
+        chainOpen: Bool
+    ) {
         self.frame = frame
         self.display = display
         self.visibleFrame = visibleFrame
+        self.displayFrame = displayFrame
         self.chainOpen = chainOpen
     }
 }
@@ -55,6 +65,7 @@ public struct WindowPlacement: Equatable, Sendable {
             frame: before,
             display: display.identity,
             visibleFrame: display.visibleFrame,
+            displayFrame: display.frame,
             chainOpen: true
         )
     }
@@ -77,31 +88,63 @@ public struct WindowPlacement: Equatable, Sendable {
         restore = nil
     }
 
-    /// Where Restore puts the window: the chain's start, on its display, mapped onto the display as it
-    /// is now when its visible frame has changed, or onto `current` when that display is no longer
-    /// connected.
+    /// Where Restore puts the window: the chain's start, on its display, exact while that display is
+    /// unchanged, translated when it moved and mapped onto it when its size changed; mapped onto
+    /// `current` when the display is no longer connected. A target mostly off every display is kept
+    /// on screen.
     public func restoreTarget(current: Display, displays: [Display]) -> (ScreenRect, Display)? {
         guard let record = restore else { return nil }
         let home = displays.first(where: { $0.identity == record.display })
         let target = home ?? current
         let frame: ScreenRect
-        if home?.visibleFrame == record.visibleFrame {
-            frame = record.frame
+        if home != nil {
+            frame = DisplayTransfer.carried(
+                record.frame,
+                recordedDisplay: record.displayFrame,
+                recordedVisible: record.visibleFrame,
+                to: target
+            )
         } else {
-            let recorded = Display(identity: record.display, frame: record.visibleFrame, visibleFrame: record.visibleFrame)
-            frame = DisplayTransfer.relative(record.frame, from: recorded, to: target)
+            frame = DisplayTransfer.mapped(record.frame, from: record.visibleFrame, to: target.visibleFrame)
         }
         return (DisplayTransfer.keptOnScreen(frame, on: target, among: displays), target)
+    }
+}
+
+/// A frame as it was recorded, with the frame and visible frame of its display then.
+public struct RecordedFrame: Codable, Equatable, Sendable {
+    public var frame: ScreenRect
+    public var displayFrame: ScreenRect
+    public var visibleFrame: ScreenRect
+
+    public init(frame: ScreenRect, displayFrame: ScreenRect, visibleFrame: ScreenRect) {
+        self.frame = frame
+        self.displayFrame = displayFrame
+        self.visibleFrame = visibleFrame
     }
 }
 
 public struct StoredFrame: Codable, Equatable, Sendable {
     public var display: DisplayIdentity
     public var relative: UnitRect
+    /// The frame as it was; nil in a file from before Tafl kept it, which then goes by `relative`.
+    public var recorded: RecordedFrame?
 
-    public init(display: DisplayIdentity, relative: UnitRect) {
+    public init(display: DisplayIdentity, relative: UnitRect, recorded: RecordedFrame? = nil) {
         self.display = display
         self.relative = relative
+        self.recorded = recorded
+    }
+
+    /// Where the frame goes on `home` as it is now, by the rule `DisplayTransfer.carried` states.
+    public func absolute(on home: Display) -> ScreenRect {
+        guard let recorded else { return relative.absolute(in: home.visibleFrame) }
+        return DisplayTransfer.carried(
+            recorded.frame,
+            recordedDisplay: recorded.displayFrame,
+            recordedVisible: recorded.visibleFrame,
+            to: home
+        )
     }
 }
 
@@ -188,7 +231,8 @@ public struct WindowMemory: Codable, Equatable, Sendable {
     ) {
         lastKnown[setup, default: [:]][window] = StoredFrame(
             display: display.identity,
-            relative: frame.relative(to: display.visibleFrame)
+            relative: frame.relative(to: display.visibleFrame),
+            recorded: RecordedFrame(frame: frame, displayFrame: display.frame, visibleFrame: display.visibleFrame)
         )
     }
 
@@ -198,7 +242,7 @@ public struct WindowMemory: Codable, Equatable, Sendable {
 
     public func absolute(_ stored: StoredFrame, in displays: [Display]) -> ScreenRect? {
         guard let display = displays.first(where: { $0.identity == stored.display }) else { return nil }
-        return stored.relative.absolute(in: display.visibleFrame)
+        return stored.absolute(on: display)
     }
 
     public mutating func forget(_ window: WindowHandle) {

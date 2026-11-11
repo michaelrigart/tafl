@@ -197,7 +197,9 @@ private func leftHalf(nudgedBy dx: Double) -> ScreenRect {
     let onB = rect(1100, 100, 400, 300)
     owner.read(reading(onB))
     #expect(owner.windowMemory.lastKnown(handle, setup: DisplaySetup(docked)) == StoredFrame(
-        display: displayB.identity, relative: onB.relative(to: displayB.visibleFrame)
+        display: displayB.identity,
+        relative: onB.relative(to: displayB.visibleFrame),
+        recorded: RecordedFrame(frame: onB, displayFrame: displayB.frame, visibleFrame: displayB.visibleFrame)
     ))
 
     // An app whose moves are not observed, and a window that can't be placed, record nothing.
@@ -220,7 +222,7 @@ private func leftHalf(nudgedBy dx: Double) -> ScreenRect {
     #expect(owner.isTouched(handle))
     // The move came before the request: it goes on, and its first write opens a chain at the dragged frame.
     #expect(owner.willWrite(request.ticket, .position, targetVisible: v, displays: [displayA], firstWrite: FirstWrite(opensChainOn: displayA)) == .write)
-    #expect(owner.windowMemory.restore[handle] == RestoreRecord(frame: dragged, display: displayA.identity, visibleFrame: v, chainOpen: true))
+    #expect(owner.windowMemory.restore[handle] == RestoreRecord(frame: dragged, display: displayA.identity, visibleFrame: v, displayFrame: displayA.frame, chainOpen: true))
 }
 
 @Test func aMoveAfterResolveInterruptsTheRequestAndOutlivesItsEnd() {

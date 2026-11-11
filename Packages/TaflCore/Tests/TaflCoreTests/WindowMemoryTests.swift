@@ -90,6 +90,68 @@ struct WindowMemoryTests {
         #expect(target.1 == smaller)
     }
 
+    @Test func restoreAfterTheDockAppearedOnItsDisplayIsExact() throws {
+        var memory = WindowMemory()
+        memory.openChain(w1, before: rect(100, 100, 400, 300), on: displayA)
+        var docked = displayA
+        docked.visibleFrame = rect(100, 25, 900, 775)
+        let target = try #require(memory.restoreTarget(w1, current: docked, displays: [docked]))
+        #expect(target.0 == rect(100, 100, 400, 300))
+        #expect(target.1 == docked)
+    }
+
+    @Test func restoreAfterTheMenuBarGrewAndTheDockMovedIsExact() throws {
+        var memory = WindowMemory()
+        memory.openChain(w1, before: rect(1200, 150, 800, 600), on: displayB)
+        var changed = displayB
+        changed.visibleFrame = rect(1000, 60, 1900, 1490)
+        let target = try #require(memory.restoreTarget(w1, current: changed, displays: [displayA, changed]))
+        #expect(target.0 == rect(1200, 150, 800, 600))
+    }
+
+    @Test func restoreFollowsADisplayThatMovedAndKeepsAFramePartlyOffScreen() throws {
+        var memory = WindowMemory()
+        // A quarter of the window is on the display, the rest hangs off its right edge.
+        memory.openChain(w1, before: rect(2900, 100, 400, 300), on: displayB)
+        var moved = displayB
+        moved.frame = rect(-5000, 0, 2000, 1550)
+        moved.visibleFrame = moved.frame
+        let target = try #require(memory.restoreTarget(w1, current: moved, displays: [displayA, moved]))
+        #expect(target.0 == rect(-3100, 100, 400, 300))
+    }
+
+    @Test func restoreFollowsADisplayThatMovedAndLostSomeReservedSpace() throws {
+        var memory = WindowMemory()
+        memory.openChain(w1, before: rect(1500, 100, 400, 300), on: displayB)
+        var moved = movedB()
+        moved.visibleFrame = rect(-2000, 40, 2000, 1510)
+        let target = try #require(memory.restoreTarget(w1, current: moved, displays: [displayA, moved]))
+        #expect(target.0 == rect(-1500, 100, 400, 300))
+    }
+
+    @Test func restoreFromARecordWithoutTheDisplayFrameGoesByTheVisibleFrame() throws {
+        var memory = WindowMemory()
+        memory.openChain(w1, before: rect(100, 100, 400, 300), on: displayA)
+        memory.restore[w1]?.displayFrame = nil
+        let target = try #require(memory.restoreTarget(w1, current: displayA, displays: [displayA]))
+        #expect(target.0 == rect(100, 100, 400, 300))
+        var docked = displayA
+        docked.visibleFrame = rect(100, 25, 900, 775)
+        let mapped = try #require(memory.restoreTarget(w1, current: docked, displays: [docked]))
+        #expect(mapped.0 == rect(190, 100, 360, 300))
+    }
+
+    @Test func aRestoreRecordFromBeforeTheDisplayFrameDecodesWithoutIt() throws {
+        var memory = WindowMemory()
+        memory.openChain(w1, before: rect(100, 100, 400, 300), on: displayA)
+        let current = try JSONEncoder().encode(memory.restore[w1])
+        #expect(try JSONDecoder().decode(RestoreRecord.self, from: current).displayFrame == displayA.frame)
+        var object = try #require(JSONSerialization.jsonObject(with: current) as? [String: Any])
+        object["displayFrame"] = nil
+        let old = try JSONSerialization.data(withJSONObject: object)
+        #expect(try JSONDecoder().decode(RestoreRecord.self, from: old).displayFrame == nil)
+    }
+
     @Test func restoreFromAFileFollowsAnArrangementThatChangedSinceTheSave() throws {
         var saved = WindowMemory()
         saved.openChain(w1, before: rect(1500, 100, 400, 300), on: displayB)
@@ -142,9 +204,13 @@ struct WindowMemoryTests {
         let stored = try #require(memory.lastKnown(w1, setup: setup))
         #expect(stored.display == displayA.identity)
         var resized = displayA
+        resized.frame = rect(0, 0, 2000, 1600)
         resized.visibleFrame = rect(0, 25, 2000, 1550)
         #expect(memory.absolute(stored, in: [resized]) == rect(200, 175, 800, 600))
         #expect(memory.absolute(stored, in: [displayB]) == nil)
+        var docked = displayA
+        docked.visibleFrame = rect(100, 25, 900, 775)
+        #expect(memory.absolute(stored, in: [docked]) == rect(100, 100, 400, 300))
         #expect(memory.lastKnown(w2, setup: setup) == nil)
         #expect(memory.lastKnown(w1, setup: DisplaySetup([displayB])) == nil)
     }

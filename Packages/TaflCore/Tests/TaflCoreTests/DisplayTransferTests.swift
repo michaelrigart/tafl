@@ -2,10 +2,13 @@ import Testing
 @testable import TaflCore
 
 struct DisplayTransferTests {
-    @Test func relativeTransfer() {
-        let from = display(v)
-        let to = display(rect(1000, 0, 2000, 1550))
-        #expect(DisplayTransfer.relative(rect(100, 100, 400, 300), from: from, to: to) == rect(1200, 150, 800, 600))
+    @Test func mappedTransfer() {
+        #expect(DisplayTransfer.mapped(rect(100, 100, 400, 300), from: v, to: rect(1000, 0, 2000, 1550)) == rect(1200, 150, 800, 600))
+    }
+
+    @Test func mappingKeepsAFramePartlyOffScreenWhereItsShareSays() {
+        let target = rect(1000, 0, 1000, 775)
+        #expect(DisplayTransfer.mapped(rect(900, 700, 300, 200), from: v, to: target) == rect(1900, 675, 300, 200))
     }
 
     @Test func pullsOnScreen() {
@@ -18,9 +21,7 @@ struct DisplayTransferTests {
     }
 
     @Test func degenerateSourceKeepsSize() {
-        let from = display(rect(0, 0, 0, 0))
-        let to = display(v)
-        #expect(DisplayTransfer.relative(rect(900, 700, 300, 200), from: from, to: to) == rect(700, 600, 300, 200))
+        #expect(DisplayTransfer.mapped(rect(900, 700, 300, 200), from: rect(0, 0, 0, 0), to: v) == rect(700, 600, 300, 200))
     }
 
     @Test func aFrameSpreadAcrossTwoDisplaysCountsOnBoth() {

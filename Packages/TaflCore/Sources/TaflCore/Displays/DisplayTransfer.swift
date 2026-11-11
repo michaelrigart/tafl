@@ -1,11 +1,38 @@
 import Foundation
 
 public enum DisplayTransfer {
-    public static func relative(_ frame: ScreenRect, from: Display, to: Display) -> ScreenRect {
-        let source = from.visibleFrame
-        guard source.width > 0, source.height > 0 else { return pulledOnScreen(frame, into: to.visibleFrame) }
-        let moved = frame.relative(to: source).absolute(in: to.visibleFrame)
-        return pulledOnScreen(moved, into: to.visibleFrame)
+    /// `frame` mapped by its share of `source` onto the same share of `target`, with no pull onto the screen.
+    public static func mapped(_ frame: ScreenRect, from source: ScreenRect, to target: ScreenRect) -> ScreenRect {
+        guard source.width > 0, source.height > 0 else { return pulledOnScreen(frame, into: target) }
+        return frame.relative(to: source).absolute(in: target)
+    }
+
+    /// `frame`, recorded on a display whose frame and visible frame were `recordedDisplay` (nil in a
+    /// record from before Tafl kept it) and `recordedVisible`, as it goes on `display` now. Exact while
+    /// the display itself is unchanged, whatever its reserved space (the Dock, the menu bar) did;
+    /// translated by the display's move when it only moved; mapped onto it when its size changed.
+    /// Nothing here pulls the frame onto the screen: `keptOnScreen` is the only pull.
+    public static func carried(
+        _ frame: ScreenRect,
+        recordedDisplay: ScreenRect?,
+        recordedVisible: ScreenRect,
+        to display: Display
+    ) -> ScreenRect {
+        if let recordedDisplay {
+            if display.frame == recordedDisplay { return frame }
+            if display.frame.size == recordedDisplay.size {
+                return ScreenRect(
+                    origin: ScreenPoint(
+                        x: frame.x + display.frame.x - recordedDisplay.x,
+                        y: frame.y + display.frame.y - recordedDisplay.y
+                    ),
+                    size: frame.size
+                )
+            }
+        } else if display.visibleFrame == recordedVisible {
+            return frame
+        }
+        return mapped(frame, from: recordedVisible, to: display.visibleFrame)
     }
 
     public static func pulledOnScreen(_ frame: ScreenRect, into visible: ScreenRect) -> ScreenRect {

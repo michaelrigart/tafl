@@ -3003,7 +3003,7 @@ func largerAndSmallerPullAnOffScreenWindowOntoTheScreen(action: Action) async {
     await acting.bounded()
     #expect(await rig.frame() == rightHalfA)
     #expect(await rig.engine.memory.read().restore[handle] == RestoreRecord(
-        frame: dragged, display: displayA.identity, visibleFrame: v, chainOpen: true
+        frame: dragged, display: displayA.identity, visibleFrame: v, displayFrame: displayA.frame, chainOpen: true
     ))
     // The drag's own notification reads the window after the action: Tafl's own frame by then.
     await rig.emit(.windowMoved(handle))

@@ -459,7 +459,7 @@ private func aStopWhileTheWriteWaitsOnTheQueueRefusesItAtItsAdmission(_ part: Fi
     let rig = await Rig(start: crossStart, reapplyDelay: .milliseconds(25), configure: steppedSize)
     let task = rig.start(steppedJob(firstWrite: FirstWrite(opensChainOn: displayA)))
     await rig.clock.waitForSleepers(1)
-    #expect(rig.chain == RestoreRecord(frame: crossStart, display: displayA.identity, visibleFrame: v, chainOpen: true))
+    #expect(rig.chain == RestoreRecord(frame: crossStart, display: displayA.identity, visibleFrame: v, displayFrame: displayA.frame, chainOpen: true))
     await rig.clock.advance(by: .milliseconds(25))
     #expect(await task.bounded() == .placed(steppedAchieved))
     #expect(rig.chain?.frame == crossStart)
