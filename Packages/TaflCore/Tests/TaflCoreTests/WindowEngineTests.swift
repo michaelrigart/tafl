@@ -732,9 +732,11 @@ private final class Rig: Sendable {
 @Test func aReloadThatAddsALayoutClaimingTheCurrentSetupMovesNothing() async {
     let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: start)])
     await rig.engine.start(config: config())
+    await rig.quiescent()
     #expect(await rig.log.isEmpty)
 
     await rig.engine.update(config: config(layouts: [dock]))
+    await rig.quiescent()
     #expect(await rig.log.isEmpty)
     #expect(await rig.frame() == start)
     #expect(await rig.engine.activeLayoutName == nil)
@@ -860,6 +862,7 @@ private func dockedRig() async -> Rig {
         $0.launched = [100: saveDate.addingTimeInterval(-60)]
     }
     await rig.engine.start(config: config())
+    await rig.quiescent()
     #expect(await rig.log.isEmpty)
     #expect(await rig.engine.memory.read().lastDisplays == [displayA])
     await rig.changeDisplays(to: [displayA])
@@ -884,6 +887,7 @@ private func startingOnAPlaceholderWithNothingRememberedRecordsAndStoresNothingA
     }
     let rig = await Rig(displays: [placeholder], windows: [window(1, frame: start)], store: store)
     await rig.engine.start(config: config())
+    await rig.quiescent()
     #expect(await rig.log.isEmpty)
     #expect(await rig.engine.memory.read().lastDisplays.isEmpty)
     #expect(await rig.engine.knownDisplays.isEmpty)
@@ -1272,6 +1276,7 @@ private func temporaryStore() -> (MemoryStore, URL) {
     await first.engine.stop()
     let second = await Rig(windows: [window(1, frame: start)], store: store)
     await second.engine.start(config: config())
+    await second.quiescent()
     #expect(await second.log.isEmpty)
     await second.quiescent()
     #expect(await second.reportsUpToNow().contains { if case .memory = $0 { true } else { false } })
@@ -1362,6 +1367,7 @@ private func storeHolding(_ memory: WindowMemory) throws -> (MemoryStore, URL) {
     }
     await rig.engine.start(config: config())
     // Rule 2 has nothing for it: the window stays where it is.
+    await rig.quiescent()
     #expect(await rig.log.isEmpty)
     #expect(await rig.frame() == start)
     let memory = await rig.engine.memory.read()
@@ -1390,6 +1396,7 @@ private func storeHolding(_ memory: WindowMemory) throws -> (MemoryStore, URL) {
     defer { try? FileManager.default.removeItem(at: directory) }
     let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: start)], store: store)
     await rig.engine.start(config: config())
+    await rig.quiescent()
     #expect(await rig.log.isEmpty)
     #expect(await rig.engine.memory.read().restore[handle] == nil)
 }
@@ -1678,6 +1685,7 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
         $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.moved])]
     }
     await second.engine.start(config: config())
+    await second.quiescent()
     #expect(await second.frame(of: other.handle) == moved.frame)
     #expect(await second.log.isEmpty)
     await second.quiescent()
