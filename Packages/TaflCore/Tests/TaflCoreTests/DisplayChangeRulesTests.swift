@@ -101,6 +101,17 @@ struct DisplayChangeRulesTests {
         #expect(requests.map(\.spec) == [.remembered(rect(1250, 50, 200, 150))])
     }
 
+    @Test func aRememberedFrameMappedForAChangedResolutionStaysPartlyOffScreen() {
+        let w = window(1, frame: rect(0, 25, 400, 300))
+        // Half of it hangs off the display's right edge, before and after the mapping.
+        let remembered = recorded(rect(2800, 100, 400, 300), on: displayB)
+        var smaller = displayB
+        smaller.frame = rect(1000, 0, 1000, 775)
+        smaller.visibleFrame = smaller.frame
+        let requests = plan(new: [displayA, smaller], [atChange(w, remembered: remembered)])
+        #expect(requests.map(\.spec) == [.remembered(rect(1900, 50, 200, 150))])
+    }
+
     @Test func aRememberedFrameMostlyOffTheDisplayIsKeptOnScreen() {
         let w = window(1, frame: rect(0, 25, 400, 300))
         let remembered = StoredFrame(display: displayB.identity, relative: UnitRect(x: 0.975, y: 0, width: 0.2, height: 0.2))

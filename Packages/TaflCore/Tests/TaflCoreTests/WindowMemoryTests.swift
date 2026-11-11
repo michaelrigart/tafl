@@ -120,6 +120,25 @@ struct WindowMemoryTests {
         #expect(target.0 == rect(-3100, 100, 400, 300))
     }
 
+    @Test func restoreMappedOntoADisplayThatChangedResolutionKeepsAFramePartlyOffScreen() throws {
+        var memory = WindowMemory()
+        // Half of the window is on the display, the rest hangs off its right edge; mapped, it still does.
+        memory.openChain(w1, before: rect(2800, 100, 400, 300), on: displayB)
+        var smaller = displayB
+        smaller.frame = rect(1000, 0, 1000, 775)
+        smaller.visibleFrame = smaller.frame
+        let target = try #require(memory.restoreTarget(w1, current: smaller, displays: [displayA, smaller]))
+        #expect(target.0 == rect(1900, 50, 200, 150))
+    }
+
+    @Test func restoreMappedOntoTheCurrentDisplayKeepsAFramePartlyOffScreen() throws {
+        var memory = WindowMemory()
+        memory.openChain(w1, before: rect(2800, 100, 400, 300), on: displayB)
+        let target = try #require(memory.restoreTarget(w1, current: displayA, displays: [displayA]))
+        #expect(target.0 == rect(900, 75, 200, 150))
+        #expect(target.1 == displayA)
+    }
+
     @Test func restoreFollowsADisplayThatMovedAndLostSomeReservedSpace() throws {
         var memory = WindowMemory()
         memory.openChain(w1, before: rect(1500, 100, 400, 300), on: displayB)
