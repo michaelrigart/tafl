@@ -713,6 +713,22 @@ private final class Rig: Sendable {
     #expect(await rig.frame() == rightHalfA)
 }
 
+@Test func aReloadThatAddsALayoutClaimingTheCurrentSetupMovesNothing() async {
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: start)])
+    await rig.engine.start(config: config())
+    #expect(await rig.log.isEmpty)
+
+    await rig.engine.update(config: config(layouts: [dock]))
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.frame() == start)
+    #expect(await rig.engine.activeLayoutName == nil)
+
+    // The layout waits to be applied, and is there to be.
+    await rig.engine.applyLayout(named: "Dock")
+    #expect(await rig.engine.activeLayoutName == "Dock")
+    #expect(await rig.frame() != start)
+}
+
 // MARK: Display changes
 
 private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstThird, display: "Desk")])
@@ -735,6 +751,37 @@ private let dock = layout("Dock", displays: ["Built-in", "Desk"], [slot(.firstTh
     #expect(await rig.log.isEmpty)
     #expect(await rig.frame() == rect(1100, 100, 400, 300))
     #expect(await rig.engine.activeLayoutName == nil)
+}
+
+@Test func aChangeOfArrangementMovesNothing() async {
+    // The Desk display moves to the left of the built-in one, and macOS takes its window along.
+    let before = rect(1100, 100, 400, 300)
+    let rig = await Rig(displays: bothDisplays, windows: [window(1, frame: before)])
+    await rig.engine.start(config: config(layouts: [dock]))
+    let rearranged = Display(
+        identity: displayB.identity, frame: rect(-2000, 0, 2000, 1550), visibleFrame: rect(-2000, 0, 2000, 1550)
+    )
+    let along = rect(-1900, 100, 400, 300)
+    await rig.fake.configure { $0.windows[handle]?.frame = along }
+    await rig.changeDisplays(to: [displayA, rearranged])
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.frame() == along)
+    #expect(await rig.engine.activeLayoutName == nil)
+    #expect(await displayChangesHandled(rig) == 0)
+}
+
+@Test func aChangeOfResolutionMovesNothing() async {
+    let wide = Display(
+        identity: displayA.identity, frame: rect(0, 0, 2000, 800), visibleFrame: rect(0, 25, 2000, 775)
+    )
+    let alone = layout("Alone", displays: ["Built-in"], [slot(.rightHalf)])
+    let rig = await Rig(windows: [window(1, frame: start)])
+    await rig.engine.start(config: config(layouts: [alone]))
+    await rig.changeDisplays(to: [wide])
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.frame() == start)
+    #expect(await rig.engine.activeLayoutName == nil)
+    #expect(await displayChangesHandled(rig) == 0)
 }
 
 // MARK: A placeholder display (DarkWake)
