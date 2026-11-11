@@ -22,13 +22,18 @@ final class ManualClock: TaflClock {
         let parked: EngineActivity.Parked?
         /// Whether cancellation cuts the sleep short.
         let cancellable: Bool
-        /// Called just before the sleeper is counted again, for a test that gives a task woken too early time to run.
+        /// Runs inside the unpark, just before the sleeper is counted again: a slow unpark, for a test
+        /// that gives a task woken too early time to look at the count.
         let beforeUnpark: (@Sendable () -> Void)?
 
         func wake(with result: Result<Void, any Error>) {
+            unpark()
+            continuation.resume(with: result)
+        }
+
+        private func unpark() {
             beforeUnpark?()
             parked?.unpark()
-            continuation.resume(with: result)
         }
     }
 
@@ -118,7 +123,8 @@ final class ManualClock: TaflClock {
         for sleeper in stuck { sleeper.wake(with: .success(())) }
     }
 
-    /// Runs `hook` in the waker just before it counts a woken engine task again; for sleeps begun after this.
+    /// Slows the waker's unpark: `hook` runs in it just before it counts a woken engine task again, for
+    /// sleeps begun after this.
     func beforeUnparking(_ hook: @escaping @Sendable () -> Void) {
         state.withLock { $0.beforeUnpark = hook }
     }
