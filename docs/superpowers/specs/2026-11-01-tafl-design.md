@@ -831,6 +831,9 @@ with `/usr/bin/log`, because zsh has a `log` builtin.
     never overwritten;
   - the pipeline against the fake platform: steps run in order; a failure before any write
     stops the pipeline before Record and is reported; nothing is retried on its own.
+- **How tests wait:** tests wait only through the shared test support (`TaflTestSupport`), and
+  engine tests on the engine being quiescent; a test that cannot reach its condition fails at
+  its bound instead of hanging; `scripts/lint-tests` enforces it in CI.
 - **A platform probe** for Debug builds only, started with a launch argument as in Linger.
   It runs from `/Applications` and logs the window list, display identities, the
   corrected visible frames, and the event order during a display change. It is run again
