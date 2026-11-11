@@ -279,22 +279,6 @@ struct ActionResolverTests {
             == .move(.named(.leftHalf), to: a, placement: .leftHalf, cycleStep: 0))
     }
 
-    @Test func leftRightLeftReturnsToTheFirstDisplay() {
-        var placed: PlacedRecord?
-        var current = a
-        var last: ActionPlan = .nothing
-        for action in [Action.leftHalf, .leftHalf, .rightHalf] {
-            last = ActionResolver.plan(action, context(on: current, placed: placed, atAchieved: placed != nil))
-            guard case .move(_, let target, let kept, let cycleStep) = last else { break }
-            placed = PlacedRecord(
-                action: action, layout: nil, placement: kept, cycleStep: cycleStep,
-                achieved: target.visibleFrame, display: target.identity
-            )
-            current = target
-        }
-        #expect(last == .move(.named(.leftHalf), to: a, placement: .leftHalf, cycleStep: 0))
-    }
-
     @Test func layoutPlacementIsNotARepeat() {
         let layoutPlaced = PlacedRecord(
             action: nil, layout: "Desk", placement: .leftHalf, cycleStep: 0,

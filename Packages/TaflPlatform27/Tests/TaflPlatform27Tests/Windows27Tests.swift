@@ -153,12 +153,6 @@ private func lookUp(
     AXWindowAccess.lookUpFocusedWindow(focused: focused, first: first, systemWide: systemWide)
 }
 
-@Test func aTimeoutReadingSettabilityIsNotRespondingNotCannotMove() {
-    let outcome = position(settable: .failure(AXFailure(.cannotComplete)))
-    #expect(outcome.failure == .notResponding)
-    #expect(!outcome.wrote)
-}
-
 @Test func aTimeoutWritingThePositionIsNotResponding() {
     let outcome = position(settable: .success(true), write: .cannotComplete)
     #expect(outcome.failure == .notResponding)

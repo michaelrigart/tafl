@@ -204,6 +204,7 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(500))
     #expect(await task.bounded() == .failed(.notResponding(app: "Hung App")))
+    #expect(await rig.log == [])
 }
 
 @Test func anAppWithNoKnownNameIsCalledTheApp() async {
@@ -213,15 +214,6 @@ private let dragged: @Sendable (inout WindowSnapshot) -> Void = {
     await rig.clock.waitForSleepers(1)
     await rig.clock.advance(by: .milliseconds(500))
     #expect(await task.bounded() == .failed(.notResponding(app: "The app")))
-}
-
-@Test func anAppThatDoesNotAnswerFailsWithItsName() async {
-    let rig = await Rig(start: leftHalf) { $0.hung = [100] }
-    let task = rig.start(request(.named(.rightHalf), source: .action(.rightHalf)))
-    await rig.clock.waitForSleepers(1)
-    await rig.clock.advance(by: .milliseconds(500))
-    #expect(await task.bounded() == .failed(.notResponding(app: "Terminal")))
-    #expect(await rig.log == [])
 }
 
 @Test func planningSeesTheResolvedWindow() async {

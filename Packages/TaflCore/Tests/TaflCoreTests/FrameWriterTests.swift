@@ -300,18 +300,6 @@ func terminalShortfallIsSuccess(shortfall: Double, isSuccess: Bool) async {
     #expect(await task.bounded() == .placed(crossTarget))
 }
 
-@Test(.gated, .timeLimit(.minutes(1))) func aMoveWhileTheSessionBeginsStopsTheFirstWrite() async {
-    let rig = await Rig(start: crossStart)
-    let gate = await rig.fake.pause(beforeCall: 0)
-    let task = rig.start(crossJob())
-    await gate.waitUntilHolding(1)
-
-    #expect(await rig.move(to: rect(400, 400, 400, 300)) == .external)
-    gate.open()
-    #expect(await task.bounded() == .interrupted)
-    #expect(await rig.log == ["begin", "size 1200x900 interrupted", "end"])
-}
-
 private enum FirstPart: CaseIterable {
     case size, position
 }

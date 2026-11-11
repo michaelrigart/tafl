@@ -138,29 +138,6 @@ private final class Taken: Sendable {
     #expect(await fake.windows[w.handle]?.frame == rect(0, 0, 500, 400))
 }
 
-@Test func hungAppFails() async throws {
-    let w = window(1, frame: rect(0, 0, 100, 100), pid: 100)
-    let (fake, clock) = await makeFake(w)
-    await fake.configure { $0.hung = [100] }
-
-    let finished = Mutex(false)
-    let attempt = Task {
-        let result = await fake.beginWriting(w.handle)
-        finished.withLock { $0 = true }
-        return result
-    }
-    await clock.waitForSleepers(1)
-    await clock.advance(by: .milliseconds(499))
-    #expect(finished.withLock { $0 } == false)
-
-    await clock.advance(by: .milliseconds(1))
-    guard case .failure(let failure) = await attempt.bounded() else {
-        Issue.record("beginWriting on a hung app succeeded")
-        return
-    }
-    #expect(failure == .notResponding)
-}
-
 @Test func hungAppFailsReadsThroughTheSessionAndFreesTheSlot() async throws {
     let w = window(1, frame: rect(0, 0, 100, 100), pid: 100)
     let (fake, clock) = await makeFake(w)
