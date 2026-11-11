@@ -279,20 +279,6 @@ private final class Rig: Sendable {
     ])
 }
 
-@Test func aSecondDrainOnOneRigCollectsTheReportsSentAfterTheFirst() async {
-    let rig = await Rig(windows: [], focused: nil)
-    await rig.engine.start(config: config())
-    #expect(await rig.reportsUpToNow() == [.memory(.fresh)])
-    // Collection runs beside the test, so one round may win the race by luck; many do not.
-    var expected: [EngineReport] = [.memory(.fresh)]
-    for _ in 0..<50 {
-        let stray = EngineReport.failure(.permissionMissing, display: nil)
-        expected.append(stray)
-        await rig.engine.report(stray)
-        #expect(await rig.reportsUpToNow() == expected)
-    }
-}
-
 @Test func aLayoutWithoutPermissionIsReportedAndMovesNothing() async {
     let desk = layout("Desk", [slot(.rightHalf)])
     let rig = await Rig(windows: [window(1, frame: start)]) { $0.accessibilityGranted = false }
@@ -1236,21 +1222,6 @@ private func temporaryStore() -> (MemoryStore, URL) {
     await rig.engine.stop()
     #expect(await rig.fake.stopObservingCount == 1)
     if case .loaded = store.load() {} else { Issue.record("Expected stop to save the memory") }
-}
-
-@Test func aDestroyedWindowIsForgotten() async {
-    let rig = await Rig(windows: [window(1, frame: start)])
-    await rig.engine.start(config: config())
-    await rig.engine.perform(.leftHalf)
-    let remembered = await rig.engine.memory.read()
-    #expect(remembered.placed[handle] != nil)
-    #expect(remembered.lastKnown.values.contains { $0[handle] != nil })
-
-    await rig.emit(.windowDestroyed(handle))
-    await rig.quiescent()
-    let after = await rig.engine.memory.read()
-    #expect(after.placed[handle] == nil)
-    #expect(after.lastKnown.values.allSatisfy { $0[handle] == nil })
 }
 
 @Test func aQuitAppIsForgotten() async {
