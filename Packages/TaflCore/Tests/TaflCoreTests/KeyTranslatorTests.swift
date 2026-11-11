@@ -34,6 +34,35 @@ struct KeyTranslatorTests {
         #expect(shifted.modifiers == [.control, .option, .command, .shift])
     }
 
+    /// The numeric keypad prints its digits and operators without Shift, on every layout.
+    private func withKeypad(_ table: KeyboardLayoutTable) -> KeyboardLayoutTable {
+        let keypad: [UInt16: String] = [
+            82: "0", 83: "1", 84: "2", 85: "3", 86: "4", 87: "5", 88: "6", 89: "7", 91: "8", 92: "9",
+            65: ",", 67: "*", 69: "+", 75: "/", 78: "-", 81: "=",
+        ]
+        return KeyboardLayoutTable(table.outputs.merging(keypad.mapValues { KeyOutputs(plain: $0, shifted: $0) }) { current, _ in current })
+    }
+
+    @Test("A digit never matches the numeric keypad: on AZERTY it names the top-row key, on US it is the top-row key")
+    func digitsAreTheTopRow() throws {
+        let azerty = withKeypad(.frenchAZERTY)
+        #expect(try message("ctrl+opt+cmd+1", azerty) == "\"1\" needs a modifier that isn't in the shortcut; use \"&\" instead")
+        #expect(try chord("ctrl+opt+cmd+&", azerty).get().keyCode == 18)
+        #expect(try chord("ctrl+opt+cmd+shift+1", azerty).get().keyCode == 18)
+        #expect(try chord("ctrl+opt+cmd+1", withKeypad(.usANSI)).get().keyCode == 18)
+    }
+
+    @Test("A character only the numeric keypad prints is not on the layout")
+    func keypadOnlyCharacterIsNotOnTheLayout() throws {
+        let table = KeyboardLayoutTable(withKeypad(.usANSI).outputs.filter { $0.key != 24 })
+        #expect(try message("ctrl+opt+=", table) == "\"=\" isn't on the current keyboard layout")
+    }
+
+    @Test("A keypad key has no display shortcut")
+    func keypadKeyHasNoShortcut() {
+        #expect(KeyTranslator.shortcut(for: KeyChord(keyCode: 83, modifiers: [.control]), table: withKeypad(.usANSI)) == nil)
+    }
+
     @Test("A character the layout lacks is reported")
     func notOnLayout() throws {
         #expect(try message("ctrl+opt+é", .usANSI) == "\"é\" isn't on the current keyboard layout")
