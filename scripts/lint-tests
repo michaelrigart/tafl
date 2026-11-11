@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Fails when a test waits other than through TaflTestSupport: a yield, a sleep, the wall clock, a
-# task's value, or a continuation of its own. TaflTestSupport lives under Sources, so it is not
-# scanned. A justified exception carries `// lint-tests: allow <reason>` on its line; the script
-# lists every one.
+# task's value or result, a semaphore, or a continuation of its own. TaflTestSupport lives under
+# Sources, so it is not scanned. Every rule is checked on every line, and a justified exception
+# names the rules it allows: `// lint-tests: allow <rule>[, <rule>]: <reason>` on the line, so it
+# cannot hide a second violation there. The script lists every exception.
+#
+# It reads one line at a time, so it cannot see a wait split over lines: `await` on one line and
+# `.value` or `.result` on the next, or a clock or semaphore held in a variable and used later.
 set -euo pipefail
 
 if [[ $# -gt 1 ]]; then
@@ -13,16 +17,20 @@ fi
 root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 marker='// lint-tests: allow'
 
-# Each rule: what it catches, then the pattern (POSIX extended).
+# Each rule: the name an allow marker uses, what it catches, then the pattern (POSIX extended).
 rules=(
-  "Task.yield()" 'Task\.yield\(\)'
-  "Task.sleep" 'Task\.sleep'
-  "Thread.sleep" 'Thread\.sleep'
-  "usleep" '(^|[^[:alnum:]_])usleep\('
-  "Date() as a clock" '(^|[^[:alnum:]_])Date\(\)'
-  "ContinuousClock as a clock" '(^|[^[:alnum:]_])ContinuousClock'
-  "a task's .value" 'await.*\.value([^[:alnum:]_]|$)'
-  "a continuation of its own" 'with(Checked|Unsafe)(Throwing)?Continuation'
+  "task-yield" "Task.yield()" 'Task\.yield\(\)'
+  "task-sleep" "Task.sleep" 'Task\.sleep'
+  "thread-sleep" "Thread.sleep" 'Thread\.sleep'
+  "usleep" "usleep" '(^|[^[:alnum:]_])usleep\('
+  "date" "Date() as a clock" '(^|[^[:alnum:]_])Date\(\)'
+  "date-now" "Date.now as a clock" '(^|[^[:alnum:]_])Date\.now([^[:alnum:]_]|$)'
+  "continuous-clock" "ContinuousClock as a clock" '(^|[^[:alnum:]_])ContinuousClock'
+  "suspending-clock" "SuspendingClock as a clock" '(^|[^[:alnum:]_])SuspendingClock'
+  "task-value" "a task's .value" 'await.*\.value([^[:alnum:]_]|$)'
+  "task-result" "a task's .result" 'await.*\.result([^[:alnum:]_]|$)'
+  "semaphore" "a DispatchSemaphore" '(^|[^[:alnum:]_])DispatchSemaphore'
+  "continuation" "a continuation of its own" 'with(Checked|Unsafe)(Throwing)?Continuation'
 )
 
 files=()
@@ -42,24 +50,37 @@ for file in "${files[@]}"; do
     number=$((number + 1))
     # Comments may name what they forbid.
     [[ "$line" =~ ^[[:space:]]*// ]] && continue
-    for ((i = 0; i < ${#rules[@]}; i += 2)); do
-      name="${rules[i]}"
-      pattern="${rules[i + 1]}"
-      [[ "$line" =~ $pattern ]] || continue
-      if [[ "$line" == *"$marker"* ]]; then
-        reason="${line#*"$marker"}"
-        reason="${reason#"${reason%%[![:space:]]*}"}"
-        if [[ -z "$reason" ]]; then
-          echo "$relative:$number: an allow marker needs a reason: $name" >&2
-          failures=$((failures + 1))
-        else
-          allowed+=("$relative:$number: $name: $reason")
-        fi
-      else
+    # The marker names the rules it allows, up to a colon; the rest of the line is its reason.
+    allows=""
+    reason=""
+    marked=0
+    code="$line"
+    if [[ "$line" == *"$marker"* ]]; then
+      marked=1
+      code="${line%%"$marker"*}"
+      rest="${line#*"$marker"}"
+      allows="${rest%%:*}"
+      [[ "$rest" == *:* ]] && reason="${rest#*:}"
+      reason="${reason#"${reason%%[![:space:]]*}"}"
+      allows="${allows//,/ }"
+    fi
+    for ((i = 0; i < ${#rules[@]}; i += 3)); do
+      id="${rules[i]}"
+      name="${rules[i + 1]}"
+      pattern="${rules[i + 2]}"
+      [[ "$code" =~ $pattern ]] || continue
+      if [[ $marked -eq 0 ]]; then
         echo "$relative:$number: waits with $name; wait through TaflTestSupport instead" >&2
         failures=$((failures + 1))
+      elif [[ -z "$reason" ]]; then
+        echo "$relative:$number: an allow marker needs a reason after its rules: $name" >&2
+        failures=$((failures + 1))
+      elif [[ " $allows " != *" $id "* ]]; then
+        echo "$relative:$number: the allow marker does not name $id: $name" >&2
+        failures=$((failures + 1))
+      else
+        allowed+=("$relative:$number: $name: $reason")
       fi
-      break
     done
   done < "$file"
 done

@@ -47,7 +47,7 @@ import Testing
         executable: URL(filePath: "/bin/sh"),
         arguments: ["-c", "echo $$ > \"$1\"; trap '' TERM; while :; do /bin/sleep 0.05; done", "sh", pidFile.path],
         timeout: 0.5)
-    let elapsed = await ContinuousClock().measure { #expect(await check.run() == nil) } // lint-tests: allow measures how soon the child is killed, not a wait
+    let elapsed = await ContinuousClock().measure { #expect(await check.run() == nil) } // lint-tests: allow continuous-clock: measures how soon the child is killed, not a wait
     #expect(elapsed < .seconds(3))
     let text = try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
     let pid = try #require(pid_t(text))

@@ -75,14 +75,29 @@ expect_failure "a task's value" $'@Test func t() async {\n    _ = await Task { 1
 expect_failure "a checked continuation" $'@Test func t() async {\n    await withCheckedContinuation { $0.resume() }\n}'
 expect_failure "an unsafe continuation" $'@Test func t() async {\n    await withUnsafeContinuation { $0.resume() }\n}'
 expect_failure "a throwing continuation" $'@Test func t() async throws {\n    try await withCheckedThrowingContinuation { $0.resume() }\n}'
-expect_failure "an allow marker without a reason" $'@Test func t() async {\n    await Task.yield() // lint-tests: allow\n}'
+expect_failure "a task's result" $'@Test func t() async {\n    _ = await Task { 1 }.result\n}'
+expect_failure "a dispatch semaphore" $'@Test func t() {\n    let release = DispatchSemaphore(value: 0)\n}'
+expect_failure "SuspendingClock polled" $'@Test func t() {\n    let start = SuspendingClock.now\n}'
+expect_failure "Date.now polled" $'@Test func t() {\n    let start = Date.now\n}'
+expect_failure "an allow marker without a reason" $'@Test func t() async {\n    await Task.yield() // lint-tests: allow task-yield\n}'
+expect_failure "an allow marker with an empty reason" $'@Test func t() async {\n    await Task.yield() // lint-tests: allow task-yield:\n}'
+expect_failure "an allow marker that names no rule" $'@Test func t() async {\n    await Task.yield() // lint-tests: allow because I say so\n}'
+expect_failure "an allow marker for another rule" $'@Test func t() async {\n    await Task.yield() // lint-tests: allow task-sleep: not this one\n}'
+expect_failure "a second violation on an allowed line" \
+  $'@Test func t() async throws {\n    try await Task.sleep(for: .seconds(1)); let start = Date() // lint-tests: allow task-sleep: the first only\n}'
 
 expect_success "a clean file" $'@Test func t() async {\n    await waitUntil("a flag") { flag.isSet }\n    #expect(tally.value == 2)\n}'
 expect_success "a name that ends in Date()" $'@Test func aProcessHasNoLaunchDate() {\n    #expect(launchDate() == nil)\n}'
 expect_success "a comment that names a forbidden wait" $'/// Never waits with Task.sleep or Task.yield().\n@Test func t() {}'
 expect_success "a line allowed with a reason" \
-  $'@Test func t() async throws {\n    try await Task.sleep(for: .seconds(1)) // lint-tests: allow nothing to wait on but time\n}' \
+  $'@Test func t() async throws {\n    try await Task.sleep(for: .seconds(1)) // lint-tests: allow task-sleep: nothing to wait on but time\n}' \
   "KitTests.swift:2: Task.sleep: nothing to wait on but time"
+expect_success "a marker that allows two rules on its line" \
+  $'@Test func t() async throws {\n    try await Task.sleep(for: .seconds(1)); let start = Date() // lint-tests: allow task-sleep, date: both on purpose\n}' \
+  "KitTests.swift:2: Date() as a clock: both on purpose"
+expect_success "a reason that names a forbidden wait" \
+  $'@Test func t() {\n    let start = Date() // lint-tests: allow date: not a Task.sleep or a Task.yield()\n}' \
+  "KitTests.swift:2: Date() as a clock: not a Task.sleep or a Task.yield()"
 
 # Build products are not the repository's tests.
 repo="$(fixture "a build checkout" $'@Test func t() {}')"

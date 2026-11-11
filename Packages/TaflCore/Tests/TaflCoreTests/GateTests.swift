@@ -1,3 +1,4 @@
+import Dispatch
 import Synchronization
 import Testing
 @testable import TaflTestSupport
@@ -139,5 +140,44 @@ private struct Failure: Error {}
             // Held in the test's own step, which nothing else would let go.
             await gate.hold()
         }
+    }
+}
+
+@Test(.gated, .timeLimit(.minutes(1))) func aThreadGateHoldsEveryThreadUntilItOpensAndLetsLaterOnesThrough() async {
+    let gate = ThreadGate()
+    let entered = Tally()
+    let through = Tally()
+    for _ in 0..<2 {
+        DispatchQueue.global().async {
+            entered.increment()
+            gate.hold()
+            through.increment()
+        }
+    }
+    await entered.wait(for: 2, "both threads to reach the gate")
+    gate.open()
+    await through.wait(for: 2, "both threads to pass the gate")
+    gate.hold()
+}
+
+@Test(.gated, .timeLimit(.minutes(1))) func aThreadGateOpensWhenTheTestsScopeOpens() async throws {
+    let gate = ThreadGate()
+    let entered = Tally()
+    let through = Tally()
+    DispatchQueue.global().async {
+        entered.increment()
+        gate.hold()
+        through.increment()
+    }
+    await entered.wait(for: 1, "the thread to reach the gate")
+    try #require(GateScope.current).openAll()
+    await through.wait(for: 1, "the thread to pass the gate")
+}
+
+@Test(.gated, .timeLimit(.minutes(1))) func aThreadHeldPastItsBoundGoesOnAndFailsTheTest() async {
+    let gate = ThreadGate()
+    await withKnownIssue("the hold records the wait that failed") {
+        // A task of the test's, so the issue it records is the test's.
+        await Task { gate.hold(timeout: .milliseconds(50)) }.bounded()
     }
 }

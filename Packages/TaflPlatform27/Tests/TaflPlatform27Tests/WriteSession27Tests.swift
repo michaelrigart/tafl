@@ -45,15 +45,15 @@ private func aWriteIsAdmittedOnItsAppsQueueBehindTheWorkAlreadyThere(_ part: Par
 /// A position write's settability query can block on a hung app. A stop that arrives meanwhile
 /// (a newer request, a newer layout, a reconfiguration) refuses the write, because its admission
 /// is asked after the query, immediately before the setter.
-@Test(.timeLimit(.minutes(1)))
+@Test(.gated, .timeLimit(.minutes(1)))
 private func aStopArrivingWhileThePositionsSettabilityQueryBlocksRefusesTheWrite() async {
     let pid = pid_t(Int32.max)
     let stopped = Mutex(false)
-    let release = DispatchSemaphore(value: 0)
+    let release = ThreadGate()
     let entered = Tally()
     let session = session(pid: pid, queue: AXQueue(), settable: { _, _ in
         entered.increment()
-        release.wait()
+        release.hold()
         return .success(true)
     })
     let write = Task {
@@ -61,6 +61,6 @@ private func aStopArrivingWhileThePositionsSettabilityQueryBlocksRefusesTheWrite
     }
     await entered.wait(for: 1, "settability queries")
     stopped.withLock { $0 = true }
-    release.signal()
+    release.open()
     #expect(await write.bounded() == .success(.cancelled))
 }

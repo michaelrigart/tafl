@@ -86,10 +86,11 @@ points at Xcode, and don't change `xcode-select`.
   `build/dd-<name>.noindex`.
 - Never open Loop's source. Rectangle ports keep its notice in `LICENSE`.
 - Tests wait only through `TaflTestSupport`: `waitUntil` for a named condition, `task.bounded()`,
-  a `Gate` in a `.gated` test, a `Tally`, a `Collector` for a stream, and in engine tests the
-  rig's `quiescent()`. Never a yield, a sleep, the wall clock, a task's `.value` or a continuation
-  of the test's own; `scripts/lint-tests` checks it in CI, and a justified exception carries
-  `// lint-tests: allow <reason>` on its line.
+  a `Gate` in a `.gated` test (a `ThreadGate` for work on a thread of its own), a `Tally`, a
+  `Collector` for a stream, and in engine tests the rig's `quiescent()`. Never a yield, a sleep,
+  the wall clock, a task's `.value` or `.result`, a semaphore or a continuation of the test's own;
+  `scripts/lint-tests` checks it in CI, and a justified exception carries
+  `// lint-tests: allow <rule>: <reason>` on its line, naming each rule it allows.
 
 ## Probe
 

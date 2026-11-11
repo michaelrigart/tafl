@@ -16,16 +16,16 @@ import TaflTestSupport
     #expect(queue.queueCount == 1)
 }
 
-@Test(.timeLimit(.minutes(1)))
+@Test(.gated, .timeLimit(.minutes(1)))
 func forgettingWaitsForWorkAlreadyOnTheQueue() async {
     let queue = AXQueue()
     let order = Mutex<[String]>([])
     let started = Tally()
-    let release = DispatchSemaphore(value: 0)
+    let release = ThreadGate()
     let work = Task {
         await queue.run(pid: 7) {
             started.increment()
-            release.wait()
+            release.hold()
             order.withLock { $0.append("work finished") }
         }
     }
@@ -40,7 +40,7 @@ func forgettingWaitsForWorkAlreadyOnTheQueue() async {
     await queued.wait(for: 1, "drops queued")
     #expect(queue.queueCount == 1)
     #expect(order.withLock { $0 }.isEmpty)
-    release.signal()
+    release.open()
     await work.bounded()
     await forgetting.bounded()
     #expect(order.withLock { $0 } == ["work finished", "forgotten"])
