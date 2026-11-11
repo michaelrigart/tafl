@@ -35,7 +35,18 @@ public func waitUntilCancelled(
     timeout: Duration = defaultWaitBound,
     sourceLocation: SourceLocation = #_sourceLocation
 ) async {
-    switch await reach(timeout: timeout, { Task.isCancelled }) {
+    await waitForCancellation(condition, timeout: timeout, sourceLocation: sourceLocation) { Task.isCancelled }
+}
+
+/// `waitUntilCancelled` with the check it makes between yields given, so a test can land the cancel
+/// at the exact point it matters: after `observing` has said no and before the wait looks again.
+func waitForCancellation(
+    _ condition: String,
+    timeout: Duration,
+    sourceLocation: SourceLocation,
+    observing isCancelled: () async -> Bool
+) async {
+    switch await reach(timeout: timeout, isCancelled) {
     case .held, .cancelled:
         return
     case .boundPassed:

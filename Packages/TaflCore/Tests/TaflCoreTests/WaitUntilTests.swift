@@ -1,6 +1,6 @@
 import Synchronization
 import Testing
-import TaflTestSupport
+@testable import TaflTestSupport
 
 private final class Flag: Sendable {
     private let value = Mutex(false)
@@ -34,15 +34,22 @@ private final class Flag: Sendable {
 }
 
 /// A cancellation that lands between the wait's checks is the condition arriving, not the wait being
-/// abandoned: `waitUntil { Task.isCancelled }` reports it as a cancelled wait and records an issue.
-@Test(.timeLimit(.minutes(1))) func aWaitForCancellationEndsWithoutAnIssueHoweverLateTheCancelArrives() async {
-    // The cancel is sent after a different number of yields each time, to land at different points of the wait.
-    for yields in 0..<300 {
-        let waiting = Task { await waitUntilCancelled("the task to be cancelled", timeout: .seconds(30)) }
-        for _ in 0..<yields % 40 { await Task.yield() } // lint-tests: allow task-yield: paces the cancel against the wait under test, which a condition cannot
-        waiting.cancel()
-        await waiting.bounded()
+/// abandoned: the check says no, the cancel lands, and the wait finds the task cancelled. The check
+/// here cancels its own task and says no, so the wait meets that case on its first look.
+@Test(.timeLimit(.minutes(1))) func aCancelBetweenTheChecksEndsTheWaitForCancellationWithoutAnIssue() async {
+    let waiting = Task {
+        await waitForCancellation("the task to be cancelled", timeout: .seconds(30), sourceLocation: #_sourceLocation) {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return false
+        }
     }
+    await waiting.bounded()
+}
+
+@Test(.timeLimit(.minutes(1))) func aWaitForCancellationEndsWithoutAnIssueWhenTheTaskIsCancelled() async {
+    let waiting = Task { await waitUntilCancelled("the task to be cancelled", timeout: .seconds(30)) }
+    waiting.cancel()
+    await waiting.bounded()
 }
 
 @Test(.timeLimit(.minutes(1))) func aWaitForCancellationThatNeverComesFailsAtItsBoundNamingTheCondition() async {
