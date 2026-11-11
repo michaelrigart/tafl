@@ -186,13 +186,21 @@ private let parking: ParkHook = {
 @Test(.timeLimit(.minutes(1))) func aCancelledSleepOfTheEnginesTaskCountsItAgainBeforeItEnds() async {
     let clock = ManualClock()
     let activity = EngineActivity()
+    // What the task reads once the cancelled sleep has woken it: the task ends right after, so the
+    // count can't be read from outside without racing its end.
+    let readAfterWake = Mutex<Int?>(nil)
     let unit = activity.startingTask()
-    let task = Task { await unit.run { try? await clock.sleep(for: .seconds(1)) } }
+    let task = Task {
+        await unit.run {
+            try? await clock.sleep(for: .seconds(1))
+            readAfterWake.withLock { $0 = activity.running }
+        }
+    }
     await clock.waitForSleepers(1)
     #expect(activity.running == 0)
     task.cancel()
-    #expect(activity.running == 1)
     await task.bounded()
+    #expect(readAfterWake.withLock { $0 } == 1)
     // Nothing is left over: a count below zero would make the next wait return early.
     #expect(activity.running == 0)
 }
