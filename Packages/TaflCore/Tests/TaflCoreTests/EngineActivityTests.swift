@@ -53,6 +53,33 @@ private let parking: ParkHook = {
     #expect(activity.running == 0)
 }
 
+/// The woken task must never read the engine as quiet after it ran on, so the waker counts it before
+/// it resumes it. The hook here is slow, which gives a task resumed first time to look at the count.
+@Test(.gated, .timeLimit(.minutes(1))) func aGateCountsAHeldTaskAgainBeforeItResumesIt() async {
+    let activity = EngineActivity()
+    let gate = Gate()
+    let unit = activity.startingTask()
+    let readAfterWake = Mutex<Int?>(nil)
+    let slowParking: ParkHook = {
+        guard let parked = EngineActivity.parkCurrentTask() else { return nil }
+        return {
+            var spins = 0
+            while spins < 300_000, readAfterWake.withLock({ $0 }) == nil { spins += 1 }
+            parked.unpark()
+        }
+    }
+    let task = Task {
+        await unit.run {
+            await gate.hold(parking: slowParking)
+            readAfterWake.withLock { $0 = activity.running }
+        }
+    }
+    await gate.waitUntilHolding(1)
+    gate.open()
+    await task.bounded()
+    #expect(readAfterWake.withLock { $0 } == 1)
+}
+
 @Test(.gated, .timeLimit(.minutes(1))) func workATaskAwaitsInAnotherTaskCountsAsTheTaskRunning() async {
     let activity = EngineActivity()
     let gate = Gate()
@@ -99,8 +126,13 @@ private let parking: ParkHook = {
 @Test(.timeLimit(.minutes(1))) func quietWaitsForTheEventsItWasToldOf() async {
     let activity = EngineActivity()
     let quiet = Task { await activity.quiet(afterEvents: 2) }
+    await waitUntil("the wait for quiet to be pending") { activity.waiting == 1 }
     activity.receivedEvent()
+    // One event of two: the wait is still pending, with no work running.
+    #expect(activity.running == 0)
+    #expect(activity.waiting == 1)
     activity.receivedEvent()
+    #expect(activity.waiting == 0)
     await quiet.bounded()
     #expect(activity.eventsReceived == 2)
 }
@@ -126,6 +158,29 @@ private let parking: ParkHook = {
     await clock.advance(by: .seconds(1))
     await task.bounded()
     #expect(activity.running == 0)
+}
+
+/// As for a gate: the clock counts a sleeping engine task again before it resumes it, so the task
+/// never reads the engine as quiet once it has run on. The hook gives a task resumed first time to look.
+@Test(.timeLimit(.minutes(1))) func aWakeOfTheEnginesSleepingTaskCountsItBeforeItRuns() async {
+    let clock = ManualClock()
+    let activity = EngineActivity()
+    let readAfterWake = Mutex<Int?>(nil)
+    clock.beforeUnparking {
+        var spins = 0
+        while spins < 300_000, readAfterWake.withLock({ $0 }) == nil { spins += 1 }
+    }
+    let unit = activity.startingTask()
+    let task = Task {
+        await unit.run {
+            try? await clock.sleep(for: .seconds(1))
+            readAfterWake.withLock { $0 = activity.running }
+        }
+    }
+    await clock.waitForSleepers(1)
+    await clock.advance(by: .seconds(1))
+    await task.bounded()
+    #expect(readAfterWake.withLock { $0 } == 1)
 }
 
 @Test(.timeLimit(.minutes(1))) func aCancelledSleepOfTheEnginesTaskCountsItAgainBeforeItEnds() async {

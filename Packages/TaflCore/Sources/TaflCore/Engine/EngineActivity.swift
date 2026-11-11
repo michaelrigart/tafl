@@ -139,6 +139,9 @@ final class EngineActivity: Sendable {
     /// How many events the engine has received and dealt with.
     var eventsReceived: Int { state.withLock { $0.eventsReceived } }
 
+    /// How many `quiet` waits are pending.
+    var waiting: Int { state.withLock { $0.waiters.count } }
+
     /// How much work is counted now.
     var running: Int { state.withLock { $0.running } }
 
