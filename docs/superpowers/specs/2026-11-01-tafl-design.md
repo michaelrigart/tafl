@@ -756,13 +756,18 @@ Settings shows the configuration in plain language and never edits it.
   pending restart began, less the apps whose tries are still pending, so a newer restart takes
   over an earlier one's pending tries, while an app the tries gave up on is not tried by the
   next restart. An app's quit or Tafl stopping ends its tries.
-- **An app that launches** and fails to register while it is still launching is tried again
-  when it finishes launching, and then 3 s and 10 s after Tafl learns it is unobservable: one
-  that registers then is observed, its windows are placed as a launch's would be (an active
-  layout places them), and it takes part in the display-change rules; one that still fails after
-  the last try stays unobservable. The app's quit, Tafl stopping or a restart ends these tries;
-  a restart re-registers every app and its own rules decide, and a try still running when it
-  begins changes nothing.
+- **An app found unobservable outside a restart** (a launch that failed to register, whatever
+  the error and whether or not the app was still launching, or an app first met through a
+  query) is tried again 3 s and 10 s after Tafl learns it, as an app is after a wake; an
+  app that is still launching is also tried once when it finishes launching, before Tafl learns
+  anything. One that registers is observed, its windows are placed as a launch's would be (an
+  active layout places them), and it takes part in the display-change rules; one that still
+  fails after the last try stays unobservable. The platform says that the app is observed in the
+  same ordered stream as the announcements of its windows, before them, so a window announced
+  by the registration is judged by the app's new state. An app whose tries are pending when a
+  restart begins counts as one whose tries are pending (see above): the restart tries it again if
+  it still fails. The app's quit and Tafl stopping end its tries, and a restart replaces them with
+  its own; a try still running when a restart begins changes nothing.
 
 ### Menu bar icon
 
