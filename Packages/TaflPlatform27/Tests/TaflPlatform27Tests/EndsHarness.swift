@@ -63,9 +63,12 @@ struct EndsHarness {
             windowID: ResolvedWindowID(id: UInt32(windowID ?? id), by: .privateSymbol))
     }
 
-    /// Hands the translator a notification for the element named `id`.
+    /// Hands the translator a notification for the element named `id`. The reader registers no window,
+    /// so nothing is ever announced.
     func notify(_ notification: String, _ id: pid_t) {
-        translator.enqueue(AXObserverHub.Event(pid: Self.pid, bundleID: nil, notification: notification, element: element(id).element))
+        translator.enqueue(
+            AXObserverHub.Event(pid: Self.pid, bundleID: nil, notification: notification, element: element(id).element),
+            announce: { _ in false })
     }
 
     /// The events delivered from here up to and including `last`.

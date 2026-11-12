@@ -44,7 +44,12 @@ actor FakePlatform: WindowPlatform {
     /// Launch dates by process id. A pid not listed is running since long ago while it has a
     /// window, and is not running otherwise.
     var launched: [Int32: Date] = [:]
+    /// What the next registration of each app misses: `startObserving` and `observeAgain(pids:)` answer
+    /// from it, and publish it as the app's outcome. An app not listed observes fully.
     var unobserved: [UnobservedApp] = []
+    /// What each app's current registration misses, as its latest outcome event said. The fake
+    /// announces a window only while that observes placement, as the platform does.
+    private(set) var current: [Int32: Set<ObservedEvent>] = [:]
 
     private(set) var callLog: [String] = []
     /// The windows each `raise(_:)` call was given, in order. Not part of `callLog`.
@@ -61,12 +66,13 @@ actor FakePlatform: WindowPlatform {
     var displaysGate: Gate?
     /// Holds the next `visibleWindows()` call until the gate opens.
     var visibleWindowsGate: Gate?
-    /// Holds the next `startObserving(notices:)` call until the gate opens.
+    /// Holds the next `startObserving(notices:)` call, once it has published its outcomes, until the
+    /// gate opens.
     var startObservingGate: Gate?
-    /// Reads `unobserved` for the next `observeAgain(pids:)` call, then holds its result until the gate opens.
+    /// Holds the next `observeAgain(pids:)` call, once it has published its outcomes, until the gate opens.
     var observeAgainGate: Gate?
-    /// The windows an `observeAgain(pids:)` that registers an app announces, as the platform's catch-up
-    /// does, before the call returns.
+    /// The windows an `observeAgain(pids:)` that registers an app announces, after its outcome, as the
+    /// platform's catch-up does, before the call returns.
     var observeAgainAnnounces: [WindowSnapshot] = []
     /// Reads the windows, then holds the result of the next `visibleWindows()` until the gate opens.
     var visibleWindowsLateGate: Gate?
@@ -112,15 +118,19 @@ actor FakePlatform: WindowPlatform {
     }
 
     /// Emits an event as the platform does: a window's announcement, end or app's quit reaches the
-    /// notices first, in the same step.
+    /// notices first, in the same step. A window is announced only while its app's current registration
+    /// observes placement; an outcome makes the registration it reports the app's current one.
     func emit(_ event: PlatformEvent) {
         switch event {
         case .windowCreated(let snapshot):
-            // As the platform: it announces no window of an app whose creations it cannot observe.
-            guard !unobserved.contains(where: { $0.pid == snapshot.handle.pid && $0.missing.contains(.created) }) else { return }
+            guard current[snapshot.handle.pid, default: []].isDisjoint(with: [.created, .moved, .resized, .destroyed])
+            else { return }
             notices?.announced(snapshot)
         case .windowDestroyed(let window): notices?.destroyed(window)
-        case .appQuit(let pid): notices?.quit(pid: pid)
+        case .appQuit(let pid):
+            current[pid] = nil
+            notices?.quit(pid: pid)
+        case .observability(let pid, _, let missing, _): current[pid] = missing
         default: break
         }
         send(event)
@@ -140,13 +150,6 @@ actor FakePlatform: WindowPlatform {
     private func send(_ event: PlatformEvent) {
         eventsSent += 1
         eventSink.yield(event)
-    }
-
-    /// Emits an `.unobservable` event for each entry in `unobserved`.
-    func emitUnobserved() {
-        for app in unobserved {
-            emit(.unobservable(pid: app.pid, bundleID: app.bundleID, missing: app.missing))
-        }
     }
 
     /// Holds the `snapshot(of:)` call with this index, counted from 0, until the returned gate opens.
@@ -295,23 +298,33 @@ actor FakePlatform: WindowPlatform {
 
     func capabilities() async -> [CapabilityState] { capabilityStates }
 
+    /// Registers every app as the platform does, each publishing its outcome before the call returns:
+    /// an app in `unobserved` misses what it lists, and one whose registration missed something before
+    /// observes fully now. The apps in `unobserved` are the answer.
     func startObserving(notices: any WindowNotices) async -> [UnobservableApp] {
         self.notices = notices
         startObservingCount += 1
+        let answer = unobserved.map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
+        let recovered = current.filter { !$0.value.isEmpty && !answer.map(\.pid).contains($0.key) }.keys
+        for pid in recovered.sorted() { emit(.observability(pid: pid, bundleID: nil, missing: [], retrying: false)) }
+        for app in answer { emit(.observability(pid: app.pid, bundleID: app.bundleID, missing: app.missing, retrying: false)) }
         if let gate = startObservingGate {
             startObservingGate = nil
             await hold(gate)
         }
-        return unobserved.map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
+        return answer
     }
 
-    /// Answers from `unobserved`, as `startObserving` does: a test changes it to say what a retry finds.
+    /// Registers each app again as `startObserving` does, answering from `unobserved`: a test changes it
+    /// to say what a retry finds. An app that registers then has `observeAgainAnnounces` announced.
     func observeAgain(pids: Set<Int32>) async -> [UnobservableApp] {
         observeAgainCalls.append(pids)
         let answer = unobserved.filter { pids.contains($0.pid) }
             .map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
         for pid in pids.sorted() {
-            guard answer.first(where: { $0.pid == pid }) == nil else { continue }
+            let found = answer.first { $0.pid == pid }
+            emit(.observability(pid: pid, bundleID: found?.bundleID, missing: found?.missing ?? [], retrying: false))
+            guard found == nil else { continue }
             for snapshot in observeAgainAnnounces where snapshot.handle.pid == pid { emit(.windowCreated(snapshot)) }
         }
         if let gate = observeAgainGate {

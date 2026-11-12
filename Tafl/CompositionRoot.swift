@@ -52,13 +52,17 @@ final class CompositionRoot {
 
     init() {
         let clock = SystemClock()
-        let platform = PlatformFactory.make(accessibilityGranted: { [permission] in permission.isTrusted })
+        let timing = EngineTiming.measured27
+        let platform = PlatformFactory.make(
+            accessibilityGranted: { [permission] in permission.isTrusted },
+            clock: clock,
+            observeRetryDelays: timing.observeRetryDelays)
         self.platform = platform
         engine = WindowEngine(
             platform: platform,
             store: MemoryStore(fileURL: Self.memoryURL),
             clock: clock,
-            timing: .measured27,
+            timing: timing,
             steps: [GapStep(), MinimumSizeStep(), OnScreenStep()],
             adjustments: MacOSAdjustment.measured27)
         activator = ShortcutActivator(registrar: registrar)

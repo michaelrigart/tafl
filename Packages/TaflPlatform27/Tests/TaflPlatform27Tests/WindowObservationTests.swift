@@ -26,10 +26,20 @@ import TaflTestSupport
     #expect(failures.values.allSatisfy { $0 != .success })
 }
 
-// MARK: The launch retry and the claim on a pid
+// MARK: The claim on a pid, and the tries after a failed registration
 
 private let launching = AppInfo27(pid: 4242, bundleID: "com.example.Slow", name: "Slow", isHidden: false)
+private let other = AppInfo27(pid: 4343, bundleID: "com.example.Other", name: "Other", isHidden: false)
 private let timeout: [String: AXError] = [kAXWindowMovedNotification: .cannotComplete]
+/// Calendar while it launches: every notification refused.
+private let refused = Dictionary(uniqueKeysWithValues: AXObserverHub.notifications.map { ($0, AXError.cannotComplete) })
+private let everyEvent: Set<ObservedEvent> = [.created, .moved, .resized, .titleChanged, .destroyed]
+private let retryDelays: [Duration] = [.seconds(3), .seconds(10)]
+
+/// The outcome event a registration of `app` publishes.
+private func outcome(_ missing: Set<ObservedEvent>, retrying: Bool = false, of app: AppInfo27 = launching) -> PlatformEvent {
+    .observability(pid: app.pid, bundleID: app.bundleID, missing: missing, retrying: retrying)
+}
 
 private final class Counter: Sendable {
     private let value = Mutex(0)
@@ -53,11 +63,106 @@ private final class Flag: Sendable {
     }
 }
 
+/// The platform's waits before its tries, each held until the test lets it go. A wait whose try is
+/// cancelled, because its claim ended, ends at once and throws, as the clock's sleep does. Once the
+/// test's scope opens its gates, every wait, later ones too, ends at once, so tries left running finish.
+private final class HeldWaits: Sendable {
+    private struct Wait {
+        let delay: Duration
+        let gate: Gate
+    }
+
+    private struct State {
+        var waits: [Wait] = []
+        var isReleased = false
+    }
+
+    private let state = Mutex(State())
+    private let cancelled = Tally()
+
+    init() {
+        GateScope.current?.onOpen { [self] in releaseAll() }
+    }
+
+    /// What each wait asked for, in order.
+    var delays: [Duration] { state.withLock { $0.waits.map(\.delay) } }
+
+    func sleep(for delay: Duration) async throws {
+        let gate = Gate()
+        let released = state.withLock { state -> Bool in
+            state.waits.append(Wait(delay: delay, gate: gate))
+            return state.isReleased
+        }
+        if released { gate.open() }
+        await withTaskCancellationHandler {
+            await gate.hold()
+        } onCancel: {
+            cancelled.increment()
+            gate.open()
+        }
+        try Task.checkCancellation()
+    }
+
+    func waitForWaits(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async {
+        await waitUntil("\(count) waits before a try", sourceLocation: sourceLocation) { state.withLock { $0.waits.count } >= count }
+    }
+
+    /// Lets the wait with this index go, counted from 0.
+    func release(_ index: Int, sourceLocation: SourceLocation = #_sourceLocation) {
+        guard let gate = state.withLock({ index < $0.waits.count ? $0.waits[index].gate : nil }) else {
+            Issue.record("No wait \(index) to let go", sourceLocation: sourceLocation)
+            return
+        }
+        gate.open()
+    }
+
+    func waitForCancelled(_ count: Int, sourceLocation: SourceLocation = #_sourceLocation) async {
+        await cancelled.wait(for: count, "cancelled waits", sourceLocation: sourceLocation)
+    }
+
+    private func releaseAll() {
+        let gates = state.withLock { state -> [Gate] in
+            state.isReleased = true
+            return state.waits.map(\.gate)
+        }
+        gates.forEach { $0.open() }
+    }
+}
+
+/// The handler each registration was given, in order: a test delivers a notification through it as
+/// the hub would for that registration.
+private final class Handlers: Sendable {
+    private let all = Mutex<[AXObserverHub.Handler]>([])
+
+    func append(_ handler: @escaping AXObserverHub.Handler) {
+        all.withLock { $0.append(handler) }
+    }
+
+    /// Delivers the notification through the handler of the registration with this index, counted from 0.
+    func deliver(_ event: AXObserverHub.Event, through index: Int) {
+        all.withLock { $0[index] }(event)
+    }
+}
+
 private func windowBox(_ id: UInt32) -> AXElementBox { AXElementBox(AXUIElementCreateApplication(pid_t(id))) }
 
 private let catchUpAttributes = WindowAttributes27(
     role: "AXWindow", subrole: "AXStandardWindow", title: "Doc", frame: CGRect(x: 0, y: 0, width: 100, height: 100),
     canMove: true, canResize: true, minSize: nil, isFullscreen: false, isMinimized: false)
+
+/// Reads any element as a standard window whose id is the pid the element was made from.
+private let echoReader = WindowReader27(
+    readTracked: { element, _, _, then in
+        let id = UInt32(AXWindowAccess.pid(element.element) ?? 0)
+        return then(ElementRead(element: element, attributes: catchUpAttributes, windowID: ResolvedWindowID(id: id, by: .privateSymbol)))
+    },
+    title: { _, _ in "Doc" },
+    app: { pid in AppInfo27(pid: pid, bundleID: "com.example.Slow", name: "Slow", isHidden: false) },
+    afterReads: { _, work in work() })
+
+private func notification(_ name: String, _ id: UInt32) -> AXObserverHub.Event {
+    AXObserverHub.Event(pid: 4242, bundleID: nil, notification: name, element: windowBox(id).element)
+}
 
 private struct ObservationHarness {
     let observation: WindowObservation27
@@ -71,31 +176,40 @@ private struct ObservationHarness {
     /// How many times the registration for a pid was taken back.
     let stops = Counter()
     let notices = RecordedNotices()
+    let waits = HeldWaits()
+    let handlers = Handlers()
 
-    /// `outcomes` answers each registration in turn and then repeats its last answer. A catch-up
-    /// registers the windows `found` names, once `catchUpGate` releases it when there is one. The
-    /// wait for a launch to finish is held at `gate` when there is one.
+    /// `outcomes` answers each registration, of any app, in turn and then repeats its last answer;
+    /// `held` holds each registration on its app's queue until it opens. Only `launching` is ever still
+    /// launching, and only when `isLaunching`: its wait to finish is held at `gate` when there is one. A
+    /// catch-up registers the windows `found` names, once `catchUpGate` releases it when there is one.
+    /// A failed launch or query is tried again at `retryDelays`, each wait held in `waits`.
     init(
         isLaunching: Bool = true, gate: Gate? = nil, outcomes: [[String: AXError]],
-        found: [UInt32] = [], catchUpGate: Gate? = nil
+        found: [UInt32] = [], catchUpGate: Gate? = nil, held: ThreadGate? = nil, retryDelays: [Duration] = []
     ) {
         let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
         let registrations = Counter()
         let isRunning = isRunning
         let announcements = announcements
         let stops = stops
+        let waits = waits
+        let handlers = handlers
         let axQueue = AXQueue()
         let registry = registry
         observation = WindowObservation27(
-            axQueue: axQueue, registry: registry, catalog: WindowCatalog27(registry: registry, axQueue: axQueue),
+            axQueue: axQueue, registry: registry,
             events: continuation,
             notices: notices,
+            retryDelays: retryDelays,
             environment: .init(
                 isRunning: { _ in isRunning.isSet },
-                isLaunching: { _ in isLaunching },
+                isLaunching: { pid in isLaunching && pid == launching.pid },
                 untilFinishedLaunching: { _ in await gate?.hold() },
-                register: { _, _, _, _ in
+                register: { _, _, _, handler in
+                    handlers.append(handler)
                     let index = registrations.increment()
+                    held?.hold()
                     return outcomes[min(index, outcomes.count - 1)]
                 },
                 stop: { _, _ in _ = stops.increment() },
@@ -111,7 +225,9 @@ private struct ObservationHarness {
                         steps.append(WindowObservation27.Found(entry: entry, announcement: announce(entry)))
                     }
                     return steps
-                }))
+                },
+                reader: echoReader,
+                sleep: { try await waits.sleep(for: $0) }))
         self.continuation = continuation
         self.registrations = registrations
         events = Collector(stream)
@@ -121,141 +237,122 @@ private struct ObservationHarness {
     func next(sourceLocation: SourceLocation = #_sourceLocation) async -> PlatformEvent? {
         await events.next(sourceLocation: sourceLocation)
     }
+
+    /// The events published up to now, each expected in turn, then nothing more.
+    func expectEvents(_ expected: [PlatformEvent], sourceLocation: SourceLocation = #_sourceLocation) async {
+        continuation.yield(.reconfigurationEnded)
+        for event in expected + [.reconfigurationEnded] {
+            #expect(await next(sourceLocation: sourceLocation) == event, sourceLocation: sourceLocation)
+        }
+    }
 }
 
 @Test(.gated, .timeLimit(.minutes(1)))
-func anAppThatQuitDuringTheLaunchWaitIsNeverReportedUnobservable() async {
+func anAppThatQuitDuringTheLaunchWaitIsNeverReportedAgain() async {
     let gate = Gate()
-    let harness = ObservationHarness(gate: gate, outcomes: [timeout])
-    guard case .retrying(let retry) = await harness.observation.attempt(launching) else {
-        Issue.record("expected a retry")
-        return
-    }
+    let harness = ObservationHarness(gate: gate, outcomes: [timeout, [:]], found: [5001])
+    #expect(await harness.observation.observe(launching) == UnobservableApp(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
+    let tries = harness.observation.tries(of: 4242)
     await harness.observation.appQuit(pid: launching.pid)
     gate.open()
-    await retry.bounded()
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .appQuit(pid: 4242))
-    #expect(await harness.next() == .reconfigurationEnded)
+    await tries?.bounded()
+    // The claim ended while the launch wait held: nothing is published, and nothing is logged as observed.
+    await harness.expectEvents([outcome([.moved], retrying: true), .appQuit(pid: 4242)])
     #expect(harness.registrations.count == 1)
+    // Nor does the ended wait leave its windows owed: a query that meets a new process on the pid
+    // announces nothing.
+    await harness.observation.discover(launching)
+    await harness.expectEvents([outcome([])])
+    #expect(harness.announcements.count == 0)
 }
 
 @Test(.gated, .timeLimit(.minutes(1)))
 func aNewAppOnTheSamePidIsNotTakenOverByTheOldRetry() async {
     let gate = Gate()
     let harness = ObservationHarness(gate: gate, outcomes: [timeout, timeout, timeout])
-    guard case .retrying(let retry) = await harness.observation.attempt(launching) else {
-        Issue.record("expected a retry")
-        return
-    }
+    _ = await harness.observation.observe(launching)
+    let first = harness.observation.tries(of: 4242)
     await harness.observation.appQuit(pid: launching.pid)
-    guard case .retrying(let second) = await harness.observation.attempt(launching) else {
-        Issue.record("the reused pid is claimed afresh")
-        return
-    }
+    _ = await harness.observation.observe(launching)
+    let second = harness.observation.tries(of: 4242)
+    #expect(second != nil && second != first)
     gate.open()
-    await retry.bounded()
-    await second.bounded()
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .appQuit(pid: 4242))
-    #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
-    #expect(await harness.next() == .reconfigurationEnded)
+    await first?.bounded()
+    await second?.bounded()
+    await harness.expectEvents([
+        outcome([.moved], retrying: true), .appQuit(pid: 4242),
+        outcome([.moved], retrying: true), outcome([.moved]),
+    ])
+    #expect(harness.registrations.count == 3)
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aRetryThatSucceedsReportsNothing() async {
+func aRegistrationOnceTheAppHasFinishedLaunchingPublishesItObserved() async {
     let harness = ObservationHarness(outcomes: [timeout, [:]])
-    guard case .retrying(let retry) = await harness.observation.attempt(launching) else {
-        Issue.record("expected a retry")
-        return
-    }
-    await retry.bounded()
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .reconfigurationEnded)
+    _ = await harness.observation.observe(launching)
+    await harness.observation.tries(of: 4242)?.bounded()
+    await harness.expectEvents([outcome([.moved], retrying: true), outcome([])])
     #expect(harness.registrations.count == 2)
     #expect(harness.announcements.count == 1)
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aRetryThatFailsAgainReportsTheAppUnobservable() async {
+func aRegistrationOnceTheAppHasFinishedLaunchingThatFailsPublishesItUnobservable() async {
     let harness = ObservationHarness(outcomes: [timeout])
-    guard case .retrying(let retry) = await harness.observation.attempt(launching) else {
-        Issue.record("expected a retry")
-        return
-    }
-    await retry.bounded()
-    #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
+    _ = await harness.observation.observe(launching)
+    await harness.observation.tries(of: 4242)?.bounded()
+    await harness.expectEvents([outcome([.moved], retrying: true), outcome([.moved])])
 }
 
-@Test func anAppThatIsNotLaunchingIsReportedAtOnceAndNeverRetried() async {
-    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout])
-    guard case .unobservable(let app) = await harness.observation.attempt(launching) else {
-        Issue.record("expected unobservable")
-        return
-    }
-    #expect(app.missing == [.moved])
+/// A start's (or a restart's) registration has no tries of the platform's: a restart's own retries cover it.
+@Test func aStartsRegistrationOfAnAppNotLaunchingIsReportedAtOnceAndNeverRetried() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout], retryDelays: retryDelays)
+    let app = await harness.observation.observe(launching)
+    #expect(app?.missing == [.moved])
     #expect(harness.registrations.count == 1)
+    #expect(harness.observation.tries(of: 4242) == nil)
+    await harness.expectEvents([outcome([.moved])])
 }
 
 @Test func anAppThatFailedToRegisterIsRegisteredAgainAndObservedWhenTheTransientIsOver() async {
     let harness = ObservationHarness(isLaunching: false, outcomes: [timeout, [:]])
-    guard case .unobservable = await harness.observation.attempt(launching) else {
-        Issue.record("expected unobservable")
-        return
-    }
+    #expect(await harness.observation.observe(launching) != nil)
     #expect(await harness.observation.observeAgain(launching) == nil)
     #expect(harness.registrations.count == 2)
     // It holds a claim again: a query does not register it a third time.
-    _ = await harness.observation.attempt(launching)
+    await harness.observation.discover(launching)
     #expect(harness.registrations.count == 2)
+    await harness.expectEvents([outcome([.moved]), outcome([])])
 }
 
-@Test(.timeLimit(.minutes(1)))
-func aTryOnAnAppStillLaunchingReturnsTheOutcomeOfItsRegistrationWhenItHasFinishedLaunching() async {
-    let harness = ObservationHarness(outcomes: [timeout])
-    guard case .retrying(let first) = await harness.observation.attempt(launching) else {
-        Issue.record("expected a retry")
-        return
-    }
-    _ = await first.bounded()
-    // Still refused when it has finished launching: the try says so, and publishes nothing of its own.
+/// A try on an app still launching holds up nothing: it answers with its own registration's failure at
+/// once, and the registration once the app has finished launching publishes what it finds. The claim it
+/// replaced makes no registration when its own wait ends.
+@Test(.gated, .timeLimit(.minutes(1)))
+func aTryOnAnAppStillLaunchingAnswersAtOnceAndItsRegistrationOnceLaunchedPublishesTheRest() async {
+    let gate = Gate()
+    let harness = ObservationHarness(gate: gate, outcomes: [timeout, timeout, [:]], found: [5001])
+    _ = await harness.observation.observe(launching)
+    let replaced = harness.observation.tries(of: 4242)
     let observation = harness.observation
-    let again = Task { await observation.observeAgain(launching) }
-    #expect(await again.bounded() == UnobservableApp(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
-    #expect(await harness.next() == .reconfigurationEnded)
-    #expect(harness.registrations.count == 4)
-}
-
-@Test(.timeLimit(.minutes(1)))
-func aTryOnAnAppStillLaunchingThatRegistersWhenItHasFinishedReturnsNilAndAnnouncesItsWindowsOnce() async {
-    let harness = ObservationHarness(outcomes: [timeout, timeout, timeout, [:]], found: [5001])
-    guard case .retrying(let first) = await harness.observation.attempt(launching) else {
-        Issue.record("expected a retry")
-        return
-    }
-    _ = await first.bounded()
-    #expect(harness.announcements.count == 0)
-    let observation = harness.observation
-    let again = Task { await observation.observeAgain(launching) }
-    let result = await again.bounded()
-    #expect(result == .some(nil))
-    #expect(harness.announcements.count == 1)
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
-    guard case .windowCreated(let snapshot)? = await harness.next() else {
-        Issue.record("expected the registration to announce the window")
-        return
-    }
-    #expect(snapshot.handle == foundWindow)
-    #expect(await harness.next() == .reconfigurationEnded)
+    let again = await Task { await observation.observeAgain(launching) }.bounded()
+    #expect(again == .some(UnobservableApp(pid: 4242, bundleID: "com.example.Slow", missing: [.moved])))
+    await gate.waitUntilHolding(2)
+    let tries = harness.observation.tries(of: 4242)
+    gate.open()
+    await replaced?.bounded()
+    await tries?.bounded()
+    await harness.expectEvents([
+        outcome([.moved], retrying: true), outcome([.moved], retrying: true), outcome([]),
+        .windowCreated(Windows27.snapshot(handle: foundWindow, app: launching, attributes: catchUpAttributes)),
+    ])
+    #expect(harness.registrations.count == 3)
     #expect(harness.notices.all == [.announced(foundWindow)])
 }
 
 @Test func anAppThatFailsAgainIsStillUnobservable() async {
     let harness = ObservationHarness(isLaunching: false, outcomes: [timeout])
-    _ = await harness.observation.attempt(launching)
+    _ = await harness.observation.observe(launching)
     let again = await harness.observation.observeAgain(launching)
     #expect(again == UnobservableApp(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
     #expect(harness.registrations.count == 2)
@@ -265,7 +362,7 @@ func aTryOnAnAppStillLaunchingThatRegistersWhenItHasFinishedReturnsNilAndAnnounc
     let harness = ObservationHarness(isLaunching: false, outcomes: [[:]])
     #expect(await harness.observation.observeAgain(launching) == nil)
     #expect(harness.registrations.count == 0)
-    _ = await harness.observation.attempt(launching)
+    _ = await harness.observation.observe(launching)
     harness.isRunning.isSet = false
     #expect(await harness.observation.observeAgain(launching) == nil)
     #expect(harness.registrations.count == 1)
@@ -273,7 +370,7 @@ func aTryOnAnAppStillLaunchingThatRegistersWhenItHasFinishedReturnsNilAndAnnounc
 
 @Test func anAppThatQuitsBeforeItIsRegisteredAgainLeavesNoRegistrationAndNoClaim() async {
     let harness = ObservationHarness(isLaunching: false, outcomes: [timeout, [:]])
-    _ = await harness.observation.attempt(launching)
+    _ = await harness.observation.observe(launching)
     // The app is gone, and its quit has not been handled: isRunning is the first to know.
     harness.isRunning.isSet = false
     #expect(await harness.observation.observeAgain(launching) == nil)
@@ -281,13 +378,13 @@ func aTryOnAnAppStillLaunchingThatRegistersWhenItHasFinishedReturnsNilAndAnnounc
     #expect(harness.stops.count == 1)
     // The claim went with it: a process that takes the pid is registered afresh.
     harness.isRunning.isSet = true
-    _ = await harness.observation.attempt(launching)
+    _ = await harness.observation.observe(launching)
     #expect(harness.registrations.count == 2)
 }
 
 @Test func aSuccessfulRegistrationAgainKeepsItsRegistration() async {
     let harness = ObservationHarness(isLaunching: false, outcomes: [timeout, [:]])
-    _ = await harness.observation.attempt(launching)
+    _ = await harness.observation.observe(launching)
     #expect(await harness.observation.observeAgain(launching) == nil)
     #expect(harness.registrations.count == 2)
     #expect(harness.stops.count == 0)
@@ -295,17 +392,17 @@ func aTryOnAnAppStillLaunchingThatRegistersWhenItHasFinishedReturnsNilAndAnnounc
 
 @Test func anAppIsRegisteredOncePerRunAndNeverForTaflItself() async {
     let harness = ObservationHarness(outcomes: [[:]])
-    _ = await harness.observation.attempt(launching)
-    _ = await harness.observation.attempt(launching)
+    _ = await harness.observation.observe(launching)
+    _ = await harness.observation.observe(launching)
     let own = AppInfo27(pid: getpid(), bundleID: nil, name: "Tafl", isHidden: false)
-    _ = await harness.observation.attempt(own)
+    _ = await harness.observation.observe(own)
     #expect(harness.registrations.count == 1)
 }
 
 @Test func nothingIsRegisteredWhileObservingIsOff() async {
     let harness = ObservationHarness(outcomes: [[:]])
     harness.observation.end()
-    _ = await harness.observation.attempt(launching)
+    _ = await harness.observation.observe(launching)
     #expect(harness.registrations.count == 0)
 }
 
@@ -313,44 +410,42 @@ func aTryOnAnAppStillLaunchingThatRegistersWhenItHasFinishedReturnsNilAndAnnounc
 func anAppThatIsGoneButNotYetQuitIsNeitherRegisteredNorReportedWhenTheWaitEnds() async {
     let gate = Gate()
     let harness = ObservationHarness(gate: gate, outcomes: [timeout])
-    guard case .retrying(let retry) = await harness.observation.attempt(launching) else {
-        Issue.record("expected a retry")
-        return
-    }
+    _ = await harness.observation.observe(launching)
+    let tries = harness.observation.tries(of: 4242)
     // The wait ends because the app terminated, before the quit has been handled: its claim is still held.
     harness.isRunning.isSet = false
     gate.open()
-    await retry.bounded()
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .reconfigurationEnded)
+    await tries?.bounded()
+    await harness.expectEvents([outcome([.moved], retrying: true)])
     #expect(harness.registrations.count == 1)
     #expect(harness.announcements.count == 0)
 }
 
 @Test(.timeLimit(.minutes(1)))
 func aQueryThatMetAnAppBeforeItQuitRegistersAndReportsNothing() async {
-    // Not launching: a timeout would otherwise start a retry that races the count below.
-    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout])
+    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout], retryDelays: retryDelays)
     harness.isRunning.isSet = false
     await harness.observation.discover(launching)
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .reconfigurationEnded)
+    await harness.expectEvents([])
     #expect(harness.registrations.count == 0)
 
     // Nothing was left claimed: a new app on the same pid is observed.
     harness.isRunning.isSet = true
-    _ = await harness.observation.attempt(launching)
+    _ = await harness.observation.observe(launching)
     #expect(harness.registrations.count == 1)
 }
 
-@Test func aFirstTryThatFailsOnAnAppThatJustQuitIsNotReported() async {
+@Test(.timeLimit(.minutes(1)))
+func aFirstTryThatFailsOnAnAppThatJustQuitIsNotReported() async {
     let flag = Flag(true)
+    let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
+    let events = Collector(stream)
     // The process goes away while its registration is in flight.
     let observation = WindowObservation27(
         axQueue: AXQueue(), registry: WindowRegistry(),
-        catalog: WindowCatalog27(registry: WindowRegistry(), axQueue: AXQueue()),
-        events: AsyncStream<PlatformEvent>.makeStream().continuation,
+        events: continuation,
         notices: RecordedNotices(),
+        retryDelays: retryDelays,
         environment: .init(
             isRunning: { _ in flag.isSet },
             isLaunching: { _ in false },
@@ -359,32 +454,199 @@ func aQueryThatMetAnAppBeforeItQuitRegistersAndReportsNothing() async {
                 flag.isSet = false
                 return timeout
             },
-            windows: { _, _ in [] }))
+            windows: { _, _ in [] },
+            reader: echoReader,
+            sleep: { _ in }))
     observation.begin()
-    guard case .observed = await observation.attempt(launching) else {
-        Issue.record("a quit app must not be reported")
+    await observation.discover(launching)
+    #expect(observation.tries(of: 4242) == nil)
+    continuation.yield(.reconfigurationEnded)
+    #expect(await events.next() == .reconfigurationEnded)
+}
+
+// MARK: The tries after a failed launch or a query's first meeting
+
+/// Calendar on macOS 27.2: every registration is refused until about 0.8 s after launch, after the app
+/// has finished launching. The launch is tried again 3 s after that failure, and the registration that
+/// observes publishes its outcome before the launch's windows, which it announces.
+@Test(.gated, .timeLimit(.minutes(1)))
+func aLaunchRefusedUntilAfterItFinishedLaunchingIsTriedAgainAndAnnouncesItsWindowsAfterItsOutcome() async {
+    let harness = ObservationHarness(outcomes: [refused, refused, [:]], found: [5001], retryDelays: retryDelays)
+    await harness.observation.appLaunched(launching)
+    let tries = harness.observation.tries(of: 4242)
+    await harness.waits.waitForWaits(1)
+    #expect(harness.waits.delays == [.seconds(3)])
+    harness.waits.release(0)
+    await tries?.bounded()
+    await harness.expectEvents([
+        .appLaunched(pid: 4242, bundleID: "com.example.Slow"),
+        outcome(everyEvent, retrying: true), outcome(everyEvent, retrying: true), outcome([]),
+        .windowCreated(Windows27.snapshot(handle: foundWindow, app: launching, attributes: catchUpAttributes)),
+    ])
+    // The registration that observed ended the tries.
+    #expect(harness.waits.delays == [.seconds(3)])
+    #expect(harness.registrations.count == 3)
+    #expect(harness.notices.all == [.announced(foundWindow)])
+}
+
+@Test(.gated, .timeLimit(.minutes(1)))
+func aLaunchStillRefusedAtTheLastTryStaysUnobservableAndIsNotTriedAgain() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout], retryDelays: retryDelays)
+    await harness.observation.appLaunched(launching)
+    let tries = harness.observation.tries(of: 4242)
+    await harness.waits.waitForWaits(1)
+    harness.waits.release(0)
+    await harness.waits.waitForWaits(2)
+    harness.waits.release(1)
+    await tries?.bounded()
+    // 3 s and 10 s after the launch's failure.
+    #expect(harness.waits.delays == [.seconds(3), .seconds(7)])
+    await harness.expectEvents([
+        .appLaunched(pid: 4242, bundleID: "com.example.Slow"),
+        outcome([.moved], retrying: true), outcome([.moved], retrying: true), outcome([.moved]),
+    ])
+    #expect(harness.registrations.count == 3)
+}
+
+@Test(.gated, .timeLimit(.minutes(1)))
+func anAppsQuitEndsTheTriesOfAQuerysFirstMeeting() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout], retryDelays: retryDelays)
+    await harness.observation.discover(launching)
+    let tries = harness.observation.tries(of: 4242)
+    await harness.waits.waitForWaits(1)
+    await harness.observation.appQuit(pid: 4242)
+    await harness.waits.waitForCancelled(1)
+    await tries?.bounded()
+    await harness.expectEvents([outcome([.moved], retrying: true), .appQuit(pid: 4242)])
+    #expect(harness.registrations.count == 1)
+}
+
+@Test(.gated, .timeLimit(.minutes(1)))
+func aRestartEndsTheTriesOfEveryClaim() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout], retryDelays: retryDelays)
+    await harness.observation.discover(launching)
+    await harness.observation.appLaunched(other)
+    await harness.waits.waitForWaits(2)
+    harness.observation.end()
+    harness.observation.begin()
+    await harness.waits.waitForCancelled(2)
+    #expect(harness.observation.tries(of: launching.pid) == nil)
+    #expect(harness.observation.tries(of: other.pid) == nil)
+    #expect(harness.registrations.count == 2)
+}
+
+@Test(.gated, .timeLimit(.minutes(1)))
+func aRegistrationAskedForAgainEndsTheTriesOfTheClaimItReplaces() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [timeout, [:]], retryDelays: retryDelays)
+    await harness.observation.appLaunched(launching)
+    let replaced = harness.observation.tries(of: 4242)
+    await harness.waits.waitForWaits(1)
+    #expect(await harness.observation.observeAgain(launching) == nil)
+    await harness.waits.waitForCancelled(1)
+    await replaced?.bounded()
+    await harness.expectEvents([
+        .appLaunched(pid: 4242, bundleID: "com.example.Slow"), outcome([.moved], retrying: true), outcome([]),
+    ])
+    #expect(harness.registrations.count == 2)
+}
+
+/// Each app's tries run on their own: one held in its launch wait holds up no other app's.
+@Test(.gated, .timeLimit(.minutes(1)))
+func oneAppStillLaunchingHoldsUpNoOtherAppsTries() async {
+    let gate = Gate()
+    let harness = ObservationHarness(gate: gate, outcomes: [timeout], retryDelays: retryDelays)
+    await harness.observation.appLaunched(launching)
+    await harness.observation.appLaunched(other)
+    let tries = harness.observation.tries(of: other.pid)
+    await harness.waits.waitForWaits(1)
+    harness.waits.release(0)
+    await harness.waits.waitForWaits(2)
+    harness.waits.release(1)
+    await tries?.bounded()
+    #expect(gate.heldCount == 1)
+    await harness.expectEvents([
+        .appLaunched(pid: 4242, bundleID: "com.example.Slow"), outcome([.moved], retrying: true),
+        .appLaunched(pid: 4343, bundleID: "com.example.Other"), outcome([.moved], retrying: true, of: other),
+        outcome([.moved], retrying: true, of: other), outcome([.moved], of: other),
+    ])
+    harness.observation.end()
+}
+
+@Test(.gated, .timeLimit(.minutes(1)))
+func anOutcomeARegistrationFindsAfterItsClaimEndedIsNotPublished() async {
+    let held = ThreadGate()
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], held: held)
+    let observation = harness.observation
+    let registering = Task { await observation.observe(launching) }
+    await waitUntil("the registration to be in flight") { harness.registrations.count == 1 }
+    // The quit ends the claim at once; its own work on the app's queue waits behind the registration.
+    let quitting = Task { await observation.appQuit(pid: 4242) }
+    #expect(await harness.next() == .appQuit(pid: 4242))
+    held.open()
+    #expect(await registering.bounded() == .some(nil))
+    await quitting.bounded()
+    await harness.expectEvents([])
+}
+
+// MARK: Announcing only under a claim that observes placement
+
+private let foundWindow = WindowHandle(pid: 4242, windowID: 5001, isStable: true)
+
+@Test(.timeLimit(.minutes(1)))
+func aCreationDeliveredUnderAnEndedClaimAnnouncesNothingAndLeavesTheWindowToTheNextClaim() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[:]])
+    _ = await harness.observation.observe(launching)
+    harness.observation.end()
+    harness.observation.begin()
+    _ = await harness.observation.observe(launching)
+    // A callback the first registration queued arrives after the restart.
+    harness.handlers.deliver(notification(kAXWindowCreatedNotification, 5001), through: 0)
+    harness.handlers.deliver(notification(kAXWindowMovedNotification, 5001), through: 1)
+    #expect(await harness.next() == outcome([]))
+    #expect(await harness.next() == outcome([]))
+    #expect(await harness.next() == .windowMoved(foundWindow))
+    // It marked nothing: the current registration's own creation announces the window.
+    harness.handlers.deliver(notification(kAXWindowCreatedNotification, 5001), through: 1)
+    guard case .windowCreated(let snapshot)? = await harness.next() else {
+        Issue.record("expected the current claim to announce the window")
         return
     }
+    #expect(snapshot.handle == foundWindow)
+    #expect(harness.notices.all == [.announced(foundWindow)])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aCreationIsNotAnnouncedWhileTheRegistrationMissesMoves() async {
+    let harness = ObservationHarness(isLaunching: false, outcomes: [[kAXWindowMovedNotification: .failure], [:]])
+    _ = await harness.observation.observe(launching)
+    harness.handlers.deliver(notification(kAXWindowCreatedNotification, 5001), through: 0)
+    harness.handlers.deliver(notification(kAXWindowResizedNotification, 5001), through: 0)
+    #expect(await harness.next() == outcome([.moved]))
+    #expect(await harness.next() == .windowResized(foundWindow))
+    #expect(harness.notices.all.isEmpty)
+    // Once a registration observes placement, the app's creations are announced.
+    #expect(await harness.observation.observeAgain(launching) == nil)
+    harness.handlers.deliver(notification(kAXWindowCreatedNotification, 5001), through: 1)
+    #expect(await harness.next() == outcome([]))
+    guard case .windowCreated(let snapshot)? = await harness.next() else {
+        Issue.record("expected the creation to be announced")
+        return
+    }
+    #expect(snapshot.handle == foundWindow)
+    #expect(harness.notices.all == [.announced(foundWindow)])
 }
 
 // MARK: Catch-up
-
-private let foundWindow = WindowHandle(pid: 4242, windowID: 5001, isStable: true)
 
 @Test(.timeLimit(.minutes(1)))
 func aLaunchMissingOnlyTitleChangesStillAnnouncesItsWindows() async {
     let harness = ObservationHarness(
         isLaunching: false, outcomes: [[kAXTitleChangedNotification: .notificationUnsupported]], found: [5001])
     await harness.observation.appLaunched(launching)
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
-    guard case .windowCreated(let snapshot)? = await harness.next() else {
-        Issue.record("expected the catch-up to announce the window")
-        return
-    }
-    #expect(snapshot.handle == foundWindow)
-    #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.titleChanged]))
-    #expect(await harness.next() == .reconfigurationEnded)
+    await harness.expectEvents([
+        .appLaunched(pid: 4242, bundleID: "com.example.Slow"), outcome([.titleChanged]),
+        .windowCreated(Windows27.snapshot(handle: foundWindow, app: launching, attributes: catchUpAttributes)),
+    ])
     #expect(harness.notices.all == [.announced(foundWindow)])
 }
 
@@ -393,14 +655,10 @@ func aCatchUpAnnouncesAWindowAQueryRegisteredFirst() async {
     let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
     _ = harness.registry.register(windowBox(5001), pid: 4242, windowID: ResolvedWindowID(id: 5001, by: .privateSymbol))
     await harness.observation.appLaunched(launching)
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
-    guard case .windowCreated(let snapshot)? = await harness.next() else {
-        Issue.record("expected the catch-up to announce the window the query registered")
-        return
-    }
-    #expect(snapshot.handle == foundWindow)
-    #expect(await harness.next() == .reconfigurationEnded)
+    await harness.expectEvents([
+        .appLaunched(pid: 4242, bundleID: "com.example.Slow"), outcome([]),
+        .windowCreated(Windows27.snapshot(handle: foundWindow, app: launching, attributes: catchUpAttributes)),
+    ])
 }
 
 /// A window's end is its destruction or its app's quit, never a failed read: the quit takes every
@@ -427,10 +685,7 @@ func aCatchUpForAnAppThatQuitMeanwhilePublishesAndKeepsNothing() async {
     await observation.appQuit(pid: 4242)
     gate.release()
     await launch.bounded()
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
-    #expect(await harness.next() == .appQuit(pid: 4242))
-    #expect(await harness.next() == .reconfigurationEnded)
+    await harness.expectEvents([.appLaunched(pid: 4242, bundleID: "com.example.Slow"), outcome([]), .appQuit(pid: 4242)])
     #expect(harness.registry.knownHandle(of: windowBox(5001)) == nil)
     // Nothing found under the ended claim was announced; the quit reached the notices.
     #expect(harness.notices.all == [.quit(4242)])
@@ -450,18 +705,14 @@ func aCatchUpOvertakenByARestartLeavesItsWindowsToTheNewRun() async {
     // The stale catch-up published nothing and withdrew nothing: the app still runs.
     #expect(harness.registry.knownHandle(of: windowBox(5001)) == foundWindow)
     // The new run observes the app, adopts the window and owes it its announcement still.
-    let observing = Task { await observation.attempt(launching) }
+    let observing = Task { await observation.observe(launching) }
     await gate.waitUntilHolding(1)
     gate.release()
     _ = await observing.bounded()
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
-    guard case .windowCreated(let snapshot)? = await harness.next() else {
-        Issue.record("expected the new run to announce the window once")
-        return
-    }
-    #expect(snapshot.handle == foundWindow)
-    #expect(await harness.next() == .reconfigurationEnded)
+    await harness.expectEvents([
+        .appLaunched(pid: 4242, bundleID: "com.example.Slow"), outcome([]), outcome([]),
+        .windowCreated(Windows27.snapshot(handle: foundWindow, app: launching, attributes: catchUpAttributes)),
+    ])
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -470,14 +721,10 @@ func aLaunchAQueryMetFirstStillAnnouncesItsWindows() async {
     // A query claims and registers the app before its launch is handled.
     await harness.observation.discover(launching)
     await harness.observation.appLaunched(launching)
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
-    guard case .windowCreated(let snapshot)? = await harness.next() else {
-        Issue.record("expected the launch's catch-up to announce the window")
-        return
-    }
-    #expect(snapshot.handle == foundWindow)
-    #expect(await harness.next() == .reconfigurationEnded)
+    await harness.expectEvents([
+        outcome([]), .appLaunched(pid: 4242, bundleID: "com.example.Slow"),
+        .windowCreated(Windows27.snapshot(handle: foundWindow, app: launching, attributes: catchUpAttributes)),
+    ])
     #expect(harness.registrations.count == 1)
 }
 
@@ -493,70 +740,43 @@ func anAppWhoseLaunchRegistrationFailedAnnouncesItsWindowsOnceWhenItIsRegistered
     // The debt is paid: a further registration announces nothing.
     #expect(await harness.observation.observeAgain(launching) == nil)
     #expect(harness.announcements.count == 1)
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
-    #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.created]))
-    guard case .windowCreated(let snapshot)? = await harness.next() else {
-        Issue.record("expected the second registration to announce the window")
-        return
-    }
-    #expect(snapshot.handle == foundWindow)
-    #expect(await harness.next() == .reconfigurationEnded)
+    // Each registration's outcome comes before the windows it announces.
+    await harness.expectEvents([
+        .appLaunched(pid: 4242, bundleID: "com.example.Slow"), outcome([.created]), outcome([]),
+        .windowCreated(Windows27.snapshot(handle: foundWindow, app: launching, attributes: catchUpAttributes)),
+        outcome([]),
+    ])
     #expect(harness.notices.all == [.announced(foundWindow)])
-}
-
-/// Reads any element as a standard window whose id is the pid the element was made from.
-private let echoReader = WindowReader27(
-    readTracked: { element, _, _, then in
-        let id = UInt32(AXWindowAccess.pid(element.element) ?? 0)
-        return then(ElementRead(element: element, attributes: catchUpAttributes, windowID: ResolvedWindowID(id: id, by: .privateSymbol)))
-    },
-    title: { _, _ in "Doc" },
-    app: { pid in AppInfo27(pid: pid, bundleID: "com.example.Slow", name: "Slow", isHidden: false) },
-    afterReads: { _, work in work() })
-
-private func createdEvent(_ id: UInt32) -> AXObserverHub.Event {
-    AXObserverHub.Event(pid: 4242, bundleID: nil, notification: kAXWindowCreatedNotification, element: windowBox(id).element)
-}
-
-private func movedEvent(_ id: UInt32) -> AXObserverHub.Event {
-    AXObserverHub.Event(pid: 4242, bundleID: nil, notification: kAXWindowMovedNotification, element: windowBox(id).element)
 }
 
 @Test(.timeLimit(.minutes(1)))
 func aWindowTheCatchUpAnnouncedFirstIsNotAnnouncedAgainByItsCreation() async {
     let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
-    let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
-    let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation, notices: harness.notices)
-    let translated = Collector(stream)
     await harness.observation.appLaunched(launching)
-    translator.enqueue(createdEvent(5001))
-    translator.enqueue(movedEvent(5001))
-    #expect(await translated.next() == .windowMoved(foundWindow))
+    harness.handlers.deliver(notification(kAXWindowCreatedNotification, 5001), through: 0)
+    harness.handlers.deliver(notification(kAXWindowMovedNotification, 5001), through: 0)
     #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
+    #expect(await harness.next() == outcome([]))
     guard case .windowCreated? = await harness.next() else {
         Issue.record("expected the catch-up to announce the window")
         return
     }
-    translator.closeAll()
+    #expect(await harness.next() == .windowMoved(foundWindow))
 }
 
 @Test(.timeLimit(.minutes(1)))
 func aWindowItsCreationAnnouncedFirstIsNotAnnouncedAgainByTheCatchUp() async {
     let harness = ObservationHarness(isLaunching: false, outcomes: [[:]], found: [5001])
-    let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
-    let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation, notices: harness.notices)
-    let translated = Collector(stream)
-    translator.enqueue(createdEvent(5001))
-    guard case .windowCreated? = await translated.next() else {
+    await harness.observation.discover(launching)
+    harness.handlers.deliver(notification(kAXWindowCreatedNotification, 5001), through: 0)
+    #expect(await harness.next() == outcome([]))
+    guard case .windowCreated? = await harness.next() else {
         Issue.record("expected the creation to be announced")
         return
     }
     await harness.observation.appLaunched(launching)
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
-    #expect(await harness.next() == .reconfigurationEnded)
-    translator.closeAll()
+    await harness.expectEvents([.appLaunched(pid: 4242, bundleID: "com.example.Slow")])
+    #expect(harness.notices.all == [.announced(foundWindow)])
 }
 
 // MARK: Announcing is one step
@@ -571,28 +791,20 @@ func aCatchUpOvertakenByARestartAfterItsEnumerationLeavesExactlyOneAnnouncement(
     await gate.waitUntilHolding(1)
     observation.end()
     observation.begin()
-    let observing = Task { await observation.attempt(launching) }
+    let observing = Task { await observation.observe(launching) }
     await gate.waitUntilHolding(2)
     // The stale catch-up and the new run's go on together; only the new claim's step announces.
     gate.release()
     await launch.bounded()
     _ = await observing.bounded()
-    harness.continuation.yield(.reconfigurationEnded)
-    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
-    guard case .windowCreated(let snapshot)? = await harness.next() else {
-        Issue.record("expected the window to be announced")
-        return
-    }
-    #expect(snapshot.handle == foundWindow)
-    #expect(await harness.next() == .reconfigurationEnded)
+    await harness.expectEvents([
+        .appLaunched(pid: 4242, bundleID: "com.example.Slow"), outcome([]), outcome([]),
+        .windowCreated(Windows27.snapshot(handle: foundWindow, app: launching, attributes: catchUpAttributes)),
+    ])
     // The mark stays: the window's own creation notification announces nothing more.
-    let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
-    let translator = WindowEventTranslator(registry: harness.registry, reader: echoReader, events: continuation, notices: harness.notices)
-    let translated = Collector(stream)
-    translator.enqueue(createdEvent(5001))
-    translator.enqueue(movedEvent(5001))
-    #expect(await translated.next() == .windowMoved(foundWindow))
-    translator.closeAll()
+    harness.handlers.deliver(notification(kAXWindowCreatedNotification, 5001), through: 1)
+    harness.handlers.deliver(notification(kAXWindowMovedNotification, 5001), through: 1)
+    #expect(await harness.next() == .windowMoved(foundWindow))
 }
 
 @Test(.gated, .timeLimit(.minutes(1)))

@@ -45,11 +45,23 @@ private struct Harness {
     let registry = WindowRegistry()
     let notices = RecordedNotices()
     let events: Collector<PlatformEvent>
+    /// Announces a created window as a registration whose claim holds does.
+    private let announce: @Sendable (PlatformEvent) -> Bool
 
     init(_ reader: WindowReader27) {
         let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream()
         translator = WindowEventTranslator(registry: registry, reader: reader, events: continuation, notices: notices)
         events = Collector(stream)
+        let notices = notices
+        announce = { event in
+            if case .windowCreated(let snapshot) = event { notices.announced(snapshot) }
+            continuation.yield(event)
+            return true
+        }
+    }
+
+    func enqueue(_ event: AXObserverHub.Event) {
+        translator.enqueue(event, announce: announce)
     }
 
     func next(sourceLocation: SourceLocation = #_sourceLocation) async -> PlatformEvent? {
@@ -62,8 +74,8 @@ private struct Harness {
 @Test(.timeLimit(.minutes(1)))
 func aDestroyForAnUnknownWindowIsDropped() async {
     let harness = Harness(reader())
-    harness.translator.enqueue(event(kAXUIElementDestroyedNotification, pid: 10, element: box(1010)))
-    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
+    harness.enqueue(event(kAXUIElementDestroyedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
     #expect(await harness.next() == .windowMoved(handle(10, 2020)))
     harness.translator.closeAll()
 }
@@ -72,9 +84,9 @@ func aDestroyForAnUnknownWindowIsDropped() async {
 func eventsForWindowsThatAreNotStandardOrSheetsAreDropped() async {
     let harness = Harness(reader(untracked: [1010]))
     for notification in [kAXWindowCreatedNotification, kAXWindowMovedNotification, kAXWindowResizedNotification, kAXTitleChangedNotification] {
-        harness.translator.enqueue(event(notification, pid: 10, element: box(1010)))
+        harness.enqueue(event(notification, pid: 10, element: box(1010)))
     }
-    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
+    harness.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
     #expect(await harness.next() == .windowMoved(handle(10, 2020)))
     #expect(harness.registry.knownHandle(of: box(1010)) == nil)
     harness.translator.closeAll()
@@ -84,8 +96,8 @@ func eventsForWindowsThatAreNotStandardOrSheetsAreDropped() async {
 func aWindowOfAProcessThatIsGoneIsNotRegistered() async {
     let harness = Harness(reader(gone: [10]))
     _ = harness.registry.register(box(2020), pid: 10, windowID: ResolvedWindowID(id: 2020, by: .privateSymbol))
-    harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
-    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
+    harness.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
     #expect(await harness.next() == .windowMoved(handle(10, 2020)))
     #expect(harness.registry.knownHandle(of: box(1010)) == nil)
     harness.translator.closeAll()
@@ -94,9 +106,9 @@ func aWindowOfAProcessThatIsGoneIsNotRegistered() async {
 @Test(.timeLimit(.minutes(1)))
 func aCreatedWindowIsAnnouncedOnceAndItsTitleIsReadFresh() async {
     let harness = Harness(reader())
-    harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
-    harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
-    harness.translator.enqueue(event(kAXTitleChangedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXTitleChangedNotification, pid: 10, element: box(1010)))
     guard case .windowCreated(let snapshot)? = await harness.next() else {
         Issue.record("expected windowCreated")
         return
@@ -117,8 +129,8 @@ func aWindowTheCatchUpAlreadyAnnouncedIsNotAnnouncedByItsNotification() async {
         handle: registered.handle, bundleID: nil, appName: "App", title: "Doc", frame: ScreenRect(x: 0, y: 0, width: 100, height: 100),
         canMove: true, canResize: true, minSize: nil, isFullscreen: false, isSheet: false, isMinimized: false, isAppHidden: false)
     _ = harness.registry.announce(found) { _ in true }
-    harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
-    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
     #expect(await harness.next() == .windowMoved(handle(10, 1010)))
     #expect(harness.notices.all.isEmpty)
     harness.translator.closeAll()
@@ -129,9 +141,9 @@ func aWindowAQueryRegisteredIsAnnouncedOnceByItsCreation() async {
     let harness = Harness(reader())
     // A query met the window before its creation notification was handled.
     _ = harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
-    harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
-    harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
-    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
     guard case .windowCreated(let snapshot)? = await harness.next() else {
         Issue.record("expected the creation to be announced")
         return
@@ -146,7 +158,7 @@ func aKnownWindowIsMovedResizedAndDestroyedInOrderAndForgotten() async {
     let harness = Harness(reader())
     _ = harness.registry.register(box(1010), pid: 10, windowID: ResolvedWindowID(id: 1010, by: .privateSymbol))
     for notification in [kAXWindowMovedNotification, kAXWindowResizedNotification, kAXUIElementDestroyedNotification] {
-        harness.translator.enqueue(event(notification, pid: 10, element: box(1010)))
+        harness.enqueue(event(notification, pid: 10, element: box(1010)))
     }
     #expect(await harness.next() == .windowMoved(handle(10, 1010)))
     #expect(await harness.next() == .windowResized(handle(10, 1010)))
@@ -161,9 +173,9 @@ func aKnownWindowIsMovedResizedAndDestroyedInOrderAndForgotten() async {
 func aSlowAppDelaysOnlyItselfAndKeepsItsOwnOrder() async {
     let gate = Gate()
     let harness = Harness(reader(gatedApp: 10, gate: gate))
-    harness.translator.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
-    harness.translator.enqueue(event(kAXTitleChangedNotification, pid: 10, element: box(1010)))
-    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 11, element: box(1011)))
+    harness.enqueue(event(kAXWindowCreatedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXTitleChangedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXWindowMovedNotification, pid: 11, element: box(1011)))
     #expect(await harness.next() == .windowMoved(handle(11, 1011)))
 
     gate.open()
@@ -179,14 +191,14 @@ func aSlowAppDelaysOnlyItselfAndKeepsItsOwnOrder() async {
 @Test(.timeLimit(.minutes(1)))
 func aLateCallbackAfterTheLaneClosedStartsNoLaneUntilTheNextClaim() async {
     let harness = Harness(reader())
-    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
+    harness.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(1010)))
     #expect(await harness.next() == .windowMoved(handle(10, 1010)))
     harness.translator.closeLane(pid: 10)
-    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
+    harness.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
     #expect(harness.translator.laneCount == 0)
 
     harness.translator.reopen(pid: 10)
-    harness.translator.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
+    harness.enqueue(event(kAXWindowMovedNotification, pid: 10, element: box(2020)))
     #expect(await harness.next() == .windowMoved(handle(10, 2020)))
     #expect(harness.translator.laneCount == 1)
     harness.translator.closeAll()

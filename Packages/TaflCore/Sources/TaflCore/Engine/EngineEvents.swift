@@ -30,16 +30,15 @@ extension WindowEngine {
         case .appQuit(let pid):
             unobservable[pid] = nil
             pendingRetries.remove(pid)
-            launchRetryTasks.removeValue(forKey: pid)?.task.cancel()
+            platformRetries.remove(pid)
             reportedUnobservable.remove(pid)
             restartJournal?.quit(pid: pid)
             frameReads = frameReads.filter { $0.key.pid != pid }
             eventsHandled += 1
         case .appLaunched:
             eventsHandled += 1
-        case .unobservable(let pid, let bundleID, let missing):
-            learn(pid: pid, bundleID: bundleID, missing: missing)
-            scheduleLaunchRetries(for: pid)
+        case .observability(let pid, let bundleID, let missing, let retrying):
+            observability(pid: pid, bundleID: bundleID, missing: missing, retrying: retrying)
             eventsHandled += 1
         case .reconfigurationBegan:
             reconfigurationBegan()

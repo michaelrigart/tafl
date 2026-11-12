@@ -197,18 +197,39 @@ private final class Taken: Sendable {
 @Test(.timeLimit(.minutes(1))) func eventsObservationAndUnobservedApps() async {
     let w = window(1, frame: rect(0, 0, 100, 100))
     let (fake, _) = await makeFake(w)
-    _ = await fake.startObserving(notices: WindowOwner(adjustments: []))
+    await fake.configure { $0.unobserved = [.init(pid: 7, bundleID: "com.example.slow", missing: [.created])] }
+    let answer = await fake.startObserving(notices: WindowOwner(adjustments: []))
     await fake.stopObserving()
+    #expect(answer == [UnobservableApp(pid: 7, bundleID: "com.example.slow", missing: [.created])])
     #expect(await fake.startObservingCount == 1)
     #expect(await fake.stopObservingCount == 1)
 
-    await fake.configure { $0.unobserved = [.init(pid: 7, bundleID: "com.example.slow", missing: [.created])] }
     await fake.emit(.windowMoved(w.handle))
-    await fake.emitUnobserved()
     let events = Collector(fake.events)
+    // Each registration's outcome is an event, sent before the call returns.
+    #expect(await events.next() == .observability(pid: 7, bundleID: "com.example.slow", missing: [.created], retrying: false))
     #expect(await events.next() == .windowMoved(w.handle))
-    #expect(await events.next() == .unobservable(pid: 7, bundleID: "com.example.slow", missing: [.created]))
     #expect(await fake.eventsSent == 2)
+}
+
+/// As the platform, the fake announces a window only while its app's current registration observes
+/// placement: the latest outcome decides, not what the next registration will find.
+@Test func theFakeAnnouncesAWindowOnlyWhileItsAppsRegistrationObservesPlacement() async {
+    let w = window(1, frame: rect(0, 0, 100, 100), pid: 7)
+    let (fake, _) = await makeFake()
+    let owner = WindowOwner(adjustments: [])
+    _ = await fake.startObserving(notices: owner)
+    await fake.configure { $0.unobserved = [.init(pid: 7, bundleID: nil, missing: [.moved])] }
+    await fake.emit(.windowCreated(w))
+    #expect(owner.knows(w.handle))
+    await fake.emit(.windowDestroyed(w.handle))
+    await fake.emit(.observability(pid: 7, bundleID: nil, missing: [.resized], retrying: false))
+    await fake.emit(.windowCreated(w))
+    #expect(!owner.knows(w.handle))
+    await fake.emit(.observability(pid: 7, bundleID: nil, missing: [.titleChanged], retrying: false))
+    await fake.emit(.windowCreated(w))
+    #expect(owner.knows(w.handle))
+    #expect(await fake.eventsSent == 5)
 }
 
 @Test func failureMessages() {

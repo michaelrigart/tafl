@@ -54,41 +54,37 @@ struct RunFailure: Sendable {
     var kind: FailureKind
 }
 
-/// What events said about apps while observation restarted. It is newer than a restart's answer,
-/// so it is laid over it: an app learned meanwhile adds what it is missing, and an app that quit
-/// meanwhile is gone whatever the answer says. It also holds what was unobservable when the first
-/// pending restart was asked for, less the apps whose retries were still pending then, so a failure
-/// that events report while the restart waits is not taken for one that was there before, and an app
-/// still being retried counts as one that failed in the transient.
+/// Which apps a restart tries again. It holds what was unobservable when the first pending restart
+/// was asked for, less the apps whose tries were still pending then (Tafl's or the platform's), so a
+/// failure that events report while the restart waits is not taken for one that was there before, and
+/// an app still being tried counts as one that failed in the transient. Events since then are laid
+/// over the restart's answer: a registration they report failing adds its app, and one that reports
+/// it observed takes back only what events added, since it may be older than the answer's own
+/// registration; an app that quit meanwhile is gone whatever the answer says. The apps' state is
+/// never taken from here: their outcome events set it.
 struct RestartJournal {
-    private let before: [Int32: Set<ObservedEvent>]
-    private var learned: [Int32: Set<ObservedEvent>] = [:]
+    private let before: Set<Int32>
+    private var failed: Set<Int32> = []
     private var gone: Set<Int32> = []
 
     init(before: [Int32: Set<ObservedEvent>]) {
-        self.before = before
+        self.before = Set(before.filter { !$0.value.isEmpty }.keys)
     }
 
-    /// The apps the result finds unobservable that were not before the restart: a failure that may
-    /// come only from a transient, such as a wake.
-    func newlyUnobservable(in result: [Int32: Set<ObservedEvent>]) -> Set<Int32> {
-        Set(result.filter { !$0.value.isEmpty && (before[$0.key]?.isEmpty ?? true) }.keys)
+    /// The apps the restart's answer or the events since found unobservable that were not before the
+    /// restart: a failure that may come only from a transient, such as a wake.
+    func newlyUnobservable(answer: [UnobservableApp]) -> Set<Int32> {
+        Set(answer.filter { !$0.missing.isEmpty }.map(\.pid)).union(failed).subtracting(gone).subtracting(before)
     }
 
     mutating func learn(pid: Int32, missing: Set<ObservedEvent>) {
-        learned[pid, default: []].formUnion(missing)
+        if missing.isEmpty { failed.remove(pid) } else { failed.insert(pid) }
         gone.remove(pid)
     }
 
     mutating func quit(pid: Int32) {
-        learned[pid] = nil
+        failed.remove(pid)
         gone.insert(pid)
-    }
-
-    func applied(to answer: [Int32: Set<ObservedEvent>]) -> [Int32: Set<ObservedEvent>] {
-        var result = answer.filter { !gone.contains($0.key) }
-        for (pid, missing) in learned { result[pid, default: []].formUnion(missing) }
-        return result
     }
 }
 
@@ -135,8 +131,10 @@ public actor WindowEngine {
     /// recorded: that one is a first setup, with no rule to run. A settled change to no displays is
     /// no such start; it is a setup, and the one after it is compared with it.
     var awaitingFirstSetup = false
-    /// Apps whose events macOS would not deliver, and which events those are. The owner records no
-    /// last-known frame for an app whose moves or resizes are among them.
+    /// Apps whose events macOS would not deliver, and which events those are, as each app's latest
+    /// registration outcome says: only those events and the app's quit change it (the start takes its
+    /// answer just ahead of its outcomes, see `start`). The owner records no last-known frame for an app
+    /// whose moves or resizes are among them.
     var unobservable: [Int32: Set<ObservedEvent>] = [:] {
         didSet { owner.leaveOut(pids: Set(unobservable.keys.filter(isLeftOutOfRules))) }
     }
@@ -144,18 +142,17 @@ public actor WindowEngine {
     var reportedUnobservable: Set<Int32> = []
     /// While a restart is pending: what events said since the first pending one was asked for.
     var restartJournal: RestartJournal?
-    /// The apps whose retries are scheduled and not over. A newer restart cancels the schedule but
-    /// does not count these as unobservable before it, so it retries them again if they still fail.
+    /// The apps whose restart retries are scheduled and not over. A newer restart cancels the schedule
+    /// but does not count these as unobservable before it, so it retries them again if they still fail.
     var pendingRetries: Set<Int32> = []
+    /// The apps whose latest outcome says the platform is still trying them on its own (a failed launch
+    /// or a query's first meeting). A restart ends those tries, so it does not count these as
+    /// unobservable before it either.
+    var platformRetries: Set<Int32> = []
     /// The latest restart; the next one waits for it.
     var restartTask: Task<Void, Never>?
     /// The schedule of tries for the apps the latest restart could not observe.
     var observeRetryTask: Task<Void, Never>?
-    /// The schedule of tries for an app found unobservable outside a restart, by pid, with the serial
-    /// that tells it from an earlier one for the same pid. A restart, a stop and the app's quit end it,
-    /// and so does its last try. The app is in `pendingRetries` until then.
-    var launchRetryTasks: [Int32: (serial: Int, task: Task<Void, Never>)] = [:]
-    var nextLaunchRetry = 0
     var eventTask: Task<Void, Never>?
     /// The wait for the quiet period. An input replaces it; the rules run is not part of it.
     var settleTask: Task<Void, Never>?
@@ -223,8 +220,13 @@ public actor WindowEngine {
             let layout = activeLayout.name
             await memory.update { $0.activeLayout = layout }
 
-            // Apps that failed to register are known before any rule or seed looks at a window.
-            learn(await platform.startObserving(notices: owner))
+            // Apps that failed to register are known before any rule or seed looks at a window. No event
+            // has been handled yet, and every registration's outcome is already on the stream: the answer
+            // says what those outcomes say, taken before they arrive, and each sets the state again, in
+            // order, when it is handled.
+            for app in await platform.startObserving(notices: owner) {
+                learn(pid: app.pid, bundleID: app.bundleID, missing: app.missing)
+            }
             let current = await platform.displays()
             if current.contains(where: \.isPlaceholder) {
                 // A placeholder display is no setup (see `settle`): nothing moves, and nothing is recorded or
@@ -318,17 +320,19 @@ public actor WindowEngine {
         }
     }
 
-    /// Registers the platform's observers again, as after a wake or a user switch, and learns
-    /// which apps cannot be observed now. The event consumer is untouched. Restarts run one at a
-    /// time, and only the newest commits: it lays what events said since the first pending one
-    /// was asked for over its answer.
+    /// Registers the platform's observers again, as after a wake or a user switch. The registrations'
+    /// outcomes arrive as events, which the event consumer, untouched, takes as they come. Restarts run
+    /// one at a time, and only the newest schedules tries: for the apps its answer, and what events said
+    /// since the first pending one was asked for, find newly unobservable.
     public func restartObserving() async {
         await activity.call {
             let generation = restarts.begin()
             cancelObserveRetries()
             // The baseline is taken before any registration work, which events may report on meanwhile.
             if restartJournal == nil {
-                restartJournal = RestartJournal(before: unobservable.filter { !pendingRetries.contains($0.key) })
+                restartJournal = RestartJournal(before: unobservable.filter {
+                    !pendingRetries.contains($0.key) && !platformRetries.contains($0.key)
+                })
             }
             let previous = restartTask
             let task = Task {
@@ -346,15 +350,9 @@ public actor WindowEngine {
         await platform.stopObserving()
         let apps = await platform.startObserving(notices: owner)
         guard restarts.isCurrent(generation), !isStopping, let journal = restartJournal else { return }
-        var answer: [Int32: Set<ObservedEvent>] = [:]
-        for app in apps { answer[app.pid, default: []].formUnion(app.missing) }
-        unobservable = journal.applied(to: answer)
         restartJournal = nil
-        for app in apps where unobservable[app.pid] != nil {
-            if reportedUnobservable.insert(app.pid).inserted { report(.unobservable(bundleID: app.bundleID)) }
-        }
         // An app that was observable before may have failed only because of a transient (a wake).
-        scheduleObserveRetries(for: journal.newlyUnobservable(in: unobservable), after: generation)
+        scheduleObserveRetries(for: journal.newlyUnobservable(answer: apps), after: generation)
     }
 
     // MARK: Retrying unobservable apps
@@ -367,51 +365,26 @@ public actor WindowEngine {
         observeRetryTask = observeRetries(for: pids, after: generation)
     }
 
-    /// Tries an app again that is unobservable after its launch's registration, at each of the timing's
-    /// delays measured from when the engine learns it. The app counts as pending, so a restart that
-    /// begins before the last try carries its tries over. While a restart is pending the restart's own
-    /// answer decides, and its retries follow; an app already being tried is not scheduled twice.
-    func scheduleLaunchRetries(for pid: Int32) {
-        guard !isStopping, restartJournal == nil, !pendingRetries.contains(pid),
-              !timing.observeRetryDelays.isEmpty
-        else { return }
-        nextLaunchRetry += 1
-        let serial = nextLaunchRetry
-        pendingRetries.insert(pid)
-        launchRetryTasks[pid]?.task.cancel()
-        launchRetryTasks[pid] = (serial, observeRetries(for: [pid], after: restarts.current) {
-            if self.launchRetryTasks[pid]?.serial == serial { self.launchRetryTasks[pid] = nil }
-        })
-    }
-
-    /// A newer restart, a stop and an app's quit end the tries for the apps they concern.
+    /// A newer restart and a stop end the restart's tries.
     private func cancelObserveRetries() {
         observeRetryTask?.cancel()
         observeRetryTask = nil
-        for retry in launchRetryTasks.values { retry.task.cancel() }
-        launchRetryTasks = [:]
     }
 
-    /// `ended` runs when the schedule is over, however it ends, on the engine.
-    private func observeRetries(
-        for pids: Set<Int32>, after generation: Int, ended: (() -> Void)? = nil
-    ) -> Task<Void, Never> {
+    private func observeRetries(for pids: Set<Int32>, after generation: Int) -> Task<Void, Never> {
         let delays = timing.observeRetryDelays
         let unit = activity.startingTask()
         return Task { [clock] in
             await unit.run {
                 var pending = pids
                 var elapsed = Duration.zero
-                scheduled: do {
-                    for delay in delays {
-                        do { try await clock.sleep(for: delay - elapsed) } catch { break scheduled }
-                        elapsed = delay
-                        pending = await self.observeAgain(pending, after: generation)
-                        if pending.isEmpty { break scheduled }
-                    }
-                    self.endRetries(of: pending, after: generation)
+                for delay in delays {
+                    do { try await clock.sleep(for: delay - elapsed) } catch { return }
+                    elapsed = delay
+                    pending = await self.observeAgain(pending, after: generation)
+                    if pending.isEmpty { return }
                 }
-                ended?()
+                self.endRetries(of: pending, after: generation)
             }
         }
     }
@@ -421,38 +394,41 @@ public actor WindowEngine {
         if restarts.isCurrent(generation) { pendingRetries.subtract(pids) }
     }
 
-    /// The apps still unobservable after trying these again. Whatever has happened meanwhile (a newer
-    /// restart, a stop, an app's quit) is respected: nothing changes for the apps it concerns.
+    /// The apps to try next after trying these again: those the try found unobservable and that are
+    /// unobservable still. Only an unobservable app is tried, and what it misses comes from its outcome
+    /// events, never from the try's answer: an app that quit meanwhile, or that a later outcome says
+    /// observes, is not tried again. Whatever has happened meanwhile (a newer restart, a stop) is
+    /// respected: nothing changes for the apps it concerns.
     private func observeAgain(_ pids: Set<Int32>, after generation: Int) async -> Set<Int32> {
         guard restarts.isCurrent(generation), !isStopping else { return [] }
-        let candidates = pids.filter { !(unobservable[$0]?.isEmpty ?? true) }
-        guard !candidates.isEmpty else { return [] }
-        let still = await platform.observeAgain(pids: candidates)
-        guard restarts.isCurrent(generation), !isStopping else { return [] }
+        let candidates = pids.filter(isUnobservable)
         var remaining: Set<Int32> = []
-        for pid in candidates where unobservable[pid] != nil {
-            if let app = still.first(where: { $0.pid == pid }) {
-                unobservable[pid] = app.missing
-                remaining.insert(pid)
-            } else {
-                unobservable[pid] = nil
-            }
+        if !candidates.isEmpty {
+            let still = await platform.observeAgain(pids: candidates)
+            guard restarts.isCurrent(generation), !isStopping else { return [] }
+            remaining = candidates.filter { pid in isUnobservable(pid) && still.contains { $0.pid == pid } }
         }
         pendingRetries.subtract(pids.subtracting(remaining))
         return remaining
     }
 
-    // MARK: Unobservable apps
-
-    func learn(_ apps: [UnobservableApp]) {
-        for app in apps { learn(pid: app.pid, bundleID: app.bundleID, missing: app.missing) }
+    private func isUnobservable(_ pid: Int32) -> Bool {
+        !(unobservable[pid]?.isEmpty ?? true)
     }
 
-    /// An app is reported once; later events for it add to what is known to be missing.
+    // MARK: Unobservable apps
+
+    /// A registration's outcome, the app's state from now on: what it misses may shrink, or be nothing.
+    func observability(pid: Int32, bundleID: String?, missing: Set<ObservedEvent>, retrying: Bool) {
+        if retrying { platformRetries.insert(pid) } else { platformRetries.remove(pid) }
+        learn(pid: pid, bundleID: bundleID, missing: missing)
+    }
+
+    /// An app is reported once, the first time it misses anything, however often it is learned again.
     func learn(pid: Int32, bundleID: String?, missing: Set<ObservedEvent>) {
-        unobservable[pid, default: []].formUnion(missing)
+        unobservable[pid] = missing.isEmpty ? nil : missing
         restartJournal?.learn(pid: pid, missing: missing)
-        if reportedUnobservable.insert(pid).inserted { report(.unobservable(bundleID: bundleID)) }
+        if !missing.isEmpty, reportedUnobservable.insert(pid).inserted { report(.unobservable(bundleID: bundleID)) }
     }
 
     /// Without its moves and resizes Tafl has no last-known frames for an app, and the display

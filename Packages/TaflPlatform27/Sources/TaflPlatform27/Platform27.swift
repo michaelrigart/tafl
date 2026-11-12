@@ -22,14 +22,19 @@ final class Platform27: WindowPlatform {
     /// never runs a check of its own.
     private let accessibilityGranted: @Sendable () -> Bool
 
-    init(accessibilityGranted: @escaping @Sendable () -> Bool) {
+    /// `clock` times the tries after a failed launch, at `observeRetryDelays` after the failure.
+    init(
+        accessibilityGranted: @escaping @Sendable () -> Bool, clock: any TaflClock, observeRetryDelays: [Duration]
+    ) {
         self.accessibilityGranted = accessibilityGranted
         let (stream, continuation) = AsyncStream<PlatformEvent>.makeStream(bufferingPolicy: .unbounded)
         events = stream
         eventContinuation = continuation
         catalog = WindowCatalog27(registry: registry, axQueue: axQueue)
         observation = WindowObservation27(
-            axQueue: axQueue, registry: registry, catalog: catalog, events: continuation, notices: notices
+            axQueue: axQueue, registry: registry, events: continuation, notices: notices,
+            retryDelays: observeRetryDelays,
+            environment: .live(catalog: catalog, axQueue: axQueue, clock: clock)
         )
         reconfiguration = ReconfigurationMonitor27 { phase, _ in
             continuation.yield(phase == .began ? .reconfigurationBegan : .reconfigurationEnded)
@@ -212,16 +217,12 @@ final class Platform27: WindowPlatform {
         }
         if let previous { await MainActor.run { previous.stop() } }
         let apps = await MainActor.run(body: AppInfo27.regularApps)
-        let unobservable = await withTaskGroup(of: UnobservableApp?.self) { group in
+        return await withTaskGroup(of: UnobservableApp?.self) { group in
             for app in apps { group.addTask { await observation.observe(app) } }
             var failed: [UnobservableApp] = []
             for await result in group { if let result { failed.append(result) } }
             return failed.sorted { $0.pid < $1.pid }
         }
-        for app in unobservable {
-            PlatformLog.windows.notice("Cannot observe \(app.bundleID ?? "an app", privacy: .public)")
-        }
-        return unobservable
     }
 
     func observeAgain(pids: Set<Int32>) async -> [UnobservableApp] {

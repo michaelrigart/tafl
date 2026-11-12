@@ -49,7 +49,7 @@ public protocol WriteSession: Sendable {
     func end() async
 }
 
-/// An app whose window events macOS would not deliver, found when observing started.
+/// An app whose window events macOS would not deliver, found by a registration of its observers.
 public struct UnobservableApp: Equatable, Sendable {
     public var pid: Int32
     public var bundleID: String?
@@ -94,17 +94,22 @@ public protocol WindowPlatform: Sendable {
     func tilingSettings() async -> TilingSettings
     func isAccessibilityGranted() async -> Bool
     func capabilities() async -> [CapabilityState]
-    /// The platform's events, in order. It announces a window (`.windowCreated`) only for an app whose
-    /// creations it observes, so the engine places every window it is told about.
+    /// The platform's events, in order. Every registration of an app's observers publishes its outcome
+    /// (`.observability`) before any window it announces, and the latest outcome is the app's state: a
+    /// call's result never is. It announces a window (`.windowCreated`) only while the app's current
+    /// registration observes placement, so the engine places every window it is told about.
     var events: AsyncStream<PlatformEvent> { get }
     /// Starts observing every running app, telling `notices` of each window's announcement and end,
-    /// and of each app's quit, in the app's order. The apps whose events could not be observed are
-    /// the result; one that fails later arrives as a `.unobservable` event.
+    /// and of each app's quit, in the app's order. Each app's registration publishes its outcome as an
+    /// event before this returns; the apps it found unobservable are also the result, which says only
+    /// which apps a restart tries again. An app still launching is not waited for: its registration once
+    /// it has finished publishes its own outcome.
     func startObserving(notices: any WindowNotices) async -> [UnobservableApp]
     /// Registers these apps' observers once more, as `startObserving` did, for apps that failed to
-    /// register during a transient. The apps still unobservable are the result; a pid that is not
-    /// running, or that observing has not claimed, is left alone and is not in it. Everything else
-    /// stays as it is.
+    /// register during a transient. Each registration publishes its outcome as an event; the apps it
+    /// found unobservable are the result, which says only which apps to try next. A pid that is not
+    /// running, or that observing has not claimed, is left alone and is not in it, and an app still
+    /// launching is not waited for. Everything else stays as it is.
     func observeAgain(pids: Set<Int32>) async -> [UnobservableApp]
     /// Stops observing. `events` stays open: the engine keeps consuming it across a restart.
     func stopObserving() async
