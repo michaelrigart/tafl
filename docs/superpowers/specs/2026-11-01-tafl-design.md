@@ -11,7 +11,8 @@ Signed off by Michael on 2026-11-01, after Codex's spec review.
 2026-11-10: how Tafl notices the Accessibility switch;
 2026-11-10: measured on macOS 27.2 (feasibility probe);
 2026-11-10: a layout you apply brings its windows to the front;
-2026-11-12: an app that fails to register when it launches is tried again, as after a wake.
+2026-11-12: an app that fails to register when it launches is tried again, as after a wake;
+each registration's outcome is an event, and Tafl's view of an app follows the latest.
 
 ## Why
 
@@ -167,7 +168,8 @@ moves end within 0.5 s of the end callback.
 - **Launch.** Calendar refuses registration with `kAXErrorCannotComplete` (-25204) for every
   notification for about 0.8 s after it launches, while the app is not yet finished launching,
   and accepts it after. Five apps launched during a day failed even the try at the end of
-  their launch, so the later tries (see "After wake or a user switch") cover them.
+  their launch, so the later tries (see "An app that fails to register when it launches")
+  cover them.
 - **Enhanced UI.** Switching it off returns -25208 in a Gecko browser, yet it works. Tafl
   always attempts it and ignores the status. Skipping the switch failed in 3 of 3 runs in Zen
   (the position write reverted the size, and the frame ended 900 pt off), which is why Tafl
@@ -368,10 +370,14 @@ Names are left to the builder. The contract is:
     whether position and size are settable, its minimum size if the app exposes one, and
     its window id when it can be resolved.
   - Events: window created, moved, resized, title changed and destroyed; app launched and
-    quit. A window is announced as created only for an app whose creations the platform
-    observes.
+    quit; and each registration's outcome: the events the app misses (none when it is
+    observed) and whether the platform will try it again, in the app's order and before any
+    window that registration announces. A window is announced as created only while the app's
+    current registration observes placement (creations, moves, resizes and destructions).
   - Which apps can't be observed, and for which events (registering for an event can
-    fail; see "Failures").
+    fail; see "Failures"). The outcome events are the app's state; starting to observe and
+    trying apps again also return the apps they found failing, which decide only which apps
+    a restart tries next.
 - **Writing a window.** Three primitives, each one Accessibility call with a timeout: read
   the frame, set the size, set the position. Each returns its result or a typed failure:
   the app didn't respond, the window can't be moved, or the window is fullscreen. A write
@@ -746,7 +752,8 @@ Settings shows the configuration in plain language and never edits it.
 - **Apps Tafl can't observe.** macOS can refuse to deliver an app's window events.
   Shortcuts still work on that app's windows, and so does a layout applied by shortcut or
   from the menu. Without its events, though, Tafl has no last-known frames and doesn't see
-  new windows, so the display-change rules and an active layout leave the app's windows
+  new windows (it sees them only while it observes the app's creations, moves, resizes and
+  destructions), so the display-change rules and an active layout leave the app's windows
   alone. Each such app is logged, and the count is in Copy Diagnostics.
 - **After wake or a user switch,** Tafl re-registers its hotkeys and re-creates its
   observers. An app that observed fine before, and fails to register during the wake
@@ -754,24 +761,35 @@ Settings shows the configuration in plain language and never edits it.
   observed again, and takes part in the display-change rules and the active layout; one that
   still fails after the last try stays unobservable. An app that was already unobservable
   before the restart is not tried again. That baseline is what was unobservable when the first
-  pending restart began, less the apps whose tries are still pending, so a newer restart takes
-  over an earlier one's pending tries, while an app the tries gave up on is not tried by the
-  next restart. An app's quit or Tafl stopping ends its tries.
-- **An app found unobservable outside a restart** (a launch that failed to register, whatever
-  the error and whether or not the app was still launching, or an app first met through a
-  query) is tried again 3 s and 10 s after Tafl learns it, as an app is after a wake; an
-  app that is still launching is also tried once when it finishes launching, before Tafl learns
-  anything. One that registers is observed and takes part in the display-change rules; one that
-  still fails after the last try stays unobservable. The windows a launched app opened are placed
-  as a launch's would be (an active layout places them). An app first met through a query is
-  observed from then on, and windows it opened while unobservable are not placed: a query never
-  announces windows, so Tafl cannot tell them from windows the app already had.
-  Tafl places a window it is told about, and the platform tells it about a window only when it
-  observes that app's creations, so a window announced by a successful try is placed. An app
-  whose tries are pending when a restart begins counts as one whose tries are pending (see
-  above): the restart tries it again if it still fails. The app's quit and Tafl stopping end its
-  tries, and a restart replaces them with its own; a try still running when a restart begins
-  changes nothing.
+  pending restart began, less the apps whose tries are still pending (a restart's, or the
+  platform's after a failed launch), so a newer restart takes over an earlier one's pending
+  tries and a launch's, while an app the tries gave up on is not tried by the next restart. The
+  apps a restart tries are those its own registrations found failing, and those that events
+  reported failing while it was pending; an app that quit meanwhile is not tried. An app's quit
+  or Tafl stopping ends its tries.
+- **An app that fails to register when it launches** (whatever the error), or when a query first
+  meets it, is tried again: once when it finishes launching, if it was still launching, then 3 s
+  and 10 s after that failure, the delays a wake's tries use. One that
+  registers is observed and takes part in the display-change rules; the windows a launched app
+  opened are placed as a launch's would be (an active layout places them). One that still fails
+  after the last try stays unobservable. An app first met through a query is observed from then
+  on, and windows it opened while unobservable are not placed: a query never announces windows,
+  so Tafl cannot tell them from windows the app already had. The app's quit, Tafl stopping and a
+  restart end these tries; the restart registers the app again and, if it still fails, tries it
+  as after a wake. One app's tries, or its wait to finish launching, hold up no other app. A
+  registration at start or at a restart is tried once when the app finishes launching, if it was
+  still launching, and otherwise only by a restart's tries.
+- **What Tafl knows of an app comes from its registrations.** Every registration of an app's
+  observers (at start, at launch, when a query first meets it, at a restart, and each try)
+  reports its outcome, the events the app still misses, in that app's ordered events, before any
+  window the registration announces. Tafl holds the latest outcome as the app's state, so what an
+  app misses can shrink to nothing; the result of a call never overrides it (at start, Tafl takes
+  the start's result as what those outcomes will say before it handles any of them, so the start's
+  rules and first readings leave the failing apps out). A window is announced only while the app's
+  current registration observes placement (creations, moves, resizes and destructions), and only
+  under that registration: a window found by one that has since ended (the app quit, observing
+  restarted, or a try replaced it) is never announced. Tafl places a window it is told about, so
+  a window announced by a successful try is placed, and where it lands is its last-known frame.
 
 ### Menu bar icon
 
