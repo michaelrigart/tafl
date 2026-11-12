@@ -163,6 +163,10 @@ moves end within 0.5 s of the end callback.
   Known limit: if Tafl quits while no display is connected and starts again with one, it
   treats that display as a first setup, because the saved memory cannot tell "no displays"
   from "nothing remembered".
+- **Launch.** Calendar refuses registration with `kAXErrorCannotComplete` (-25204) for every
+  notification for about 0.8 s after it launches, while the app is not yet finished launching,
+  and accepts it after. Five apps launched during a day failed even the try at the end of
+  their launch, so the later tries (see "After wake or a user switch") cover them.
 - **Enhanced UI.** Switching it off returns -25208 in a Gecko browser, yet it works. Tafl
   always attempts it and ignores the status. Skipping the switch failed in 3 of 3 runs in Zen
   (the position write reverted the size, and the frame ended 900 pt off), which is why Tafl
@@ -751,6 +755,13 @@ Settings shows the configuration in plain language and never edits it.
   pending restart began, less the apps whose tries are still pending, so a newer restart takes
   over an earlier one's pending tries, while an app the tries gave up on is not tried by the
   next restart. An app's quit or Tafl stopping ends its tries.
+- **An app that launches** and fails to register while it is still launching is tried again
+  when it finishes launching, and then 3 s and 10 s after Tafl learns it is unobservable: one
+  that registers then is observed, its windows are placed as a launch's would be (an active
+  layout places them), and it takes part in the display-change rules; one that still fails after
+  the last try stays unobservable. The app's quit, Tafl stopping or a restart ends these tries;
+  a restart re-registers every app and its own rules decide, and a try still running when it
+  begins changes nothing.
 
 ### Menu bar icon
 
