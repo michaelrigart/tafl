@@ -760,11 +760,14 @@ Settings shows the configuration in plain language and never edits it.
   the error and whether or not the app was still launching, or an app first met through a
   query) is tried again 3 s and 10 s after Tafl learns it, as an app is after a wake; an
   app that is still launching is also tried once when it finishes launching, before Tafl learns
-  anything. One that registers is observed, its windows are placed as a launch's would be (an
-  active layout places them), and it takes part in the display-change rules; one that still
-  fails after the last try stays unobservable. The platform says that the app is observed in the
-  same ordered stream as the announcements of its windows, before them, so a window announced
-  by the registration is judged by the app's new state. An app whose tries are pending when a
+  anything. One that registers is observed and takes part in the display-change rules; one that
+  still fails after the last try stays unobservable. The windows a launched app opened are placed
+  as a launch's would be (an active layout places them). An app first met through a query is
+  observed from then on, and windows it opened while unobservable are not placed: a query never
+  announces windows, so Tafl cannot tell them from windows the app already had.
+  The platform says that the app is observed in the same ordered stream as the announcements of
+  its windows, before them, so a window announced by the registration is judged by the app's new
+  state; Tafl takes that only for a try it has in flight under the current restart. An app whose tries are pending when a
   restart begins counts as one whose tries are pending (see above): the restart tries it again if
   it still fails. The app's quit and Tafl stopping end its tries, and a restart replaces them with
   its own; a try still running when a restart begins changes nothing.
