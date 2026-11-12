@@ -156,9 +156,6 @@ public actor WindowEngine {
     /// and so does its last try. The app is in `pendingRetries` until then.
     var launchRetryTasks: [Int32: (serial: Int, task: Task<Void, Never>)] = [:]
     var nextLaunchRetry = 0
-    /// The apps the engine has asked the platform to register again and has no answer for, with the
-    /// restart generation each was asked under: the only apps an `.observed` event is taken for.
-    var triesInFlight: [Int32: Int] = [:]
     var eventTask: Task<Void, Never>?
     /// The wait for the quiet period. An input replaces it; the rules run is not part of it.
     var settleTask: Task<Void, Never>?
@@ -430,9 +427,7 @@ public actor WindowEngine {
         guard restarts.isCurrent(generation), !isStopping else { return [] }
         let candidates = pids.filter { !(unobservable[$0]?.isEmpty ?? true) }
         guard !candidates.isEmpty else { return [] }
-        for pid in candidates { triesInFlight[pid] = generation }
         let still = await platform.observeAgain(pids: candidates)
-        for pid in candidates where triesInFlight[pid] == generation { triesInFlight[pid] = nil }
         guard restarts.isCurrent(generation), !isStopping else { return [] }
         var remaining: Set<Int32> = []
         for pid in candidates where unobservable[pid] != nil {
@@ -460,30 +455,11 @@ public actor WindowEngine {
         if reportedUnobservable.insert(pid).inserted { report(.unobservable(bundleID: bundleID)) }
     }
 
-    /// The platform registered an unobservable app again, before it announced the app's windows: what the
-    /// app still misses is its state from here on, so the windows announced next are judged by it. An app
-    /// that is not unobservable (it quit meanwhile) is left alone, and so is one whose try is not in flight
-    /// under the current restart: a restart that began meanwhile decides what the app is.
-    func observed(pid: Int32, missing: Set<ObservedEvent>) {
-        guard triesInFlight[pid] == restarts.current, unobservable[pid] != nil else { return }
-        if missing.isEmpty {
-            unobservable[pid] = nil
-            pendingRetries.remove(pid)
-        } else {
-            unobservable[pid] = missing
-        }
-    }
-
     /// Without its moves and resizes Tafl has no last-known frames for an app, and the display
     /// change rules leave it alone.
     func isLeftOutOfRules(pid: Int32) -> Bool {
         guard let missing = unobservable[pid] else { return false }
         return missing.contains(.moved) || missing.contains(.resized)
-    }
-
-    /// Without its creations Tafl does not see the app's new windows.
-    func isLeftOutOfPlacement(pid: Int32) -> Bool {
-        unobservable[pid]?.contains(.created) ?? false
     }
 
     // MARK: Actions

@@ -41,9 +41,6 @@ extension WindowEngine {
             learn(pid: pid, bundleID: bundleID, missing: missing)
             scheduleLaunchRetries(for: pid)
             eventsHandled += 1
-        case .observed(let pid, let missing):
-            observed(pid: pid, missing: missing)
-            eventsHandled += 1
         case .reconfigurationBegan:
             reconfigurationBegan()
             eventsHandled += 1
@@ -78,7 +75,6 @@ extension WindowEngine {
         guard !isStopping,
               !isFrozen,
               snapshot.isPlaceable,
-              !isLeftOutOfPlacement(pid: window.pid),
               let definition = activeLayout.definition(in: config),
               owner.placesAtCreation(window)
         else {
@@ -117,7 +113,6 @@ extension WindowEngine {
               let since,
               !isStopping,
               !isFrozen,
-              !isLeftOutOfPlacement(pid: window.pid),
               let definition = activeLayout.definition(in: config)
         else { return }
         await placeAfterTitleChange(window, in: definition, applied: applied, since: since, application: application)

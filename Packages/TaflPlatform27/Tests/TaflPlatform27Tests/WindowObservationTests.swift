@@ -210,6 +210,49 @@ func aRetryThatFailsAgainReportsTheAppUnobservable() async {
     #expect(harness.registrations.count == 2)
 }
 
+@Test(.timeLimit(.minutes(1)))
+func aTryOnAnAppStillLaunchingReturnsTheOutcomeOfItsRegistrationWhenItHasFinishedLaunching() async {
+    let harness = ObservationHarness(outcomes: [timeout])
+    guard case .retrying(let first) = await harness.observation.attempt(launching) else {
+        Issue.record("expected a retry")
+        return
+    }
+    _ = await first.bounded()
+    // Still refused when it has finished launching: the try says so, and publishes nothing of its own.
+    let observation = harness.observation
+    let again = Task { await observation.observeAgain(launching) }
+    #expect(await again.bounded() == UnobservableApp(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
+    harness.continuation.yield(.reconfigurationEnded)
+    #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
+    #expect(await harness.next() == .reconfigurationEnded)
+    #expect(harness.registrations.count == 4)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aTryOnAnAppStillLaunchingThatRegistersWhenItHasFinishedReturnsNilAndAnnouncesItsWindowsOnce() async {
+    let harness = ObservationHarness(outcomes: [timeout, timeout, timeout, [:]], found: [5001])
+    guard case .retrying(let first) = await harness.observation.attempt(launching) else {
+        Issue.record("expected a retry")
+        return
+    }
+    _ = await first.bounded()
+    #expect(harness.announcements.count == 0)
+    let observation = harness.observation
+    let again = Task { await observation.observeAgain(launching) }
+    let result = await again.bounded()
+    #expect(result == .some(nil))
+    #expect(harness.announcements.count == 1)
+    harness.continuation.yield(.reconfigurationEnded)
+    #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.moved]))
+    guard case .windowCreated(let snapshot)? = await harness.next() else {
+        Issue.record("expected the registration to announce the window")
+        return
+    }
+    #expect(snapshot.handle == foundWindow)
+    #expect(await harness.next() == .reconfigurationEnded)
+    #expect(harness.notices.all == [.announced(foundWindow)])
+}
+
 @Test func anAppThatFailsAgainIsStillUnobservable() async {
     let harness = ObservationHarness(isLaunching: false, outcomes: [timeout])
     _ = await harness.observation.attempt(launching)
@@ -453,14 +496,11 @@ func anAppWhoseLaunchRegistrationFailedAnnouncesItsWindowsOnceWhenItIsRegistered
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
     #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.created]))
-    // The app is observed before the window is announced, so the engine judges the window by it.
-    #expect(await harness.next() == .observed(pid: 4242, missing: []))
     guard case .windowCreated(let snapshot)? = await harness.next() else {
         Issue.record("expected the second registration to announce the window")
         return
     }
     #expect(snapshot.handle == foundWindow)
-    #expect(await harness.next() == .observed(pid: 4242, missing: []))
     #expect(await harness.next() == .reconfigurationEnded)
     #expect(harness.notices.all == [.announced(foundWindow)])
 }

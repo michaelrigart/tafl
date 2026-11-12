@@ -5,6 +5,9 @@ public enum ObservedEvent: String, Sendable {
 }
 
 public enum PlatformEvent: Equatable, Sendable {
+    /// A window's announcement. The platform announces a window only for an app whose creations it
+    /// observes (a creation notification, or the catch-up of a registration that observes creations),
+    /// so the engine places any window it is told about.
     case windowCreated(WindowSnapshot)
     case windowMoved(WindowHandle)
     case windowResized(WindowHandle)
@@ -15,8 +18,4 @@ public enum PlatformEvent: Equatable, Sendable {
     case reconfigurationBegan
     case reconfigurationEnded
     case unobservable(pid: Int32, bundleID: String?, missing: Set<ObservedEvent>)
-    /// A registration the engine asked for again took: what the app still misses, empty when nothing.
-    /// It comes before the announcements the registration makes, so a window announced next is judged
-    /// by it.
-    case observed(pid: Int32, missing: Set<ObservedEvent>)
 }

@@ -1219,7 +1219,24 @@ private let placeholderB = Display(
     #expect(await rig.engine.unobservableAppCount == 1)
 }
 
-@Test func unobservableAppGetsNoNewWindowPlacement() async {
+/// The platform announces a window only for an app whose creations it observes (the fake models that), so
+/// an app unobservable for creations is never told of a new window, and the engine places every window it is told of.
+@Test func aWindowOfAnAppWhoseCreationsAreUnobservedIsNeverAnnounced() async {
+    let desk = layout("Desk", [slot(.rightHalf, app: "com.b")])
+    let rig = await Rig()
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    await rig.fake.configure { $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.created])] }
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.created]))
+    let created = window(2, frame: start, pid: 200, bundleID: "com.b")
+    await rig.fake.configure { $0.windows[created.handle] = created }
+    await rig.emit(.windowCreated(created))
+    await rig.quiescent()
+    #expect(await rig.log.isEmpty)
+    #expect(await rig.fake.eventsSent == 1)
+}
+
+@Test func theEnginePlacesAWindowItIsToldAboutWhateverItKnowsOfTheApp() async {
     let desk = layout("Desk", [slot(.rightHalf, app: "com.b")])
     let rig = await Rig()
     await rig.engine.start(config: config(layouts: [desk]))
@@ -1229,7 +1246,7 @@ private let placeholderB = Display(
     await rig.fake.configure { $0.windows[created.handle] = created }
     await rig.emit(.windowCreated(created))
     await rig.quiescent()
-    #expect(await rig.log.isEmpty)
+    #expect(await rig.frame(of: created.handle).map { isClose($0, rightHalfA) } == true)
 }
 
 // MARK: Start and stop
@@ -2043,6 +2060,15 @@ private func launchRig() async -> Rig {
     #expect(await rig.frame(of: handle200) == leftHalfA)
 }
 
+@Test(.timeLimit(.minutes(1))) func aTryTheAppStillFailsKeepsItUnobservableWithWhatTheResultSays() async {
+    let rig = await launchRig()
+    await rig.fake.configure { $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.moved, .resized])] }
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    #expect(await rig.engine.unobservable == [200: [.moved, .resized]])
+    #expect(await rig.engine.unobservableAppCount == 1)
+}
+
 @Test(.timeLimit(.minutes(1))) func anAppThatStillFailsAfterEveryLaunchTryStaysUnobservableAndIsNotTriedAgain() async {
     let rig = await launchRig()
     await rig.clock.advance(by: .seconds(3))
@@ -2188,64 +2214,14 @@ private func launchRig() async -> Rig {
     }
     await rig.clock.advance(by: .seconds(3))
     await gate.waitUntilHolding(1)
-    // The registration has announced the window and not returned yet: the engine handles the announcement
-    // while its answer is still to come, and the observed event before it has already cleared the app.
-    await rig.waitForEvents(3)
+    // The registration has announced the window and not returned yet: the engine places it while the
+    // app is still unobservable in its books, because the platform tells only of windows it observes.
+    await rig.waitForEvents(2)
+    #expect(await rig.engine.unobservable == [200: [.created]])
     #expect(await rig.frame(of: created.handle).map { isClose($0, rightHalfA) } == true)
     gate.open()
     await rig.quiescent()
     #expect(await rig.engine.unobservable == [:])
-}
-
-@Test(.gated, .timeLimit(.minutes(1))) func anObservedEventForAnAppThatQuitDoesNotBringItBack() async {
-    let rig = await launchRig()
-    let gate = Gate()
-    await rig.fake.configure { $0.observeAgainGate = gate }
-    await rig.clock.advance(by: .seconds(3))
-    await gate.waitUntilHolding(1)
-    await rig.emit(.appQuit(pid: 200))
-    await rig.emit(.observed(pid: 200, missing: [.moved]))
-    await rig.quiescent()
-    #expect(await rig.engine.unobservable.isEmpty)
-    gate.open()
-    await rig.quiescent()
-    #expect(await rig.engine.unobservable.isEmpty)
-}
-
-@Test(.gated, .timeLimit(.minutes(1))) func anObservedEventSaysWhatTheAppStillMissesWhileTheTryIsInFlight() async {
-    let rig = await launchRig()
-    let gate = Gate()
-    await rig.fake.configure {
-        $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.titleChanged])]
-        $0.observeAgainGate = gate
-    }
-    await rig.clock.advance(by: .seconds(3))
-    await gate.waitUntilHolding(1)
-    await rig.waitForEvents(2)
-    // The platform's event, before its answer: the app misses only title changes from here on.
-    #expect(await rig.engine.unobservable == [200: [.titleChanged]])
-    gate.open()
-    await rig.quiescent()
-    #expect(await rig.engine.unobservable == [200: [.titleChanged]])
-}
-
-@Test(.gated, .timeLimit(.minutes(1))) func anObservedEventThatArrivesAfterARestartBeganIsIgnored() async {
-    let rig = await launchRig()
-    let gate = Gate()
-    await rig.fake.configure { $0.observeAgainGate = gate }
-    await rig.clock.advance(by: .seconds(3))
-    await gate.waitUntilHolding(1)
-    let stale = await rig.engine.launchRetryTasks[200].map(\.task)
-    // The restart finds the app failing on moves and resizes; the try's event, handled after it, must not clear that.
-    await rig.fake.configure { $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.moved, .resized])] }
-    await rig.engine.restartObserving()
-    await rig.emit(.observed(pid: 200, missing: []))
-    await rig.quiescent()
-    #expect(await rig.engine.unobservable == [200: [.moved, .resized]])
-    #expect(await rig.engine.pendingRetries == [200])
-    gate.open()
-    await stale?.bounded()
-    #expect(await rig.engine.unobservable == [200: [.moved, .resized]])
 }
 
 @Test(.gated, .timeLimit(.minutes(1))) func anEndingScheduleDoesNotRemoveTheEntryOfALaterOneForTheSamePid() async {

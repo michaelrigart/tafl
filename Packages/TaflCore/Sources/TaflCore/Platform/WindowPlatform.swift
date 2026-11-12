@@ -94,6 +94,8 @@ public protocol WindowPlatform: Sendable {
     func tilingSettings() async -> TilingSettings
     func isAccessibilityGranted() async -> Bool
     func capabilities() async -> [CapabilityState]
+    /// The platform's events, in order. It announces a window (`.windowCreated`) only for an app whose
+    /// creations it observes, so the engine places every window it is told about.
     var events: AsyncStream<PlatformEvent> { get }
     /// Starts observing every running app, telling `notices` of each window's announcement and end,
     /// and of each app's quit, in the app's order. The apps whose events could not be observed are

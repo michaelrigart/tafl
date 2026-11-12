@@ -66,7 +66,7 @@ actor FakePlatform: WindowPlatform {
     /// Reads `unobserved` for the next `observeAgain(pids:)` call, then holds its result until the gate opens.
     var observeAgainGate: Gate?
     /// The windows an `observeAgain(pids:)` that registers an app announces, as the platform's catch-up
-    /// does: after an `.observed` event, and before the call returns.
+    /// does, before the call returns.
     var observeAgainAnnounces: [WindowSnapshot] = []
     /// Reads the windows, then holds the result of the next `visibleWindows()` until the gate opens.
     var visibleWindowsLateGate: Gate?
@@ -115,7 +115,10 @@ actor FakePlatform: WindowPlatform {
     /// notices first, in the same step.
     func emit(_ event: PlatformEvent) {
         switch event {
-        case .windowCreated(let snapshot): notices?.announced(snapshot)
+        case .windowCreated(let snapshot):
+            // As the platform: it announces no window of an app whose creations it cannot observe.
+            guard !unobserved.contains(where: { $0.pid == snapshot.handle.pid && $0.missing.contains(.created) }) else { return }
+            notices?.announced(snapshot)
         case .windowDestroyed(let window): notices?.destroyed(window)
         case .appQuit(let pid): notices?.quit(pid: pid)
         default: break
@@ -308,9 +311,7 @@ actor FakePlatform: WindowPlatform {
         let answer = unobserved.filter { pids.contains($0.pid) }
             .map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
         for pid in pids.sorted() {
-            let missing = answer.first { $0.pid == pid }?.missing ?? []
-            emit(.observed(pid: pid, missing: missing))
-            guard missing.isEmpty else { continue }
+            guard answer.first(where: { $0.pid == pid }) == nil else { continue }
             for snapshot in observeAgainAnnounces where snapshot.handle.pid == pid { emit(.windowCreated(snapshot)) }
         }
         if let gate = observeAgainGate {
