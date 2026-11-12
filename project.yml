@@ -1,0 +1,47 @@
+name: Tafl
+options:
+  bundleIdPrefix: com.michaelrigart
+  deploymentTarget:
+    macOS: "27.0"
+packages:
+  TaflCore:
+    path: Packages/TaflCore
+  TaflPlatform27:
+    path: Packages/TaflPlatform27
+targets:
+  Tafl:
+    type: application
+    platform: macOS
+    sources: [Tafl]
+    dependencies:
+      - package: TaflCore
+      - package: TaflPlatform27
+    info:
+      path: Tafl/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleDisplayName: Tafl
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+    entitlements:
+      path: Tafl/Tafl.entitlements
+      properties: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.michaelrigart.tafl
+        ARCHS: arm64
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Manual
+        CURRENT_PROJECT_VERSION: "0"
+        DEVELOPMENT_TEAM: CX4MWR5579
+        ENABLE_DEBUG_DYLIB: NO
+        ENABLE_HARDENED_RUNTIME: YES
+        MARKETING_VERSION: dev
+        OTHER_CODE_SIGN_FLAGS: "--options=runtime"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+      configs:
+        Release:
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO

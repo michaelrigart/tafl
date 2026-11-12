@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Fails when a test waits other than through TaflTestSupport: a yield, a sleep, the wall clock, a
+# task's value or result, a semaphore, a dispatch group, a blocking wait, a delayed dispatch, a run
+# loop, or a continuation of its own. TaflTestSupport lives under Sources, so it is not scanned.
+# Every rule is checked on every line, and a justified exception names the rules it allows:
+# `// lint-tests: allow <rule>[, <rule>]: <reason>` on the line, so it cannot hide a second
+# violation there. A marker on a line with no violation is an error (a stale marker), and so is a
+# rule it names that nothing on the line matches. The script lists every exception.
+#
+# It reads one line at a time, so it cannot see a wait split over lines: `await` on one line and
+# `.value` or `.result` on the next, or a clock or semaphore held in a variable and used later.
+set -euo pipefail
+
+if [[ $# -gt 1 ]]; then
+  echo "usage: $0 [<repository root>]" >&2
+  exit 2
+fi
+
+root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+marker='// lint-tests: allow'
+
+# Each rule: the name an allow marker uses, what it catches, the pattern (POSIX extended), then a
+# pattern for a line that is not a violation although the first matches ("" for none).
+rules=(
+  "task-yield" "Task.yield()" 'Task\.yield[[:space:]]*\(\)' ""
+  "task-sleep" "Task.sleep" 'Task\.sleep' ""
+  "thread-sleep" "Thread.sleep" 'Thread\.sleep' ""
+  "usleep" "usleep" '(^|[^[:alnum:]_])usleep[[:space:]]*\(' ""
+  "sleep" "sleep()" '(^|[^[:alnum:]_.])((Darwin|Foundation)\.)?sleep[[:space:]]*\(' 'func[[:space:]]+sleep[[:space:]]*\('
+  "date" "Date() as a clock" '(^|[^[:alnum:]_])Date\(\)' ""
+  "date-now" "Date.now as a clock" '(^|[^[:alnum:]_])Date\.now([^[:alnum:]_]|$)' ""
+  "continuous-clock" "ContinuousClock as a clock" '(^|[^[:alnum:]_])ContinuousClock' ""
+  "suspending-clock" "SuspendingClock as a clock" '(^|[^[:alnum:]_])SuspendingClock' ""
+  "task-value" "a task's .value" 'await.*\.value([^[:alnum:]_]|$)' ""
+  "task-result" "a task's .result" 'await.*\.result([^[:alnum:]_]|$)' ""
+  "semaphore" "a DispatchSemaphore" '(^|[^[:alnum:]_])DispatchSemaphore' ""
+  "dispatch-group" "a DispatchGroup" '(^|[^[:alnum:]_])DispatchGroup' ""
+  "blocking-wait" "a blocking .wait()" '\.wait[[:space:]]*(\(\)|\((until|(wall)?[tT]imeout):)' ""
+  "async-after" "DispatchQueue asyncAfter" '\.asyncAfter' ""
+  "run-loop" "a RunLoop run" '\.run[[:space:]]*\(until:|RunLoop[^;]*\.run[[:space:]]*\(|(^|[^[:alnum:]_])CFRunLoopRun(InMode)?[[:space:]]*\(' ""
+  "continuation" "a continuation of its own" 'with(Checked|Unsafe)(Throwing)?Continuation' ""
+)
+
+files=()
+for tests in "$root"/Packages/*/Tests; do
+  [[ -d "$tests" ]] || continue
+  while IFS= read -r -d '' file; do
+    files+=("$file")
+  done < <(find "$tests" -name '*.swift' -print0 | sort -z)
+done
+
+failures=0
+allowed=()
+for file in "${files[@]}"; do
+  relative="${file#"$root"/}"
+  number=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    number=$((number + 1))
+    # Comments may name what they forbid.
+    [[ "$line" =~ ^[[:space:]]*// ]] && continue
+    # The marker names the rules it allows, up to a colon; the rest of the line is its reason.
+    allows=""
+    reason=""
+    marked=0
+    code="$line"
+    if [[ "$line" == *"$marker"* ]]; then
+      marked=1
+      code="${line%%"$marker"*}"
+      rest="${line#*"$marker"}"
+      allows="${rest%%:*}"
+      [[ "$rest" == *:* ]] && reason="${rest#*:}"
+      reason="${reason#"${reason%%[![:space:]]*}"}"
+      allows="${allows//,/ }"
+    fi
+    violations=0
+    matched=" "
+    for ((i = 0; i < ${#rules[@]}; i += 4)); do
+      id="${rules[i]}"
+      name="${rules[i + 1]}"
+      pattern="${rules[i + 2]}"
+      except="${rules[i + 3]}"
+      [[ "$code" =~ $pattern ]] || continue
+      [[ -n "$except" && "$code" =~ $except ]] && continue
+      violations=$((violations + 1))
+      matched+="$id "
+      if [[ $marked -eq 0 ]]; then
+        echo "$relative:$number: waits with $name; wait through TaflTestSupport instead" >&2
+        failures=$((failures + 1))
+      elif [[ -z "$reason" ]]; then
+        echo "$relative:$number: an allow marker needs a reason after its rules: $name" >&2
+        failures=$((failures + 1))
+      elif [[ " $allows " != *" $id "* ]]; then
+        echo "$relative:$number: the allow marker does not name $id: $name" >&2
+        failures=$((failures + 1))
+      else
+        allowed+=("$relative:$number: $name: $reason")
+      fi
+    done
+    if [[ $marked -eq 1 && $violations -eq 0 ]]; then
+      echo "$relative:$number: a stale allow marker: nothing on this line waits" >&2
+      failures=$((failures + 1))
+    elif [[ $marked -eq 1 ]]; then
+      # A name that matched nothing here would allow a later violation of that rule on this line.
+      for name in $allows; do
+        if [[ "$matched" != *" $name "* ]]; then
+          echo "$relative:$number: the allow marker names $name, which nothing on this line matches" >&2
+          failures=$((failures + 1))
+        fi
+      done
+    fi
+  done < "$file"
+done
+
+if [[ ${#allowed[@]} -gt 0 ]]; then
+  echo "Allowed (${#allowed[@]}):"
+  printf '  %s\n' "${allowed[@]}"
+fi
+if [[ $failures -gt 0 ]]; then
+  echo "lint-tests: $failures line(s) wait outside TaflTestSupport" >&2
+  exit 1
+fi
+echo "lint-tests: ${#files[@]} test files wait only through TaflTestSupport"
