@@ -767,18 +767,22 @@ Settings shows the configuration in plain language and never edits it.
   apps a restart tries are those its own registrations found failing, and those that events
   reported failing while it was pending; an app that quit meanwhile is not tried. An app's quit
   or Tafl stopping ends its tries.
-- **An app that fails to register when it launches** (whatever the error), or when a query first
-  meets it, is tried again: once when it finishes launching, if it was still launching, then 3 s
-  and 10 s after that failure, the delays a wake's tries use. One that
-  registers is observed and takes part in the display-change rules; the windows a launched app
-  opened are placed as a launch's would be (an active layout places them). One that still fails
+- **An app that fails to register when it launches** (whatever the error, and including an app
+  still launching when Tafl starts), or when a query first meets it, is tried again: once when it
+  finishes launching, if it was still launching, then 3 s and 10 s after that failure, the delays
+  a wake's tries use. One that registers is observed and takes part in the display-change rules;
+  the windows a launched app opened are placed as a launch's would be (an active layout places
+  them). One that still fails
   after the last try stays unobservable. An app first met through a query is observed from then
   on, and windows it opened while unobservable are not placed: a query never announces windows,
   so Tafl cannot tell them from windows the app already had. The app's quit, Tafl stopping and a
   restart end these tries; the restart registers the app again and, if it still fails, tries it
-  as after a wake. One app's tries, or its wait to finish launching, hold up no other app. A
-  registration at start or at a restart is tried once when the app finishes launching, if it was
-  still launching, and otherwise only by a restart's tries.
+  as after a wake. One app's tries, or its wait to finish launching, hold up no other app. An app
+  still launching when Tafl starts (at login, other apps are launching too) is met as its launch:
+  it is tried as above, and once it registers, the windows it opened are placed as a launch's
+  would be. An app that fails at Tafl's start for any other reason is not tried again. A
+  registration at a restart is tried once when the app finishes launching, if it was still
+  launching, and otherwise only by the restart's own tries.
 - **What Tafl knows of an app comes from its registrations.** Every registration of an app's
   observers (at start, at launch, when a query first meets it, at a restart, and each try)
   reports its outcome, the events the app still misses, in that app's ordered events, before any
