@@ -438,6 +438,30 @@ func aLaunchAQueryMetFirstStillAnnouncesItsWindows() async {
     #expect(harness.registrations.count == 1)
 }
 
+@Test(.timeLimit(.minutes(1)))
+func anAppWhoseLaunchRegistrationFailedAnnouncesItsWindowsOnceWhenItIsRegisteredAgain() async {
+    let failed: [String: AXError] = [kAXWindowCreatedNotification: .notificationUnsupported]
+    let harness = ObservationHarness(isLaunching: false, outcomes: [failed, [:]], found: [5001])
+    await harness.observation.appLaunched(launching)
+    // The launch registered without creations: it announced nothing, and the debt stands.
+    #expect(harness.announcements.count == 0)
+    #expect(await harness.observation.observeAgain(launching) == nil)
+    #expect(harness.announcements.count == 1)
+    // The debt is paid: a further registration announces nothing.
+    #expect(await harness.observation.observeAgain(launching) == nil)
+    #expect(harness.announcements.count == 1)
+    harness.continuation.yield(.reconfigurationEnded)
+    #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
+    #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.created]))
+    guard case .windowCreated(let snapshot)? = await harness.next() else {
+        Issue.record("expected the second registration to announce the window")
+        return
+    }
+    #expect(snapshot.handle == foundWindow)
+    #expect(await harness.next() == .reconfigurationEnded)
+    #expect(harness.notices.all == [.announced(foundWindow)])
+}
+
 /// Reads any element as a standard window whose id is the pid the element was made from.
 private let echoReader = WindowReader27(
     readTracked: { element, _, _, then in

@@ -151,6 +151,9 @@ public actor WindowEngine {
     var restartTask: Task<Void, Never>?
     /// The schedule of tries for the apps the latest restart could not observe.
     var observeRetryTask: Task<Void, Never>?
+    /// The schedule of tries for an app that was unobservable after its launch, by pid. A restart,
+    /// a stop and the app's quit end it.
+    var launchRetryTasks: [Int32: Task<Void, Never>] = [:]
     var eventTask: Task<Void, Never>?
     /// The wait for the quiet period. An input replaces it; the rules run is not part of it.
     var settleTask: Task<Void, Never>?
@@ -292,8 +295,7 @@ public actor WindowEngine {
             settleTask?.cancel()
             rulesTask?.cancel()
             for task in background.values { task.cancel() }
-            observeRetryTask?.cancel()
-            observeRetryTask = nil
+            cancelObserveRetries()
             eventTask = nil
             settleTask = nil
             rulesTask = nil
@@ -321,8 +323,7 @@ public actor WindowEngine {
     public func restartObserving() async {
         await activity.call {
             let generation = restarts.begin()
-            observeRetryTask?.cancel()
-            observeRetryTask = nil
+            cancelObserveRetries()
             // The baseline is taken before any registration work, which events may report on meanwhile.
             if restartJournal == nil {
                 restartJournal = RestartJournal(before: unobservable.filter { !pendingRetries.contains($0.key) })
@@ -356,14 +357,35 @@ public actor WindowEngine {
 
     // MARK: Retrying unobservable apps
 
-    /// Tries the apps again at each of the timing's delays, measured from the restart, until none is
-    /// left. A newer restart, a stop and an app's quit end the tries for the apps they concern.
+    /// Tries the apps a restart could not observe again, at each of the timing's delays measured from
+    /// the restart, until none is left.
     private func scheduleObserveRetries(for pids: Set<Int32>, after generation: Int) {
-        let delays = timing.observeRetryDelays
-        pendingRetries = delays.isEmpty ? [] : pids
+        pendingRetries = timing.observeRetryDelays.isEmpty ? [] : pids
         guard !pendingRetries.isEmpty else { return }
+        observeRetryTask = observeRetries(for: pids, after: generation)
+    }
+
+    /// Tries an app again that is unobservable after its launch's registration, at each of the timing's
+    /// delays measured from when the engine learns it. While a restart is pending the restart's own
+    /// answer decides, and its retries follow.
+    func scheduleLaunchRetries(for pid: Int32) {
+        guard !isStopping, restartJournal == nil, !timing.observeRetryDelays.isEmpty else { return }
+        launchRetryTasks[pid]?.cancel()
+        launchRetryTasks[pid] = observeRetries(for: [pid], after: restarts.current)
+    }
+
+    /// A newer restart, a stop and an app's quit end the tries for the apps they concern.
+    private func cancelObserveRetries() {
+        observeRetryTask?.cancel()
+        observeRetryTask = nil
+        for task in launchRetryTasks.values { task.cancel() }
+        launchRetryTasks = [:]
+    }
+
+    private func observeRetries(for pids: Set<Int32>, after generation: Int) -> Task<Void, Never> {
+        let delays = timing.observeRetryDelays
         let unit = activity.startingTask()
-        observeRetryTask = Task { [clock] in
+        return Task { [clock] in
             await unit.run {
                 var pending = pids
                 var elapsed = Duration.zero
@@ -373,14 +395,14 @@ public actor WindowEngine {
                     pending = await self.observeAgain(pending, after: generation)
                     if pending.isEmpty { return }
                 }
-                self.endRetries(after: generation)
+                self.endRetries(of: pending, after: generation)
             }
         }
     }
 
     /// The last try is over: the apps still failing are given up on, unless a newer restart has begun.
-    private func endRetries(after generation: Int) {
-        if restarts.isCurrent(generation) { pendingRetries = [] }
+    private func endRetries(of pids: Set<Int32>, after generation: Int) {
+        if restarts.isCurrent(generation) { pendingRetries.subtract(pids) }
     }
 
     /// The apps still unobservable after trying these again. Whatever has happened meanwhile (a newer
@@ -400,7 +422,7 @@ public actor WindowEngine {
                 unobservable[pid] = nil
             }
         }
-        pendingRetries = remaining
+        pendingRetries.subtract(pids.subtracting(remaining))
         return remaining
     }
 

@@ -1988,6 +1988,150 @@ private func wakeRig() async -> Rig {
     #expect(await rig.fake.observeAgainCalls.isEmpty)
 }
 
+// MARK: Retrying apps that failed to register when they launched
+
+private let failsOnLaunch = FakePlatform.UnobservedApp(pid: 200, bundleID: "com.b", missing: [.created])
+
+/// A rig with an active layout for com.b, and an app on pid 200 that the platform has just reported
+/// unobservable: its registration failed while it launched, and still fails when tried again.
+private func launchRig() async -> Rig {
+    let desk = layout("Desk", [slot(.rightHalf, app: "com.b")])
+    let rig = await Rig(timing: retryTiming)
+    await rig.engine.start(config: config(layouts: [desk]))
+    await rig.engine.applyLayout(named: "Desk")
+    await rig.fake.configure { $0.unobserved = [failsOnLaunch] }
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.created]))
+    await rig.quiescent()
+    return rig
+}
+
+@Test(.timeLimit(.minutes(1))) func anAppThatFailedToRegisterWhenItLaunchedIsObservedAtTheFirstTryAndItsWindowIsPlaced() async {
+    let rig = await launchRig()
+    #expect(await rig.engine.unobservable == [200: [.created]])
+    await rig.fake.configure { $0.unobserved = [] }
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200]])
+    #expect(await rig.engine.unobservable == [:])
+    // The platform's registration announces the windows the app has, as a launch's would.
+    let created = window(2, frame: start, pid: 200, bundleID: "com.b")
+    await rig.fake.configure { $0.windows[created.handle] = created }
+    await rig.emit(.windowCreated(created))
+    await rig.quiescent()
+    #expect(await rig.frame(of: created.handle).map { isClose($0, rightHalfA) } == true)
+    #expect(await rig.reportsUpToNow().filter { $0 == .unobservable(bundleID: "com.b") }.count == 1)
+}
+
+@Test(.timeLimit(.minutes(1))) func anAppObservedByALaunchTryTakesPartInTheDisplayChangeRules() async {
+    let app = window(2, frame: leftHalfB, pid: 200, bundleID: "com.b")
+    let rig = await Rig(displays: bothDisplays, windows: [app], timing: retryTiming)
+    await rig.engine.start(config: config())
+    await rig.fake.configure { $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.moved, .resized])] }
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.moved, .resized]))
+    await rig.quiescent()
+    await rig.fake.configure { $0.unobserved = [] }
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    await rig.fake.configure { $0.windows[handle200]?.frame = rect(0, 25, 600, 500) }
+    await rig.changeDisplays(to: [displayA])
+    #expect(await rig.reportsUpToNow().contains(.displayChangeHandled(moved: 1, failed: 0)))
+    #expect(await rig.frame(of: handle200) == leftHalfA)
+}
+
+@Test(.timeLimit(.minutes(1))) func anAppThatStillFailsAfterEveryLaunchTryStaysUnobservableAndIsNotTriedAgain() async {
+    let rig = await launchRig()
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200]])
+    // The second try is 10 s after the engine learned of the app, 7 s after the first.
+    await rig.clock.advance(by: .seconds(7))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200], [200]])
+    #expect(await rig.engine.unobservable == [200: [.created]])
+    #expect(rig.clock.sleeperCount == 0)
+    await rig.clock.advance(by: .seconds(60))
+    #expect(await rig.fake.observeAgainCalls.count == 2)
+    #expect(await rig.engine.unobservableAppCount == 1)
+}
+
+@Test(.timeLimit(.minutes(1))) func theLaunchTriesAreMeasuredFromWhenTheEngineLearnsOfTheApp() async {
+    let rig = await launchRig()
+    await rig.clock.advance(by: .seconds(2))
+    await rig.quiescent()
+    // A second app is learned 2 s later: its first try is 3 s after that, not at the first app's 3 s.
+    await rig.fake.configure { $0.unobserved = [failsOnLaunch, .init(pid: 300, bundleID: "com.c", missing: [.created])] }
+    await rig.emit(.unobservable(pid: 300, bundleID: "com.c", missing: [.created]))
+    await rig.quiescent()
+    await rig.clock.advance(by: .seconds(1))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200]])
+    await rig.clock.advance(by: .seconds(2))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200], [300]])
+}
+
+@Test(.timeLimit(.minutes(1))) func anAppThatQuitsBeforeALaunchTryIsNotTried() async {
+    let rig = await launchRig()
+    await rig.emit(.appQuit(pid: 200))
+    await rig.quiescent()
+    #expect(rig.clock.sleeperCount == 0)
+    await rig.clock.advance(by: .seconds(60))
+    #expect(await rig.fake.observeAgainCalls.isEmpty)
+    #expect(await rig.engine.unobservable.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func stoppingEndsThePendingLaunchTries() async {
+    let rig = await launchRig()
+    await rig.engine.stop()
+    #expect(rig.clock.sleeperCount == 0)
+    await rig.clock.advance(by: .seconds(60))
+    #expect(await rig.fake.observeAgainCalls.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func aRestartThatBeginsBeforeALaunchTryEndsIt() async {
+    let rig = await launchRig()
+    // The restart re-registers every app, and its answer is the app's state.
+    await rig.fake.configure { $0.unobserved = [] }
+    await rig.engine.restartObserving()
+    #expect(rig.clock.sleeperCount == 0)
+    await rig.clock.advance(by: .seconds(60))
+    #expect(await rig.fake.observeAgainCalls.isEmpty)
+    #expect(await rig.engine.unobservable.isEmpty)
+}
+
+@Test(.gated, .timeLimit(.minutes(1))) func aLaunchTryResultThatArrivesAfterARestartIsDropped() async {
+    let rig = await launchRig()
+    let gate = Gate()
+    await rig.fake.configure { $0.observeAgainGate = gate }
+    await rig.clock.advance(by: .seconds(3))
+    await gate.waitUntilHolding(1)
+    let stale = await rig.engine.launchRetryTasks[200]
+    // The try read the app failing on creations; the restart finds it failing on moves and resizes.
+    await rig.fake.configure { $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.moved, .resized])] }
+    await rig.engine.restartObserving()
+    gate.open()
+    await stale?.bounded()
+    #expect(await rig.engine.unobservable == [200: [.moved, .resized]])
+}
+
+@Test(.gated, .timeLimit(.minutes(1))) func aLaunchFailureThatEventsReportWhileARestartWaitsIsRetriedOnlyByTheRestart() async {
+    let rig = await Rig(timing: retryTiming)
+    await rig.engine.start(config: config())
+    let gate = Gate()
+    await rig.fake.configure { $0.startObservingGate = gate }
+    let restarting = Task { await rig.engine.restartObserving() }
+    await gate.waitUntilHolding(1)
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.created]))
+    await rig.waitForEvents(1)
+    #expect(await rig.engine.launchRetryTasks.isEmpty)
+    gate.open()
+    await restarting.bounded()
+    await rig.quiescent()
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200]])
+}
+
 // MARK: Failures and saving
 
 @Test(.gated, .timeLimit(.minutes(1))) func aHungFocusedAppIsNotReportedAsNoWindow() async {

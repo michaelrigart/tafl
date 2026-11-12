@@ -160,7 +160,8 @@ final class WindowObservation27: Sendable {
     }
 
     /// Registers an app this run already claimed once more, after a registration that failed (for
-    /// about 2 s around a wake, Accessibility calls on live apps fail). A new claim replaces the old
+    /// about 2 s around a wake, Accessibility calls on live apps fail, and an app that is launching
+    /// refuses registration for about a second). A new claim replaces the old
     /// one in one step, so nothing still in flight under the old one does anything and the app is
     /// never without a claim. The app is the result when its events still
     /// cannot be observed; nil when they can, or when the app is gone or was never claimed. Each
@@ -174,7 +175,7 @@ final class WindowObservation27: Sendable {
             PlatformLog.windows.notice("Cannot observe \(app.bundleID ?? "an app", privacy: .public)")
             return unobservable
         case .observed:
-            PlatformLog.windows.notice("Observing \(app.bundleID ?? "an app", privacy: .public) again after wake")
+            PlatformLog.windows.notice("Observing \(app.bundleID ?? "an app", privacy: .public) again")
             return nil
         case .retrying:
             // Still launching: the retry's outcome arrives as an event.
