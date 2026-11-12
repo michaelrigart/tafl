@@ -1965,18 +1965,23 @@ private func wakeRig() async -> Rig {
     #expect(await rig.engine.unobservable.isEmpty)
 }
 
-@Test(.timeLimit(.minutes(1))) func aNewProcessOnAQuitAppsPidIsNotRetriedByTheNextRestart() async {
-    let rig = await wakeRig()
-    await rig.quiescent()
+@Test(.timeLimit(.minutes(1))) func aNewProcessOnAQuitAppsPidIsNotRetriedByTheNextRestartOnceItsLaunchTriesAreOver() async {
+    let rig = await launchRig()
     await rig.emit(.appQuit(pid: 200))
-    // A new process takes the pid and is unobservable before the next restart, which is not a wake failure.
-    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.moved, .resized]))
+    // A new process takes the pid and is unobservable; its launch tries run and give up before the next
+    // restart, which is not a wake failure.
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.created]))
     await rig.quiescent()
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    await rig.clock.advance(by: .seconds(7))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200], [200]])
     await rig.engine.restartObserving()
     #expect(rig.clock.sleeperCount == 0)
     await rig.clock.advance(by: .seconds(60))
-    #expect(await rig.fake.observeAgainCalls.isEmpty)
-    #expect(await rig.engine.unobservable == [200: [.moved, .resized]])
+    #expect(await rig.fake.observeAgainCalls.count == 2)
+    #expect(await rig.engine.unobservable == [200: [.created]])
 }
 
 @Test(.timeLimit(.minutes(1))) func stoppingEndsThePendingRetries() async {
@@ -2105,7 +2110,7 @@ private func launchRig() async -> Rig {
     await rig.fake.configure { $0.observeAgainGate = gate }
     await rig.clock.advance(by: .seconds(3))
     await gate.waitUntilHolding(1)
-    let stale = await rig.engine.launchRetryTasks[200]
+    let stale = await rig.engine.launchRetryTasks[200].map(\.task)
     // The try read the app failing on creations; the restart finds it failing on moves and resizes.
     await rig.fake.configure { $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.moved, .resized])] }
     await rig.engine.restartObserving()
@@ -2130,6 +2135,63 @@ private func launchRig() async -> Rig {
     await rig.clock.advance(by: .seconds(3))
     await rig.quiescent()
     #expect(await rig.fake.observeAgainCalls == [[200]])
+}
+
+@Test(.timeLimit(.minutes(1))) func aRestartCarriesOverTheLaunchTriesOfAnAppItFindsFailingAgain() async {
+    let rig = await launchRig()
+    await rig.clock.advance(by: .seconds(1))
+    await rig.quiescent()
+    // A wake restarts observing 1 s in, and the app fails again; the launch tries were pending, so the
+    // restart tries it, 3 s after itself.
+    await rig.engine.restartObserving()
+    await rig.fake.configure { $0.unobserved = [] }
+    await rig.quiescent()
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200]])
+    #expect(await rig.engine.unobservable == [:])
+}
+
+@Test(.timeLimit(.minutes(1))) func aLaunchTryDoesNotEndTheRestartTriesForAnotherApp() async {
+    let rig = await wakeRig()
+    await rig.quiescent()
+    await rig.clock.advance(by: .seconds(1))
+    await rig.fake.configure {
+        $0.unobserved = [failsOnWake, .init(pid: 300, bundleID: "com.c", missing: [.created])]
+    }
+    await rig.emit(.unobservable(pid: 300, bundleID: "com.c", missing: [.created]))
+    await rig.quiescent()
+    // The restart's try for app 200 is at 3 s, the launch try for app 300 at 4 s; both fail.
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200], [300]])
+    #expect(await rig.engine.pendingRetries == [200, 300])
+    // A second restart before app 200's 10 s try still tries it.
+    await rig.engine.restartObserving()
+    await rig.fake.configure { $0.unobserved = [] }
+    await rig.quiescent()
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls.last == [200, 300])
+    #expect(await rig.engine.unobservable == [:])
+}
+
+@Test(.timeLimit(.minutes(1))) func aLaunchScheduleThatEndsLeavesNoTaskBehind() async {
+    let rig = await launchRig()
+    #expect(await rig.engine.launchRetryTasks.count == 1)
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    await rig.clock.advance(by: .seconds(7))
+    await rig.quiescent()
+    #expect(await rig.engine.launchRetryTasks.isEmpty)
+    #expect(await rig.engine.pendingRetries.isEmpty)
+    // The next failure of the same app is tried afresh.
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.created]))
+    await rig.quiescent()
+    #expect(await rig.engine.launchRetryTasks.count == 1)
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls.count == 3)
 }
 
 // MARK: Failures and saving

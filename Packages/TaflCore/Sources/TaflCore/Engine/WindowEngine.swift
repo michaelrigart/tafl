@@ -151,9 +151,11 @@ public actor WindowEngine {
     var restartTask: Task<Void, Never>?
     /// The schedule of tries for the apps the latest restart could not observe.
     var observeRetryTask: Task<Void, Never>?
-    /// The schedule of tries for an app that was unobservable after its launch, by pid. A restart,
-    /// a stop and the app's quit end it.
-    var launchRetryTasks: [Int32: Task<Void, Never>] = [:]
+    /// The schedule of tries for an app found unobservable outside a restart, by pid, with the serial
+    /// that tells it from an earlier one for the same pid. A restart, a stop and the app's quit end it,
+    /// and so does its last try. The app is in `pendingRetries` until then.
+    var launchRetryTasks: [Int32: (serial: Int, task: Task<Void, Never>)] = [:]
+    var nextLaunchRetry = 0
     var eventTask: Task<Void, Never>?
     /// The wait for the quiet period. An input replaces it; the rules run is not part of it.
     var settleTask: Task<Void, Never>?
@@ -366,36 +368,50 @@ public actor WindowEngine {
     }
 
     /// Tries an app again that is unobservable after its launch's registration, at each of the timing's
-    /// delays measured from when the engine learns it. While a restart is pending the restart's own
-    /// answer decides, and its retries follow.
+    /// delays measured from when the engine learns it. The app counts as pending, so a restart that
+    /// begins before the last try carries its tries over. While a restart is pending the restart's own
+    /// answer decides, and its retries follow; an app already being tried is not scheduled twice.
     func scheduleLaunchRetries(for pid: Int32) {
-        guard !isStopping, restartJournal == nil, !timing.observeRetryDelays.isEmpty else { return }
-        launchRetryTasks[pid]?.cancel()
-        launchRetryTasks[pid] = observeRetries(for: [pid], after: restarts.current)
+        guard !isStopping, restartJournal == nil, !pendingRetries.contains(pid),
+              !timing.observeRetryDelays.isEmpty
+        else { return }
+        nextLaunchRetry += 1
+        let serial = nextLaunchRetry
+        pendingRetries.insert(pid)
+        launchRetryTasks[pid]?.task.cancel()
+        launchRetryTasks[pid] = (serial, observeRetries(for: [pid], after: restarts.current) {
+            if self.launchRetryTasks[pid]?.serial == serial { self.launchRetryTasks[pid] = nil }
+        })
     }
 
     /// A newer restart, a stop and an app's quit end the tries for the apps they concern.
     private func cancelObserveRetries() {
         observeRetryTask?.cancel()
         observeRetryTask = nil
-        for task in launchRetryTasks.values { task.cancel() }
+        for retry in launchRetryTasks.values { retry.task.cancel() }
         launchRetryTasks = [:]
     }
 
-    private func observeRetries(for pids: Set<Int32>, after generation: Int) -> Task<Void, Never> {
+    /// `ended` runs when the schedule is over, however it ends, on the engine.
+    private func observeRetries(
+        for pids: Set<Int32>, after generation: Int, ended: (() -> Void)? = nil
+    ) -> Task<Void, Never> {
         let delays = timing.observeRetryDelays
         let unit = activity.startingTask()
         return Task { [clock] in
             await unit.run {
                 var pending = pids
                 var elapsed = Duration.zero
-                for delay in delays {
-                    do { try await clock.sleep(for: delay - elapsed) } catch { return }
-                    elapsed = delay
-                    pending = await self.observeAgain(pending, after: generation)
-                    if pending.isEmpty { return }
+                scheduled: do {
+                    for delay in delays {
+                        do { try await clock.sleep(for: delay - elapsed) } catch { break scheduled }
+                        elapsed = delay
+                        pending = await self.observeAgain(pending, after: generation)
+                        if pending.isEmpty { break scheduled }
+                    }
+                    self.endRetries(of: pending, after: generation)
                 }
-                self.endRetries(of: pending, after: generation)
+                ended?()
             }
         }
     }

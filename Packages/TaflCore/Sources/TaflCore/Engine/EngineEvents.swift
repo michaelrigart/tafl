@@ -30,7 +30,7 @@ extension WindowEngine {
         case .appQuit(let pid):
             unobservable[pid] = nil
             pendingRetries.remove(pid)
-            launchRetryTasks.removeValue(forKey: pid)?.cancel()
+            launchRetryTasks.removeValue(forKey: pid)?.task.cancel()
             reportedUnobservable.remove(pid)
             restartJournal?.quit(pid: pid)
             frameReads = frameReads.filter { $0.key.pid != pid }
