@@ -151,7 +151,7 @@ final class WindowObservation27: Sendable {
                 await self.environment.untilFinishedLaunching(pid)
                 // The app was still launching: its windows are new, and the retry owes them their announcement.
                 _ = self.owe(pid)
-                guard let second = await self.register(app, claim: claim, publishesObserved: again) else { return }
+                guard let second = await self.register(app, claim: claim) else { return }
                 await self.registered(app, claim: claim, failures: second)
                 if !second.isEmpty, self.environment.isRunning(pid) {
                     self.publishUnobservable(Self.unobservable(app, second), claim: claim)

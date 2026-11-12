@@ -2197,23 +2197,108 @@ private func launchRig() async -> Rig {
     #expect(await rig.engine.unobservable == [:])
 }
 
-@Test(.timeLimit(.minutes(1))) func anObservedEventForAnAppThatQuitDoesNotBringItBack() async {
+@Test(.gated, .timeLimit(.minutes(1))) func anObservedEventForAnAppThatQuitDoesNotBringItBack() async {
     let rig = await launchRig()
+    let gate = Gate()
+    await rig.fake.configure { $0.observeAgainGate = gate }
+    await rig.clock.advance(by: .seconds(3))
+    await gate.waitUntilHolding(1)
     await rig.emit(.appQuit(pid: 200))
     await rig.emit(.observed(pid: 200, missing: [.moved]))
     await rig.quiescent()
     #expect(await rig.engine.unobservable.isEmpty)
+    gate.open()
+    await rig.quiescent()
+    #expect(await rig.engine.unobservable.isEmpty)
 }
 
-@Test(.timeLimit(.minutes(1))) func anObservedEventSaysWhatTheAppStillMisses() async {
+@Test(.gated, .timeLimit(.minutes(1))) func anObservedEventSaysWhatTheAppStillMissesWhileTheTryIsInFlight() async {
     let rig = await launchRig()
-    await rig.emit(.observed(pid: 200, missing: [.titleChanged]))
+    let gate = Gate()
+    await rig.fake.configure {
+        $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.titleChanged])]
+        $0.observeAgainGate = gate
+    }
+    await rig.clock.advance(by: .seconds(3))
+    await gate.waitUntilHolding(1)
+    await rig.waitForEvents(2)
+    // The platform's event, before its answer: the app misses only title changes from here on.
+    #expect(await rig.engine.unobservable == [200: [.titleChanged]])
+    gate.open()
     await rig.quiescent()
     #expect(await rig.engine.unobservable == [200: [.titleChanged]])
+}
+
+@Test(.gated, .timeLimit(.minutes(1))) func anObservedEventThatArrivesAfterARestartBeganIsIgnored() async {
+    let rig = await launchRig()
+    let gate = Gate()
+    await rig.fake.configure { $0.observeAgainGate = gate }
+    await rig.clock.advance(by: .seconds(3))
+    await gate.waitUntilHolding(1)
+    let stale = await rig.engine.launchRetryTasks[200].map(\.task)
+    // The restart finds the app failing on moves and resizes; the try's event, handled after it, must not clear that.
+    await rig.fake.configure { $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: [.moved, .resized])] }
+    await rig.engine.restartObserving()
     await rig.emit(.observed(pid: 200, missing: []))
     await rig.quiescent()
-    #expect(await rig.engine.unobservable == [:])
-    #expect(await rig.engine.pendingRetries.isEmpty)
+    #expect(await rig.engine.unobservable == [200: [.moved, .resized]])
+    #expect(await rig.engine.pendingRetries == [200])
+    gate.open()
+    await stale?.bounded()
+    #expect(await rig.engine.unobservable == [200: [.moved, .resized]])
+}
+
+@Test(.gated, .timeLimit(.minutes(1))) func anEndingScheduleDoesNotRemoveTheEntryOfALaterOneForTheSamePid() async {
+    let rig = await launchRig()
+    let gate = Gate()
+    await rig.fake.configure { $0.observeAgainGate = gate }
+    await rig.clock.advance(by: .seconds(3))
+    await gate.waitUntilHolding(1)
+    let first = await rig.engine.launchRetryTasks[200]
+    let firstSerial = first?.serial
+    // The app quits while the first schedule is held in its try, and a new process takes the pid.
+    await rig.emit(.appQuit(pid: 200))
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.created]))
+    await rig.quiescent()
+    let secondSerial = await rig.engine.launchRetryTasks[200].map(\.serial)
+    #expect(secondSerial != nil)
+    #expect(secondSerial != firstSerial)
+    gate.open()
+    await first?.task.bounded()
+    await rig.quiescent()
+    // The first schedule's end left the second's entry: a later quit still ends it.
+    let remaining = await rig.engine.launchRetryTasks[200].map(\.serial)
+    #expect(remaining == secondSerial)
+    #expect(rig.clock.sleeperCount == 1)
+    await rig.emit(.appQuit(pid: 200))
+    await rig.quiescent()
+    #expect(rig.clock.sleeperCount == 0)
+}
+
+@Test(.timeLimit(.minutes(1))) func aSecondUnobservableEventForAnAppBeingTriedDoesNotRescheduleIt() async {
+    let rig = await launchRig()
+    await rig.clock.advance(by: .seconds(2))
+    await rig.quiescent()
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.created]))
+    await rig.quiescent()
+    // The tries stay at 3 s and 10 s after the first event.
+    await rig.clock.advance(by: .seconds(1))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200]])
+    await rig.clock.advance(by: .seconds(7))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200], [200]])
+}
+
+@Test(.timeLimit(.minutes(1))) func anAppInTheRestartsRetriesGetsNoParallelLaunchSchedule() async {
+    let rig = await wakeRig()
+    await rig.quiescent()
+    await rig.emit(.unobservable(pid: 200, bundleID: "com.b", missing: [.moved, .resized]))
+    await rig.quiescent()
+    #expect(await rig.engine.launchRetryTasks.isEmpty)
+    await rig.clock.advance(by: .seconds(3))
+    await rig.quiescent()
+    #expect(await rig.fake.observeAgainCalls == [[200]])
 }
 
 @Test(.timeLimit(.minutes(1))) func aLaunchScheduleThatEndsLeavesNoTaskBehind() async {
