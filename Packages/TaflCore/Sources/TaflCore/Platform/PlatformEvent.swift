@@ -15,4 +15,8 @@ public enum PlatformEvent: Equatable, Sendable {
     case reconfigurationBegan
     case reconfigurationEnded
     case unobservable(pid: Int32, bundleID: String?, missing: Set<ObservedEvent>)
+    /// A registration the engine asked for again took: what the app still misses, empty when nothing.
+    /// It comes before the announcements the registration makes, so a window announced next is judged
+    /// by it.
+    case observed(pid: Int32, missing: Set<ObservedEvent>)
 }

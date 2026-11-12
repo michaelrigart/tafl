@@ -453,11 +453,14 @@ func anAppWhoseLaunchRegistrationFailedAnnouncesItsWindowsOnceWhenItIsRegistered
     harness.continuation.yield(.reconfigurationEnded)
     #expect(await harness.next() == .appLaunched(pid: 4242, bundleID: "com.example.Slow"))
     #expect(await harness.next() == .unobservable(pid: 4242, bundleID: "com.example.Slow", missing: [.created]))
+    // The app is observed before the window is announced, so the engine judges the window by it.
+    #expect(await harness.next() == .observed(pid: 4242, missing: []))
     guard case .windowCreated(let snapshot)? = await harness.next() else {
         Issue.record("expected the second registration to announce the window")
         return
     }
     #expect(snapshot.handle == foundWindow)
+    #expect(await harness.next() == .observed(pid: 4242, missing: []))
     #expect(await harness.next() == .reconfigurationEnded)
     #expect(harness.notices.all == [.announced(foundWindow)])
 }

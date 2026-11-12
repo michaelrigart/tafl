@@ -2176,6 +2176,46 @@ private func launchRig() async -> Rig {
     #expect(await rig.engine.unobservable == [:])
 }
 
+@Test(.gated, .timeLimit(.minutes(1))) func aWindowTheRetryAnnouncesBeforeItReturnsIsPlacedByTheActiveLayout() async {
+    let rig = await launchRig()
+    let created = window(2, frame: start, pid: 200, bundleID: "com.b")
+    let gate = Gate()
+    await rig.fake.configure {
+        $0.windows[created.handle] = created
+        $0.unobserved = []
+        $0.observeAgainAnnounces = [created]
+        $0.observeAgainGate = gate
+    }
+    await rig.clock.advance(by: .seconds(3))
+    await gate.waitUntilHolding(1)
+    // The registration has announced the window and not returned yet: the engine handles the announcement
+    // while its answer is still to come, and the observed event before it has already cleared the app.
+    await rig.waitForEvents(3)
+    #expect(await rig.frame(of: created.handle).map { isClose($0, rightHalfA) } == true)
+    gate.open()
+    await rig.quiescent()
+    #expect(await rig.engine.unobservable == [:])
+}
+
+@Test(.timeLimit(.minutes(1))) func anObservedEventForAnAppThatQuitDoesNotBringItBack() async {
+    let rig = await launchRig()
+    await rig.emit(.appQuit(pid: 200))
+    await rig.emit(.observed(pid: 200, missing: [.moved]))
+    await rig.quiescent()
+    #expect(await rig.engine.unobservable.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1))) func anObservedEventSaysWhatTheAppStillMisses() async {
+    let rig = await launchRig()
+    await rig.emit(.observed(pid: 200, missing: [.titleChanged]))
+    await rig.quiescent()
+    #expect(await rig.engine.unobservable == [200: [.titleChanged]])
+    await rig.emit(.observed(pid: 200, missing: []))
+    await rig.quiescent()
+    #expect(await rig.engine.unobservable == [:])
+    #expect(await rig.engine.pendingRetries.isEmpty)
+}
+
 @Test(.timeLimit(.minutes(1))) func aLaunchScheduleThatEndsLeavesNoTaskBehind() async {
     let rig = await launchRig()
     #expect(await rig.engine.launchRetryTasks.count == 1)

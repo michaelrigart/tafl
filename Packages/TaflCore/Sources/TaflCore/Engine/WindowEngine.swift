@@ -455,6 +455,19 @@ public actor WindowEngine {
         if reportedUnobservable.insert(pid).inserted { report(.unobservable(bundleID: bundleID)) }
     }
 
+    /// The platform registered an unobservable app again, before it announced the app's windows: what the
+    /// app still misses is its state from here on, so the windows announced next are judged by it. An app
+    /// that is not unobservable (it quit meanwhile) is left alone.
+    func observed(pid: Int32, missing: Set<ObservedEvent>) {
+        guard unobservable[pid] != nil else { return }
+        if missing.isEmpty {
+            unobservable[pid] = nil
+            pendingRetries.remove(pid)
+        } else {
+            unobservable[pid] = missing
+        }
+    }
+
     /// Without its moves and resizes Tafl has no last-known frames for an app, and the display
     /// change rules leave it alone.
     func isLeftOutOfRules(pid: Int32) -> Bool {

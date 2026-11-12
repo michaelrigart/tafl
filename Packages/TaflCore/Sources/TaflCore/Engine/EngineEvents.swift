@@ -41,6 +41,9 @@ extension WindowEngine {
             learn(pid: pid, bundleID: bundleID, missing: missing)
             scheduleLaunchRetries(for: pid)
             eventsHandled += 1
+        case .observed(let pid, let missing):
+            observed(pid: pid, missing: missing)
+            eventsHandled += 1
         case .reconfigurationBegan:
             reconfigurationBegan()
             eventsHandled += 1
