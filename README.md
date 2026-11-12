@@ -77,9 +77,9 @@ the file, and it never overwrites one.
 
 Upgrade with `brew upgrade --cask tafl`. Releases are signed with the same certificate, and
 macOS ties the Accessibility permission to that certificate, so an upgrade should keep the
-permission and launch at login. For [Hulder](https://github.com/michaelrigart/hulder), the
-same kind of app signed the same way, rebuilds signed with the same certificate were checked
-to keep the permission; upgrades were not, and for Tafl neither has been checked yet. Whether an upgrade
+permission and launch at login. Rebuilds signed with the same certificate were checked to
+keep the permission, for Tafl and for [Hulder](https://github.com/michaelrigart/hulder), the
+same kind of app signed the same way; upgrades have not been checked yet. Whether an upgrade
 needs **Open Anyway** again has not been checked either; if macOS blocks it, repeat step 1.
 
 The developer certificate is renewed every year. Whether a renewed certificate keeps the
@@ -129,7 +129,7 @@ Tafl again.
 
 Builds made without the override are signed with the maintainer's certificate and should
 keep the permission across rebuilds, because macOS ties the permission to the certificate
-(confirmed for Hulder; not yet checked for Tafl).
+(confirmed for Tafl and Hulder).
 
 A build made without a version shows `dev` as its version.
 

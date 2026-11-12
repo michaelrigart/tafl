@@ -1,6 +1,6 @@
 # Tafl Distribution Implementation Plan
 
-**Status:** In progress ([PR #1](https://github.com/michaelrigart/tafl/pull/1), `feat/distribution` into `feat/tafl-v1`). Codex approved the plan in round 2.
+**Status:** Implemented ([PR #1](https://github.com/michaelrigart/tafl/pull/1), merged into `feat/tafl-v1` on 2026-11-06; it reaches `main` with [PR #2](https://github.com/michaelrigart/tafl/pull/2)). Codex approved the plan in round 2. Completed: do not run it again; acceptance 6 and 7 follow the first releases.
 
 **Execution notes:** Tasks 1–9 build into the shared `build/`, so only tasks that build nothing share a batch: {1, 3, 6}, then 2, 5, 7, 8 in order. Task 4 runs once Michael has approved Task 3's drawing; until then the run carries on with the others. Task 9 runs last of the build tasks. "Finishing" is the controller's, not a subagent's.
 
@@ -223,3 +223,5 @@ Nothing in this task goes into the repository: the drawing waits in the scratchp
 - **5's launch:** the README build installed and opened launches into onboarding, at the same time.
 - **6 and 7,** after both merges: the first release, `brew install`, and the second release with `brew upgrade`.
 - **After v1 merges:** rebase onto `main`, `gh pr edit --base main`, then merge. Michael runs `wt-rm feat/distribution` afterwards.
+
+Results (2026-11-12): the grant kept across a team-signed rebuild passed on 2026-11-10 (the rebuilt 146a0b8 build started trusted), and so did the menu bar icon in a light, dark and highlighted bar. Michael skipped the rest on 2026-11-12: launch at login across a rebuild, the icon switched off, and 5's launch. 6 and 7 follow the first releases. PR #1 was merged into `feat/tafl-v1` on 2026-11-06 instead of being rebased onto `main`; Michael runs `wt-rm feat/distribution` once PR #2 is merged.

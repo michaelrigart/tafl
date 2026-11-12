@@ -56,10 +56,10 @@ points at Xcode, and don't change `xcode-select`.
 
 - Run Tafl from `/Applications`, started with `open`. Launched from a terminal, macOS gives
   the Accessibility grant to the terminal.
-- Builds are signed with Michael's Personal Team, so the grant should survive rebuilds. That is
-  confirmed for Hulder (2026-11-03); for Tafl it is confirmed once acceptance 2 of the
-  distribution design is recorded. Switching from an ad hoc build to a team-signed one needs the
-  grant once, after `tccutil reset Accessibility com.michaelrigart.tafl` (which Michael runs).
+- Builds are signed with Michael's Personal Team, so the grant survives rebuilds (confirmed for
+  Hulder on 2026-11-03 and for Tafl on 2026-11-10). Switching from an ad hoc build to a
+  team-signed one needs the grant once, after
+  `tccutil reset Accessibility com.michaelrigart.tafl` (which Michael runs).
   Ad hoc builds (`CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`, which CI and contributors use) need
   the grant again after every rebuild. To grant it: quit Tafl, start it with `open` and switch
   it on in System Settings, Privacy & Security, Device Control and Data Access (the Accessibility

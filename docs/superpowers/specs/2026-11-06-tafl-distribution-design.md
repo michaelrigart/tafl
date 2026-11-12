@@ -2,8 +2,8 @@
 
 **Date:** 2026-11-06
 **Owner:** Michael Rigart
-**Status:** In progress ([PR #1](https://github.com/michaelrigart/tafl/pull/1), `feat/distribution`
-into `feat/tafl-v1`)
+**Status:** Implemented ([PR #1](https://github.com/michaelrigart/tafl/pull/1), merged into
+`feat/tafl-v1`; it reaches `main` with [PR #2](https://github.com/michaelrigart/tafl/pull/2))
 **Template:** Hulder's distribution design (`michaelrigart/hulder`,
 `docs/superpowers/specs/2026-11-03-hulder-distribution-design.md`). The shared build recipe is
 canonical in Muninn's (`michaelrigart/muninn`,
@@ -116,7 +116,7 @@ As Hulder:
 - Scripts pick the identity by Team ID, never by the bare name `Apple Development`.
 - macOS ties the Accessibility grant to the designated requirement. With the team certificate
   it names the certificate, not one build, so the grant survives rebuilds (confirmed for
-  Hulder on 2026-11-03). Moving from today's ad hoc build to a team-signed one needs the grant
+  Hulder on 2026-11-03 and for Tafl on 2026-11-10). Moving from today's ad hoc build to a team-signed one needs the grant
   once more; the old ad hoc entry may need clearing first (`tccutil reset Accessibility
   com.michaelrigart.tafl`, which Michael runs).
 - The certificate's subject, the Apple ID's email, is embedded in every public release. Michael

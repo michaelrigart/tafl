@@ -2,15 +2,16 @@
 
 **Date:** 2026-11-01
 **Owner:** Michael Rigart
-**Status:** In progress (branch `feat/tafl-v1`, pull request
-[michaelrigart/tafl#2](https://github.com/michaelrigart/tafl/pull/2)). Signed off by Michael on
-2026-11-01, after Codex's spec review.
+**Status:** Implemented (pull request
+[michaelrigart/tafl#2](https://github.com/michaelrigart/tafl/pull/2), branch `feat/tafl-v1`).
+Signed off by Michael on 2026-11-01, after Codex's spec review.
 **Name:** Tafl, after the Norse board game played by placing pieces on a grid.
 **Revised:** 2026-11-06: signing moved to Michael's Personal Team; see
 `docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`;
 2026-11-10: how Tafl notices the Accessibility switch;
 2026-11-10: measured on macOS 27.2 (feasibility probe);
-2026-11-10: a layout you apply brings its windows to the front.
+2026-11-10: a layout you apply brings its windows to the front;
+2026-11-12: an app that fails to register when it launches is tried again, as after a wake.
 
 ## Why
 
