@@ -224,7 +224,7 @@ public actor WindowEngine {
             // has been handled yet, and every registration's outcome is already on the stream: the answer
             // says what those outcomes say, taken before they arrive, and each sets the state again, in
             // order, when it is handled.
-            for app in await platform.startObserving(notices: owner) {
+            for app in await platform.startObserving(notices: owner, as: .start) {
                 learn(pid: app.pid, bundleID: app.bundleID, missing: app.missing)
             }
             let current = await platform.displays()
@@ -348,7 +348,7 @@ public actor WindowEngine {
         // A newer restart is waiting and registers the observers itself.
         guard restarts.isCurrent(generation), !isStopping else { return }
         await platform.stopObserving()
-        let apps = await platform.startObserving(notices: owner)
+        let apps = await platform.startObserving(notices: owner, as: .restart)
         guard restarts.isCurrent(generation), !isStopping, let journal = restartJournal else { return }
         restartJournal = nil
         // An app that was observable before may have failed only because of a transient (a wake).

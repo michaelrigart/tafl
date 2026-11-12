@@ -66,7 +66,7 @@ actor FakePlatform: WindowPlatform {
     var displaysGate: Gate?
     /// Holds the next `visibleWindows()` call until the gate opens.
     var visibleWindowsGate: Gate?
-    /// Holds the next `startObserving(notices:)` call, once it has published its outcomes, until the
+    /// Holds the next `startObserving(notices:as:)` call, once it has published its outcomes, until the
     /// gate opens.
     var startObservingGate: Gate?
     /// Holds the next `observeAgain(pids:)` call, once it has published its outcomes, until the gate opens.
@@ -89,10 +89,12 @@ actor FakePlatform: WindowPlatform {
     /// How many `beginWriting` calls wait for another session of the same app to end.
     var waitingSessionCount: Int { waiters.values.reduce(0) { $0 + $1.count } }
     private(set) var startObservingCount = 0
+    /// The run each `startObserving(notices:as:)` call was for, in order.
+    private(set) var startObservingRuns: [ObservingRun] = []
     private(set) var stopObservingCount = 0
     /// The pids each `observeAgain(pids:)` call was given, in order.
     private(set) var observeAgainCalls: [Set<Int32>] = []
-    /// What the last `startObserving(notices:)` was given.
+    /// What the last `startObserving(notices:as:)` was given.
     private var notices: (any WindowNotices)?
     /// How many events the fake has sent, for a test to wait until the engine has received them all.
     private(set) var eventsSent = 0
@@ -301,9 +303,10 @@ actor FakePlatform: WindowPlatform {
     /// Registers every app as the platform does, each publishing its outcome before the call returns:
     /// an app in `unobserved` misses what it lists, and one whose registration missed something before
     /// observes fully now. The apps in `unobserved` are the answer.
-    func startObserving(notices: any WindowNotices) async -> [UnobservableApp] {
+    func startObserving(notices: any WindowNotices, as run: ObservingRun) async -> [UnobservableApp] {
         self.notices = notices
         startObservingCount += 1
+        startObservingRuns.append(run)
         let answer = unobserved.map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
         let recovered = current.filter { !$0.value.isEmpty && !answer.map(\.pid).contains($0.key) }.keys
         for pid in recovered.sorted() { emit(.observability(pid: pid, bundleID: nil, missing: [], retrying: false)) }

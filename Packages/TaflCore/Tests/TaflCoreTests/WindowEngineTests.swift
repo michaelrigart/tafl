@@ -1811,6 +1811,7 @@ private let slowApp = UnobservableApp(pid: 200, bundleID: "com.b", missing: [.mo
     await rig.fake.configure { $0.unobserved = [.init(pid: 300, bundleID: "com.c", missing: [.created])] }
     await rig.engine.restartObserving()
     await rig.quiescent()
+    #expect(await rig.fake.startObservingRuns == [.start, .restart])
     #expect(await rig.fake.startObservingCount == 2)
     #expect(await rig.fake.stopObservingCount == 1)
     #expect(await rig.engine.unobservable == [300: [.created]])
@@ -2099,6 +2100,46 @@ private let failsOnLaunch = FakePlatform.UnobservedApp(pid: 200, bundleID: "com.
     await rig.clock.advance(by: .seconds(60))
     #expect(await rig.fake.observeAgainCalls.isEmpty)
     #expect(await rig.engine.unobservable == [200: [.created]])
+}
+
+/// An app still launching when Tafl starts is met as its launch. The start's answer has it failing; the
+/// outcome of its registration once launched, and the launch window that registration announces, are on
+/// the stream before the start takes that answer, and win over it: the active layout places the window
+/// and its last-known frame is recorded.
+@Test(.gated, .timeLimit(.minutes(1))) func anAppLaunchingAtStartIsObservedOnceALaterRegistrationSaysSo() async {
+    let (store, directory) = temporaryStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let desk = layout("Desk", [slot(.rightHalf, app: "com.b")])
+    let first = await Rig(store: store)
+    await first.engine.start(config: config(layouts: [desk]))
+    await first.engine.applyLayout(named: "Desk")
+    await first.engine.stop()
+
+    let every: Set<ObservedEvent> = [.created, .moved, .resized, .titleChanged, .destroyed]
+    let rig = await Rig(store: store) { $0.unobserved = [.init(pid: 200, bundleID: "com.b", missing: every)] }
+    let registering = Gate()
+    let seeding = Gate()
+    await rig.fake.configure {
+        $0.startObservingGate = registering
+        $0.visibleWindowsGate = seeding
+    }
+    let starting = Task { await rig.engine.start(config: config(layouts: [desk])) }
+    await registering.waitUntilHolding(1)
+    let created = window(2, frame: start, pid: 200, bundleID: "com.b")
+    await rig.fake.configure { $0.windows[created.handle] = created }
+    await rig.emit(.observability(pid: 200, bundleID: "com.b", missing: [], retrying: false))
+    await rig.emit(.windowCreated(created))
+    registering.open()
+    // The start's seed waits, so the announcement is the window's first reading.
+    await seeding.waitUntilHolding(1)
+    await rig.quiescent()
+    #expect(await rig.engine.unobservable == [:])
+    #expect(await rig.frame(of: created.handle).map { isClose($0, rightHalfA) } == true)
+    let known = await rig.engine.memory.read().lastKnown(created.handle, setup: DisplaySetup([displayA]))
+    #expect(known != nil)
+    seeding.open()
+    await starting.bounded()
+    #expect(await rig.fake.startObservingRuns == [.start])
 }
 
 /// A registration publishes its outcome before the windows it announces: the engine takes the app out of

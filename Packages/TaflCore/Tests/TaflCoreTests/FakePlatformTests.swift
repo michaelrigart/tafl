@@ -183,7 +183,7 @@ private final class Taken: Sendable {
     let w = window(1, frame: rect(0, 0, 100, 100))
     let (fake, _) = await makeFake(w)
     let owner = WindowOwner(adjustments: [])
-    _ = await fake.startObserving(notices: owner)
+    _ = await fake.startObserving(notices: owner, as: .start)
     await fake.emit(.windowCreated(w))
     #expect(owner.knows(w.handle))
     await fake.emit(.windowDestroyed(w.handle))
@@ -198,7 +198,7 @@ private final class Taken: Sendable {
     let w = window(1, frame: rect(0, 0, 100, 100))
     let (fake, _) = await makeFake(w)
     await fake.configure { $0.unobserved = [.init(pid: 7, bundleID: "com.example.slow", missing: [.created])] }
-    let answer = await fake.startObserving(notices: WindowOwner(adjustments: []))
+    let answer = await fake.startObserving(notices: WindowOwner(adjustments: []), as: .start)
     await fake.stopObserving()
     #expect(answer == [UnobservableApp(pid: 7, bundleID: "com.example.slow", missing: [.created])])
     #expect(await fake.startObservingCount == 1)
@@ -218,7 +218,7 @@ private final class Taken: Sendable {
     let w = window(1, frame: rect(0, 0, 100, 100), pid: 7)
     let (fake, _) = await makeFake()
     let owner = WindowOwner(adjustments: [])
-    _ = await fake.startObserving(notices: owner)
+    _ = await fake.startObserving(notices: owner, as: .start)
     await fake.configure { $0.unobserved = [.init(pid: 7, bundleID: nil, missing: [.moved])] }
     await fake.emit(.windowCreated(w))
     #expect(owner.knows(w.handle))

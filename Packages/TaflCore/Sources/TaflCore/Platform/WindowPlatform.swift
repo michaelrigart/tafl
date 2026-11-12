@@ -62,6 +62,13 @@ public struct UnobservableApp: Equatable, Sendable {
     }
 }
 
+/// Which run of observing begins. At Tafl's start an app that is still launching is met as its launch:
+/// its windows are owed their announcement, and a failed registration is tried again as a launch's is.
+/// A restart registers every app again and leaves a failure to the restart's own tries.
+public enum ObservingRun: Sendable, Equatable {
+    case start, restart
+}
+
 /// Every read of a window hands what it read to the caller's `take` inside the read: in the same
 /// serial work for the window's app that made the read, before any later read of that app's windows
 /// begins. So a `take` sees one window's readings in the order they were read. Its result is the
@@ -103,8 +110,8 @@ public protocol WindowPlatform: Sendable {
     /// and of each app's quit, in the app's order. Each app's registration publishes its outcome as an
     /// event before this returns; the apps it found unobservable are also the result, which says only
     /// which apps a restart tries again. An app still launching is not waited for: its registration once
-    /// it has finished publishes its own outcome.
-    func startObserving(notices: any WindowNotices) async -> [UnobservableApp]
+    /// it has finished publishes its own outcome, and at `.start` it is met as its launch.
+    func startObserving(notices: any WindowNotices, as run: ObservingRun) async -> [UnobservableApp]
     /// Registers these apps' observers once more, as `startObserving` did, for apps that failed to
     /// register during a transient. Each registration publishes its outcome as an event; the apps it
     /// found unobservable are the result, which says only which apps to try next. A pid that is not

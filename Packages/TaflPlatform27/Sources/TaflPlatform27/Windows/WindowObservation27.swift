@@ -7,7 +7,8 @@ import TaflCore
 /// notifications to the translator.
 ///
 /// An app is registered once per observing run: at start, when it launches, or when a query first meets
-/// it (an app can become a regular app after it launches). Each registration holds a claim on its pid.
+/// it (an app can become a regular app after it launches). An app still launching when Tafl starts is
+/// met as its launch. Each registration holds a claim on its pid.
 /// A claim ends when the app quits, the run ends, or a registration asked for again replaces it, and work
 /// still in flight under an ended claim does nothing, even if the pid is claimed again by a new app.
 ///
@@ -128,8 +129,11 @@ final class WindowObservation27: Sendable {
 
     /// Registers an app this run has not registered, as a start of observing does. The app is the
     /// result when that registration finds it unobservable. One still launching is registered once more
-    /// when it has finished, and that outcome arrives only as an event.
-    func observe(_ app: AppInfo27) async -> UnobservableApp? {
+    /// when it has finished, and that outcome arrives only as an event. At Tafl's start an app still
+    /// launching is met as its launch: its windows are owed, and a failure is tried as a launch's is. A
+    /// restart leaves a failure to its own tries.
+    func observe(_ app: AppInfo27, as run: ObservingRun) async -> UnobservableApp? {
+        if run == .start, environment.isLaunching(app.pid) { return await meetLaunch(app) }
         guard let claim = claimIfRunning(app.pid) else { return nil }
         return await attempt(app, under: claim, delays: [], isRetry: false)
     }
@@ -152,15 +156,23 @@ final class WindowObservation27: Sendable {
         _ = await attempt(app, under: claim, delays: retryDelays, isRetry: false)
     }
 
-    /// A launch owes the app's windows their announcement, whoever claims the app: when a query
-    /// claimed it first, its registration pays the debt, or the launch does once it has.
     func appLaunched(_ app: AppInfo27) async {
         events.yield(.appLaunched(pid: app.pid, bundleID: app.bundleID))
+        _ = await meetLaunch(app)
+    }
+
+    /// A launch owes the app's windows their announcement, whoever claims the app: when a query
+    /// claimed it first, its registration pays the debt, or the launch does once it has. A failed
+    /// registration is tried again at the retry delays. The app is the result when the launch's own
+    /// registration finds it unobservable.
+    private func meetLaunch(_ app: AppInfo27) async -> UnobservableApp? {
         let held = owe(app.pid)
+        var unobservable: UnobservableApp?
         if let claim = claimIfRunning(app.pid) {
-            _ = await attempt(app, under: claim, delays: retryDelays, isRetry: false)
+            unobservable = await attempt(app, under: claim, delays: retryDelays, isRetry: false)
         }
         if let held, held.observesPlacement == true { await catchUp(app, claim: held.id) }
+        return unobservable
     }
 
     /// Ends the app's claim and its tries, so nothing still in flight for it reports or registers, and

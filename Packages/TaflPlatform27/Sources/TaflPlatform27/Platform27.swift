@@ -201,7 +201,7 @@ final class Platform27: WindowPlatform {
 
     // MARK: Observing
 
-    func startObserving(notices: any WindowNotices) async -> [UnobservableApp] {
+    func startObserving(notices: any WindowNotices, as run: ObservingRun) async -> [UnobservableApp] {
         self.notices.relay(to: notices)
         observation.end()
         observation.begin()
@@ -218,7 +218,7 @@ final class Platform27: WindowPlatform {
         if let previous { await MainActor.run { previous.stop() } }
         let apps = await MainActor.run(body: AppInfo27.regularApps)
         return await withTaskGroup(of: UnobservableApp?.self) { group in
-            for app in apps { group.addTask { await observation.observe(app) } }
+            for app in apps { group.addTask { await observation.observe(app, as: run) } }
             var failed: [UnobservableApp] = []
             for await result in group { if let result { failed.append(result) } }
             return failed.sorted { $0.pid < $1.pid }
