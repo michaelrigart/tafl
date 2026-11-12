@@ -368,7 +368,8 @@ Names are left to the builder. The contract is:
     whether position and size are settable, its minimum size if the app exposes one, and
     its window id when it can be resolved.
   - Events: window created, moved, resized, title changed and destroyed; app launched and
-    quit.
+    quit. A window is announced as created only for an app whose creations the platform
+    observes.
   - Which apps can't be observed, and for which events (registering for an event can
     fail; see "Failures").
 - **Writing a window.** Three primitives, each one Accessibility call with a timeout: read
@@ -765,12 +766,12 @@ Settings shows the configuration in plain language and never edits it.
   as a launch's would be (an active layout places them). An app first met through a query is
   observed from then on, and windows it opened while unobservable are not placed: a query never
   announces windows, so Tafl cannot tell them from windows the app already had.
-  The platform says that the app is observed in the same ordered stream as the announcements of
-  its windows, before them, so a window announced by the registration is judged by the app's new
-  state; Tafl takes that only for a try it has in flight under the current restart. An app whose tries are pending when a
-  restart begins counts as one whose tries are pending (see above): the restart tries it again if
-  it still fails. The app's quit and Tafl stopping end its tries, and a restart replaces them with
-  its own; a try still running when a restart begins changes nothing.
+  Tafl places a window it is told about, and the platform tells it about a window only when it
+  observes that app's creations, so a window announced by a successful try is placed. An app
+  whose tries are pending when a restart begins counts as one whose tries are pending (see
+  above): the restart tries it again if it still fails. The app's quit and Tafl stopping end its
+  tries, and a restart replaces them with its own; a try still running when a restart begins
+  changes nothing.
 
 ### Menu bar icon
 
