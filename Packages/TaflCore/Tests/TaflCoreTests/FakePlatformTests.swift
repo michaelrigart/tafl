@@ -212,6 +212,23 @@ private final class Taken: Sendable {
     #expect(await fake.eventsSent == 2)
 }
 
+/// As the platform, the fake tries again only an app it holds a registration of: one that quit, or that
+/// it never registered, gets no outcome and is not in the answer.
+@Test(.timeLimit(.minutes(1))) func theFakeTriesAgainOnlyAnAppItHoldsARegistrationOf() async {
+    let (fake, _) = await makeFake()
+    await fake.configure { $0.unobserved = [.init(pid: 7, bundleID: nil, missing: [.moved]), .init(pid: 8, bundleID: nil, missing: [.moved])] }
+    _ = await fake.startObserving(notices: WindowOwner(adjustments: []), as: .start)
+    await fake.emit(.appQuit(pid: 8))
+    let answer = await fake.observeAgain(pids: [7, 8, 9])
+    #expect(answer == [UnobservableApp(pid: 7, bundleID: nil, missing: [.moved])])
+    let events = Collector(fake.events)
+    #expect(await events.next() == .observability(pid: 7, bundleID: nil, missing: [.moved], retrying: false))
+    #expect(await events.next() == .observability(pid: 8, bundleID: nil, missing: [.moved], retrying: false))
+    #expect(await events.next() == .appQuit(pid: 8))
+    #expect(await events.next() == .observability(pid: 7, bundleID: nil, missing: [.moved], retrying: false))
+    #expect(await fake.eventsSent == 4)
+}
+
 /// As the platform, the fake announces a window only while its app's current registration observes
 /// placement: the latest outcome decides, not what the next registration will find.
 @Test func theFakeAnnouncesAWindowOnlyWhileItsAppsRegistrationObservesPlacement() async {

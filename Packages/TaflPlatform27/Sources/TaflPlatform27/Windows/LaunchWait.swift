@@ -2,7 +2,8 @@ import AppKit
 import Synchronization
 
 /// Waits for an app to finish launching, by key-value observing `isFinishedLaunching`: macOS can announce
-/// a launch before the app answers Accessibility. No timer is involved; an app that terminates first ends the wait.
+/// a launch before the app answers Accessibility. No timer is involved; an app that terminates first ends
+/// the wait, and so does the waiting task's cancellation, which takes the observations with it.
 enum LaunchWait {
     static func isLaunching(pid: Int32) -> Bool {
         guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
@@ -11,11 +12,24 @@ enum LaunchWait {
 
     static func untilFinished(pid: Int32) async {
         guard let app = NSRunningApplication(processIdentifier: pid) else { return }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            let once = Once(continuation)
-            once.hold(app.observe(\.isFinishedLaunching) { app, _ in if app.isFinishedLaunching { once.resume() } })
-            once.hold(app.observe(\.isTerminated) { app, _ in if app.isTerminated { once.resume() } })
-            if app.isFinishedLaunching || app.isTerminated { once.resume() }
+        await until(app, finished: \.isFinishedLaunching, terminated: \.isTerminated)
+    }
+
+    /// Returns once `finished` or `terminated` is true, or the task is cancelled. Either way the
+    /// observations are invalidated before it returns.
+    static func until<Object: NSObject>(
+        _ object: Object, finished: KeyPath<Object, Bool> & Sendable, terminated: KeyPath<Object, Bool> & Sendable
+    ) async {
+        let once = Once()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                once.park(continuation)
+                once.hold(object.observe(finished) { object, _ in if object[keyPath: finished] { once.resume() } })
+                once.hold(object.observe(terminated) { object, _ in if object[keyPath: terminated] { once.resume() } })
+                if object[keyPath: finished] || object[keyPath: terminated] { once.resume() }
+            }
+        } onCancel: {
+            once.resume()
         }
     }
 
@@ -26,10 +40,15 @@ enum LaunchWait {
             var isDone = false
         }
 
-        private let state: Mutex<State>
+        private let state = Mutex(State())
 
-        init(_ continuation: CheckedContinuation<Void, Never>) {
-            state = Mutex(State(continuation: continuation))
+        /// Holds the waiter; one the wait has already ended is resumed at once.
+        func park(_ continuation: CheckedContinuation<Void, Never>) {
+            let isDone = state.withLock { state in
+                if !state.isDone { state.continuation = continuation }
+                return state.isDone
+            }
+            if isDone { continuation.resume() }
         }
 
         func hold(_ observation: NSKeyValueObservation) {

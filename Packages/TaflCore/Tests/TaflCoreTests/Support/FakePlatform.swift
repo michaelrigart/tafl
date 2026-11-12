@@ -319,12 +319,15 @@ actor FakePlatform: WindowPlatform {
     }
 
     /// Registers each app again as `startObserving` does, answering from `unobserved`: a test changes it
-    /// to say what a retry finds. An app that registers then has `observeAgainAnnounces` announced.
+    /// to say what a retry finds. An app that registers then has `observeAgainAnnounces` announced. As
+    /// the platform, it leaves alone an app it holds no registration of (one that quit, or that it never
+    /// published an outcome for): nothing is published for it, and it is not in the answer.
     func observeAgain(pids: Set<Int32>) async -> [UnobservableApp] {
         observeAgainCalls.append(pids)
-        let answer = unobserved.filter { pids.contains($0.pid) }
+        let held = pids.filter { current[$0] != nil }
+        let answer = unobserved.filter { held.contains($0.pid) }
             .map { UnobservableApp(pid: $0.pid, bundleID: $0.bundleID, missing: $0.missing) }
-        for pid in pids.sorted() {
+        for pid in held.sorted() {
             let found = answer.first { $0.pid == pid }
             emit(.observability(pid: pid, bundleID: found?.bundleID, missing: found?.missing ?? [], retrying: false))
             guard found == nil else { continue }

@@ -15,6 +15,7 @@ import TaflCore
 /// Every registration publishes its outcome, the events the app misses, as one event under its claim,
 /// inside the registration's block on the app's queue: it comes before any window the registration
 /// announces, and a window is announced only while the claim's latest registration observes placement.
+/// A catch-up runs under the claim on its own, so no answer waits for its reads.
 /// A registration that fails while the app is still launching is made once more when it has finished.
 /// A launch's or a query's first meeting that still fails is made again at each of the retry delays
 /// after that failure, under the same claim, until one succeeds; the claim's end ends those tries.
@@ -65,17 +66,22 @@ final class WindowObservation27: Sendable {
         var id: Int
         /// Whether the claim's latest registration observes what placement needs; nil until one has.
         var observesPlacement: Bool?
-        /// The tries that follow a failed registration under the claim: the claim's end cancels them.
-        var tries: Task<Void, Never>?
+        /// The work under the claim: the tries that follow a failed registration, and the catch-ups.
+        /// The claim's end cancels it.
+        var work: [Task<Void, Never>] = []
+
+        func cancelWork() {
+            work.forEach { $0.cancel() }
+        }
     }
 
     private struct State {
         var isActive = false
         var nextClaim = 0
         var claims: [Int32: Claim] = [:]
-        /// Apps whose launch still owes their windows an announcement. A debt outlives a restart of
-        /// observing: whichever registration of the app comes next pays it. It goes when paid, or
-        /// when the app quits.
+        /// Apps whose launch still owes their windows an announcement. A debt is taken only under a
+        /// claim on the app, and outlives a restart of observing: whichever registration of the app comes
+        /// next pays it. It goes when paid, or when the app quits.
         var owed: Set<Int32> = []
     }
 
@@ -134,13 +140,13 @@ final class WindowObservation27: Sendable {
     /// restart leaves a failure to its own tries.
     func observe(_ app: AppInfo27, as run: ObservingRun) async -> UnobservableApp? {
         if run == .start, environment.isLaunching(app.pid) { return await meetLaunch(app) }
-        guard let claim = claimIfRunning(app.pid) else { return nil }
+        guard let claim = claimIfRunning(app.pid).claim else { return nil }
         return await attempt(app, under: claim, delays: [], isRetry: false)
     }
 
     /// Registers an app this run already claimed once more, after a registration that failed (for
     /// about 2 s around a wake, Accessibility calls on live apps fail). A new claim replaces the old one
-    /// in one step, so nothing still in flight under the old one does anything, its tries end, and the
+    /// in one step, so nothing still in flight under the old one does anything, its work ends, and the
     /// app is never without a claim. The app is the result when this registration still finds it
     /// unobservable; nil when it observes, or when the app is gone or was never claimed. An app still
     /// launching is not waited for: its registration once it has finished publishes its own outcome.
@@ -150,9 +156,10 @@ final class WindowObservation27: Sendable {
     }
 
     /// Meets an app a query found: observes it if this run has not, and tries again as a launch does
-    /// when that fails. A query never announces windows.
+    /// when that fails. A query never announces the windows of an app that had finished launching; one
+    /// still launching has none it already had, and the registration once it has finished owes them.
     func discover(_ app: AppInfo27) async {
-        guard let claim = claimIfRunning(app.pid) else { return }
+        guard let claim = claimIfRunning(app.pid).claim else { return }
         _ = await attempt(app, under: claim, delays: retryDelays, isRetry: false)
     }
 
@@ -161,21 +168,21 @@ final class WindowObservation27: Sendable {
         _ = await meetLaunch(app)
     }
 
-    /// A launch owes the app's windows their announcement, whoever claims the app: when a query
-    /// claimed it first, its registration pays the debt, or the launch does once it has. A failed
-    /// registration is tried again at the retry delays. The app is the result when the launch's own
-    /// registration finds it unobservable.
+    /// A launch owes the app's windows their announcement, under whichever claim the app has: when a
+    /// query claimed it first, its registration pays the debt, or a catch-up under that claim does once
+    /// it has. A failed registration is tried again at the retry delays. The app is the result when the
+    /// launch's own registration finds it unobservable.
     private func meetLaunch(_ app: AppInfo27) async -> UnobservableApp? {
-        let held = owe(app.pid)
+        let met = claimIfRunning(app.pid, owing: true)
         var unobservable: UnobservableApp?
-        if let claim = claimIfRunning(app.pid) {
+        if let claim = met.claim {
             unobservable = await attempt(app, under: claim, delays: retryDelays, isRetry: false)
         }
-        if let held, held.observesPlacement == true { await catchUp(app, claim: held.id) }
+        if let held = met.held, held.observesPlacement == true { startCatchUp(app, claim: held.id) }
         return unobservable
     }
 
-    /// Ends the app's claim and its tries, so nothing still in flight for it reports or registers, and
+    /// Ends the app's claim and its work, so nothing still in flight for it reports or registers, and
     /// frees what it held. The notices hear of the quit on the app's queue, after the reads already there.
     func appQuit(pid: Int32) async {
         // Under the lock every outcome and announcement take: nothing found under the claim arrives after
@@ -185,7 +192,7 @@ final class WindowObservation27: Sendable {
             state.owed.remove(pid)
             return state.claims.removeValue(forKey: pid)
         }
-        ended?.tries?.cancel()
+        ended?.cancelWork()
         let wasClaimed = ended != nil
         let hub = hub
         let notices = notices
@@ -199,9 +206,9 @@ final class WindowObservation27: Sendable {
         await axQueue.forget(pid: pid)
     }
 
-    /// The tries under the app's current claim, for a test to wait on.
-    func tries(of pid: Int32) -> Task<Void, Never>? {
-        state.withLock { $0.claims[pid]?.tries }
+    /// The work under the app's current claim, its tries and catch-ups, for a test to wait on.
+    func work(of pid: Int32) -> [Task<Void, Never>] {
+        state.withLock { $0.claims[pid]?.work ?? [] }
     }
 
     static func needsRetry(_ failures: [String: AXError]) -> Bool {
@@ -254,13 +261,13 @@ final class WindowObservation27: Sendable {
     /// and they hold up no other app. The delays count from the failure that ends the launch wait.
     private func startTries(_ app: AppInfo27, claim: Int, awaitingLaunch: Bool, delays: [Duration]) {
         let pid = app.pid
-        let tries = Task {
+        hold(Task {
             if awaitingLaunch {
+                // Ends early when the claim ends; the owe and the registration after it then do nothing.
                 await self.environment.untilFinishedLaunching(pid)
-                guard !Task.isCancelled else { return }
                 // The app was still launching: its windows are new, and the next registration owes them
                 // their announcement.
-                _ = self.owe(pid)
+                self.owe(pid, under: claim)
                 guard let registered = await self.register(app, claim: claim, awaitingLaunch: false, delays: delays, isRetry: true),
                       !registered.failures.isEmpty
                 else { return }
@@ -274,18 +281,32 @@ final class WindowObservation27: Sendable {
                       !registered.failures.isEmpty
                 else { return }
             }
-        }
+        }, pid: pid, claim: claim)
+    }
+
+    /// A catch-up in a task the claim holds, so the claim's end cancels it and nothing that answers for
+    /// the app waits for its reads. The registration that owed it has published its outcome already,
+    /// so the windows it announces come after.
+    private func startCatchUp(_ app: AppInfo27, claim: Int) {
+        hold(Task {
+            guard !Task.isCancelled else { return }
+            await self.catchUp(app, claim: claim)
+        }, pid: app.pid, claim: claim)
+    }
+
+    /// Puts the work under the claim, or cancels it when the claim has ended.
+    private func hold(_ work: Task<Void, Never>, pid: Int32, claim: Int) {
         let held = state.withLock { state -> Bool in
             guard state.isActive, state.claims[pid]?.id == claim else { return false }
-            state.claims[pid]?.tries = tries
+            state.claims[pid]?.work.append(work)
             return true
         }
-        if !held { tries.cancel() }
+        if !held { work.cancel() }
     }
 
     /// One registration under the claim, on the app's `AXQueue`: it registers, records what the
     /// registration observes and publishes its outcome in one block, before anything the registration
-    /// announces, then pays the app's launch debt when it can. Nil, with nothing published, when the
+    /// announces, then starts the catch-up that pays the app's launch debt when it can. Nil, with nothing published, when the
     /// claim had ended or the process was gone, before the hop (so no queue is made for a dead pid) or
     /// while the call was in flight; in the second case the registration is taken back. A failure counts
     /// as retrying when a try follows it: once the app has finished launching, or after `delays`.
@@ -324,7 +345,7 @@ final class WindowObservation27: Sendable {
             }
             return (Registered(failures: failures, awaitsLaunch: awaitsLaunch), owes)
         }
-        if registered?.owes == true { await catchUp(app, claim: claim) }
+        if registered?.owes == true { startCatchUp(app, claim: claim) }
         return registered?.0
     }
 
@@ -355,21 +376,25 @@ final class WindowObservation27: Sendable {
 
     // MARK: Claims
 
-    /// A claim on the pid of a running app, or nil when observing is off, the app has one, or the app
-    /// is Tafl itself.
-    private func claimIfRunning(_ pid: Int32) -> Int? {
-        guard environment.isRunning(pid) else { return nil }
-        let claim = state.withLock { state -> Int? in
-            guard state.isActive, pid != getpid(), state.claims[pid] == nil else { return nil }
+    /// A claim on the pid of a running app, or no claim when observing is off, the app has one, or the
+    /// app is Tafl itself; `held` is the claim the app has. A launch, `owing`, also owes the app's
+    /// windows in the same step, under the claim it takes or the one the app holds, and owes nothing
+    /// without a claim: a launch handled after its app's quit leaves no debt behind.
+    private func claimIfRunning(_ pid: Int32, owing: Bool = false) -> (claim: Int?, held: Claim?) {
+        guard environment.isRunning(pid) else { return (nil, nil) }
+        let met = state.withLock { state -> (claim: Int?, held: Claim?) in
+            guard state.isActive, pid != getpid() else { return (nil, nil) }
+            if owing { state.owed.insert(pid) }
+            if let held = state.claims[pid] { return (nil, held) }
             state.nextClaim += 1
             state.claims[pid] = Claim(id: state.nextClaim)
-            return state.nextClaim
+            return (state.nextClaim, nil)
         }
-        if claim != nil { translator.reopen(pid: pid) }
-        return claim
+        if met.claim != nil { translator.reopen(pid: pid) }
+        return met
     }
 
-    /// Puts a new claim in place of the one the app holds, and ends the old one's tries; nil when it
+    /// Puts a new claim in place of the one the app holds, and ends the old one's work; nil when it
     /// holds none or observing is off.
     private func replaceClaim(pid: Int32) -> Int? {
         let (claim, ended) = state.withLock { state -> (Int?, Claim?) in
@@ -378,30 +403,32 @@ final class WindowObservation27: Sendable {
             state.claims[pid] = Claim(id: state.nextClaim)
             return (state.nextClaim, old)
         }
-        ended?.tries?.cancel()
+        ended?.cancelWork()
         return claim
     }
 
-    /// An attempt under the claim gives up: the claim is released, if it is still the app's, and so is
-    /// whatever registration the app has. Under the lock, so a claim taken afterwards registers fresh.
+    /// An attempt under the claim gives up because the app is gone: the claim is released, if it is
+    /// still the app's, and so are whatever registration and debt the app has. Under the lock, so a
+    /// claim taken afterwards registers fresh.
     private func abandon(pid: Int32, claim: Int) {
         let ended = state.withLock { state -> Claim? in
             guard let held = state.claims[pid], held.id == claim else { return nil }
             state.claims[pid] = nil
+            state.owed.remove(pid)
             environment.stop(hub, pid)
             return held
         }
-        ended?.tries?.cancel()
+        ended?.cancelWork()
     }
 
-    /// Ends every claim and its tries, with observing on or off afterwards.
+    /// Ends every claim and its work, with observing on or off afterwards.
     private func endClaims(active: Bool) {
         let ended = state.withLock { state -> [Claim] in
             state.isActive = active
             defer { state.claims = [:] }
             return Array(state.claims.values)
         }
-        for claim in ended { claim.tries?.cancel() }
+        for claim in ended { claim.cancelWork() }
     }
 
     private func isCurrent(pid: Int32, claim: Int) -> Bool {
@@ -415,13 +442,11 @@ final class WindowObservation27: Sendable {
 
     // MARK: Announcing
 
-    /// Owes the app's windows their announcement. The current claim on the app, if any, and what
-    /// its registration observes, taken under the same lock `publishOutcome` records it under: one of
-    /// the two sees the other, so the debt is paid.
-    private func owe(_ pid: Int32) -> Claim? {
+    /// Owes the app's windows their announcement, only while the claim is current: under the lock
+    /// `appQuit` and `end` take, so a debt never lands after the quit that ended the claim.
+    private func owe(_ pid: Int32, under claim: Int) {
         state.withLock { state in
-            state.owed.insert(pid)
-            return state.isActive ? state.claims[pid] : nil
+            if state.isActive, state.claims[pid]?.id == claim { state.owed.insert(pid) }
         }
     }
 
