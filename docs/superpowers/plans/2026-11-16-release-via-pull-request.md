@@ -12,13 +12,14 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md` (Tafl's differences). It names the canonical design, Muninn's `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`, which holds the behaviour. Read both.
 
-**Source (`M`):** the commit on Muninn's `fix/release-via-pr` that passes Codex's pre-merge review. Not yet known: the run waits for it. The driver writes its SHA here, with Muninn's suite total at `M`, before Task 1. `$MUNINN` below is a Muninn checkout that has `M`; the driver gives its path in each brief.
+**Source (`M`):** the commit on Muninn's `fix/release-via-pr` that passes Codex's pre-merge review. Not yet known: the run waits for it. The driver writes its full SHA here, with Muninn's suite total at `M`, before Task 1. Every command below reads two shell variables the implementer sets first: `M`, that full SHA, and `MUNINN`, the path of a Muninn checkout that has it (the driver gives both in each brief). `git cat-file -e "$M^{commit}"` in `$MUNINN` must succeed before any step runs.
 
 ## Global Constraints
 
 - **Rename:** `sed -e 's/muninn/tafl/g' -e 's/Muninn/Tafl/g'`. Team `CX4MWR5579` and tap `michaelrigart/homebrew-tap` are the same in both repositories and need no change.
 - **Allowed differences** in `scripts/tests/test-release-dry-run` after the rename, and no others: Tafl's zap and cask assertions instead of Muninn's `zap_is_settings_only` and its four cases; the "section holds only the fixture's text" case names Tafl's entry `Tafl v1: place windows on a grid`. `scripts/release` has none.
-- **Muninn is read-only:** read `M` with `git -C "$MUNINN" show M:<path>`; never edit, commit, check out or fetch in `$MUNINN`.
+- **Muninn is read-only:** read `M` with `git -C "$MUNINN" show "$M:<path>"`; never edit, commit, check out or fetch in `$MUNINN`.
+- **Port through a file:** `git show` writes to `$TMPDIR` first and `sed` runs only if it succeeded, so a failed read never empties a Tafl file.
 - **Commands:** the suite and `scripts/release --dry-run` need the keychain signing identity and Xcode. Run them outside the agent sandbox, prefixed with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`. Never run `scripts/release` without `--dry-run`.
 - **Sandbox:** process substitution (`<(...)`) fails inside the sandbox; diff through files in `$TMPDIR`.
 - **No `CHANGELOG.md` entry:** nothing changes for users.
@@ -44,14 +45,14 @@
 - Modify: `scripts/tests/test-release-dry-run`
 
 **Interfaces:**
-- Consumes: `M:scripts/release` and `M:scripts/tests/test-release-dry-run` in `$MUNINN`; Tafl's zap assertions from `c654410:scripts/tests/test-release-dry-run` (the seven lines from `expect "a: the cask has exactly one zap stanza"` to `expect "a: the cask never mentions xattr"`).
+- Consumes: `"$M:scripts/release"` and `"$M:scripts/tests/test-release-dry-run"` in `$MUNINN`; Tafl's zap assertions from `c654410:scripts/tests/test-release-dry-run` (the seven lines from `expect "a: the cask has exactly one zap stanza"` to `expect "a: the cask never mentions xattr"`).
 - Produces: the release flow Task 2 documents. Nothing calls it from code.
 
 - [ ] **Step 1: Port the test**
 
 ```bash
-git -C "$MUNINN" show M:scripts/tests/test-release-dry-run \
-  | sed -e 's/muninn/tafl/g' -e 's/Muninn/Tafl/g' >scripts/tests/test-release-dry-run
+git -C "$MUNINN" show "$M:scripts/tests/test-release-dry-run" >"$TMPDIR/muninn-test" \
+  && sed -e 's/muninn/tafl/g' -e 's/Muninn/Tafl/g' "$TMPDIR/muninn-test" >scripts/tests/test-release-dry-run
 ```
 
 Then make the allowed differences, and only those:
@@ -74,8 +75,8 @@ Expected: exits non-zero, with `FAIL` lines for the pull-request cases (among th
 - [ ] **Step 4: Port the script**
 
 ```bash
-git -C "$MUNINN" show M:scripts/release \
-  | sed -e 's/muninn/tafl/g' -e 's/Muninn/Tafl/g' >scripts/release
+git -C "$MUNINN" show "$M:scripts/release" >"$TMPDIR/muninn-release" \
+  && sed -e 's/muninn/tafl/g' -e 's/Muninn/Tafl/g' "$TMPDIR/muninn-release" >scripts/release
 ```
 
 Run Step 2's `rg` on `scripts/release`. Expected: no hit. The file keeps mode 755 (`git diff --summary` shows no mode change).
@@ -84,7 +85,8 @@ Run Step 2's `rg` on `scripts/release`. Expected: no hit. The file keeps mode 75
 
 ```bash
 for f in scripts/release scripts/tests/test-release-dry-run; do
-  git -C "$MUNINN" show "M:$f" | sed -e 's/muninn/tafl/g' -e 's/Muninn/Tafl/g' >"$TMPDIR/ported"
+  git -C "$MUNINN" show "$M:$f" >"$TMPDIR/source" || { echo "cannot read $M:$f"; break; }
+  sed -e 's/muninn/tafl/g' -e 's/Muninn/Tafl/g' "$TMPDIR/source" >"$TMPDIR/ported"
   echo "== $f"; diff "$TMPDIR/ported" "$f"
 done
 ```
