@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Runs scripts/lint-tests against fixture repositories: each way of waiting it forbids fails, and a
+# clean file, a comment and a line allowed with a reason pass.
+set -euo pipefail
+
+if [[ $# -ne 0 ]]; then
+  echo "usage: $0" >&2
+  exit 2
+fi
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+lint="$root/scripts/lint-tests"
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/tafl-lint-tests.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+
+failures=0
+cases=0
+
+pass() {
+  cases=$((cases + 1))
+  echo "ok   $1"
+}
+
+fail() {
+  cases=$((cases + 1))
+  failures=$((failures + 1))
+  echo "FAIL $1" >&2
+}
+
+# A repository whose one test file holds `body`; prints its root.
+fixture() {
+  local name="$1" body="$2"
+  local repo="$work/$name"
+  mkdir -p "$repo/Packages/Kit/Tests/KitTests"
+  printf '%s\n' "$body" >"$repo/Packages/Kit/Tests/KitTests/KitTests.swift"
+  echo "$repo"
+}
+
+# The lint fails on `body`, naming the file and its line.
+expect_failure() {
+  local name="$1" body="$2"
+  local repo output
+  repo="$(fixture "$name" "$body")"
+  if output="$("$lint" "$repo" 2>&1)"; then
+    fail "$name: the lint passed"
+  elif [[ "$output" == *"Packages/Kit/Tests/KitTests/KitTests.swift:2:"* ]]; then
+    pass "$name"
+  else
+    fail "$name: the failure does not name the line: $output"
+  fi
+}
+
+# The lint passes on `body`, and its output contains `expected` when given.
+expect_success() {
+  local name="$1" body="$2" expected="${3:-}"
+  local repo output
+  repo="$(fixture "$name" "$body")"
+  if ! output="$("$lint" "$repo" 2>&1)"; then
+    fail "$name: the lint failed: $output"
+  elif [[ -n "$expected" && "$output" != *"$expected"* ]]; then
+    fail "$name: the output does not list $expected: $output"
+  else
+    pass "$name"
+  fi
+}
+
+expect_failure "a yield" $'@Test func t() async {\n    await Task.yield()\n}'
+expect_failure "a task sleep" $'@Test func t() async throws {\n    try await Task.sleep(for: .seconds(1))\n}'
+expect_failure "a thread sleep" $'@Test func t() {\n    Thread.sleep(forTimeInterval: 1)\n}'
+expect_failure "usleep" $'@Test func t() {\n    usleep(1000)\n}'
+expect_failure "Date() polled" $'@Test func t() {\n    let start = Date()\n}'
+expect_failure "ContinuousClock polled" $'@Test func t() {\n    let start = ContinuousClock.now\n}'
+expect_failure "a task's value" $'@Test func t() async {\n    _ = await Task { 1 }.value\n}'
+expect_failure "a checked continuation" $'@Test func t() async {\n    await withCheckedContinuation { $0.resume() }\n}'
+expect_failure "an unsafe continuation" $'@Test func t() async {\n    await withUnsafeContinuation { $0.resume() }\n}'
+expect_failure "a throwing continuation" $'@Test func t() async throws {\n    try await withCheckedThrowingContinuation { $0.resume() }\n}'
+expect_failure "a task's result" $'@Test func t() async {\n    _ = await Task { 1 }.result\n}'
+expect_failure "a dispatch semaphore" $'@Test func t() {\n    let release = DispatchSemaphore(value: 0)\n}'
+expect_failure "SuspendingClock polled" $'@Test func t() {\n    let start = SuspendingClock.now\n}'
+expect_failure "Date.now polled" $'@Test func t() {\n    let start = Date.now\n}'
+expect_failure "a plain sleep" $'@Test func t() {\n    sleep(1)\n}'
+expect_failure "a plain sleep after a statement" $'@Test func t() {\n    let n = 1; sleep(UInt32(n))\n}'
+expect_failure "a dispatch group" $'@Test func t() {\n    let group = DispatchGroup()\n}'
+expect_failure "a blocking wait" $'@Test func t() {\n    group.wait()\n}'
+expect_failure "a blocking wait with a timeout" $'@Test func t() {\n    _ = group.wait(timeout: .now() + 1)\n}'
+expect_failure "a delayed dispatch" $'@Test func t() {\n    queue.asyncAfter(deadline: .now() + 1) {}\n}'
+expect_failure "a run loop" $'@Test func t() {\n    RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))\n}'
+expect_failure "a plain sleep through Darwin" $'@Test func t() {\n    Darwin.sleep(1)\n}'
+expect_failure "a plain sleep with a space before the parenthesis" $'@Test func t() {\n    sleep (1)\n}'
+expect_failure "a usleep with a space before the parenthesis" $'@Test func t() {\n    usleep (1000)\n}'
+expect_failure "a plain sleep through Foundation" $'@Test func t() {\n    Foundation.sleep(1)\n}'
+expect_failure "a yield with a space before the parenthesis" $'@Test func t() async {\n    await Task.yield ()\n}'
+expect_failure "a blocking wait with a space before the parenthesis" $'@Test func t() {\n    group.wait ()\n}'
+expect_failure "a blocking wait with a timeout and a space before the parenthesis" $'@Test func t() {\n    _ = group.wait (timeout: .now() + 1)\n}'
+expect_failure "an NSCondition wait until a date with a space before the parenthesis" $'@Test func t() {\n    _ = condition.wait (until: .distantFuture)\n}'
+expect_failure "a run loop run until a date with a space before the parenthesis" $'@Test func t() {\n    RunLoop.current.run (until: Date(timeIntervalSinceNow: 1))\n}'
+expect_failure "a run loop run with a space before the parenthesis" $'@Test func t() {\n    RunLoop.main.run ()\n}'
+expect_failure "a Core Foundation run loop run" $'@Test func t() {\n    CFRunLoopRun()\n}'
+expect_failure "a Core Foundation run loop run in a mode" $'@Test func t() {\n    CFRunLoopRunInMode(.defaultMode, 1, false)\n}'
+expect_failure "a Core Foundation run loop run with a space before the parenthesis" $'@Test func t() {\n    CFRunLoopRun ()\n}'
+expect_failure "a run loop run in a mode" $'@Test func t() {\n    RunLoop.current.run(mode: .default, before: .distantFuture)\n}'
+expect_failure "a run loop run" $'@Test func t() {\n    RunLoop.main.run()\n}'
+expect_failure "an NSCondition wait until a date" $'@Test func t() {\n    _ = condition.wait(until: .distantFuture)\n}'
+expect_failure "an NSCondition wait" $'@Test func t() {\n    condition.wait()\n}'
+expect_failure "an allow marker that names a rule nothing on its line matches" \
+  $'@Test func t() async {\n    await Task.yield() // lint-tests: allow task-yield, task-sleep: the second matches nothing\n}'
+expect_failure "a stale allow marker" $'@Test func t() {\n    let n = 1 // lint-tests: allow task-sleep: there is no sleep here\n}'
+expect_failure "an allow marker for a violation that moved away" $'@Test func t() async {\n    await waitUntil("a flag") { flag.isSet } // lint-tests: allow task-yield: once yielded here\n}'
+expect_failure "an allow marker without a reason" $'@Test func t() async {\n    await Task.yield() // lint-tests: allow task-yield\n}'
+expect_failure "an allow marker with an empty reason" $'@Test func t() async {\n    await Task.yield() // lint-tests: allow task-yield:\n}'
+expect_failure "an allow marker that names no rule" $'@Test func t() async {\n    await Task.yield() // lint-tests: allow because I say so\n}'
+expect_failure "an allow marker for another rule" $'@Test func t() async {\n    await Task.yield() // lint-tests: allow task-sleep: not this one\n}'
+expect_failure "a second violation on an allowed line" \
+  $'@Test func t() async throws {\n    try await Task.sleep(for: .seconds(1)); let start = Date() // lint-tests: allow task-sleep: the first only\n}'
+
+expect_success "a clean file" $'@Test func t() async {\n    await waitUntil("a flag") { flag.isSet }\n    #expect(tally.value == 2)\n}'
+expect_success "a name that ends in Date()" $'@Test func aProcessHasNoLaunchDate() {\n    #expect(launchDate() == nil)\n}'
+expect_success "a comment that names a forbidden wait" $'/// Never waits with Task.sleep or Task.yield().\n@Test func t() {}'
+expect_success "a line allowed with a reason" \
+  $'@Test func t() async throws {\n    try await Task.sleep(for: .seconds(1)) // lint-tests: allow task-sleep: nothing to wait on but time\n}' \
+  "KitTests.swift:2: Task.sleep: nothing to wait on but time"
+expect_success "a marker that allows two rules on its line" \
+  $'@Test func t() async throws {\n    try await Task.sleep(for: .seconds(1)); let start = Date() // lint-tests: allow task-sleep, date: both on purpose\n}' \
+  "KitTests.swift:2: Date() as a clock: both on purpose"
+expect_success "a reason that names a forbidden wait" \
+  $'@Test func t() {\n    let start = Date() // lint-tests: allow date: not a Task.sleep or a Task.yield()\n}' \
+  "KitTests.swift:2: Date() as a clock: not a Task.sleep or a Task.yield()"
+
+expect_success "a clock's own sleep method" $'final class Clock {\n    func sleep(for duration: Duration) async throws {}\n}'
+expect_success "a clock's own sleep method with a space" $'final class Clock {\n    func sleep (for duration: Duration) async throws {}\n}'
+expect_success "a sleep on a clock" $'@Test func t() async throws {\n    try await clock.sleep(for: .seconds(1))\n}'
+expect_success "a wait on a tally" $'@Test func t() async {\n    await tally.wait(for: 2, "calls", timeout: .milliseconds(50))\n}'
+
+# Build products are not the repository's tests.
+repo="$(fixture "a build checkout" $'@Test func t() {}')"
+mkdir -p "$repo/Packages/Kit/.build/checkouts/Dep/Tests"
+printf '%s\n' 'let start = Date()' >"$repo/Packages/Kit/.build/checkouts/Dep/Tests/DepTests.swift"
+if output="$("$lint" "$repo" 2>&1)"; then pass "a build checkout"; else fail "a build checkout: $output"; fi
+
+echo "$((cases - failures))/$cases passed"
+[[ $failures -eq 0 ]]

@@ -2,8 +2,17 @@
 
 **Date:** 2026-11-01
 **Owner:** Michael Rigart
-**Status:** Approved. Signed off by Michael on 2026-11-01, after Codex's spec review.
+**Status:** Implemented (pull request
+[michaelrigart/tafl#2](https://github.com/michaelrigart/tafl/pull/2), branch `feat/tafl-v1`).
+Signed off by Michael on 2026-11-01, after Codex's spec review.
 **Name:** Tafl, after the Norse board game played by placing pieces on a grid.
+**Revised:** 2026-11-06: signing moved to Michael's Personal Team; see
+`docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`;
+2026-11-10: how Tafl notices the Accessibility switch;
+2026-11-10: measured on macOS 27.2 (feasibility probe);
+2026-11-10: a layout you apply brings its windows to the front;
+2026-11-12: an app that fails to register when it launches is tried again, as after a wake;
+each registration's outcome is an event, and Tafl's view of an app follows the latest.
 
 ## Why
 
@@ -62,8 +71,8 @@ pull requests, Rectangle Pro's public feature list, and the competing tools.
 ## What macOS allows
 
 These are facts from Rectangle's source and documentation and from Apple's documentation.
-**None is verified on macOS 27.2.** The plan's first task checks the ones Tafl depends on
-(see Delivery).
+**None was verified on macOS 27.2 when this spec was signed off.** The plan's first task
+checked the ones Tafl depends on (see Delivery); "Measured on macOS 27.2" records the result.
 
 - **Windows are controlled through Accessibility** (`AXUIElement`): read and set position
   and size, check whether each is settable, raise. This needs the Accessibility
@@ -99,6 +108,74 @@ These are facts from Rectangle's source and documentation and from Apple's docum
   `EnableTopTilingByEdgeDrag`, `EnableTiledWindowMargins`.
 - **Global hotkeys** work through Carbon's `RegisterEventHotKey` without any permission or
   event tap.
+
+## Measured on macOS 27.2
+
+The feasibility probe ran on 2026-11-05 and 2026-11-10, on the built-in display alone and
+docked to a 21:9 ultrawide. No stop rule triggered: windows read and move reliably; the one
+change to the part Tafl didn't write is exact and computable; the begin callback arrives
+before macOS moves any window; macOS's own restore matches rule 2 stepping aside; and macOS's
+moves end within 0.5 s of the end callback.
+
+- **The named macOS adjustment.** A position write that moves a window onto a display whose
+  visible frame is shorter than the window clamps its height: 1410 became 1130, in 5 of 5
+  apps. All five clamps landed at the visible top (y 39), where "the height that ends at the
+  destination's visible bottom" and "the destination's visible height" agree. Tafl's
+  adjustment uses the bottom form; that form for a window below the visible top, and a width
+  clamp (a width wider than the destination's visible frame becoming its visible width), were
+  not observed and are inferred. Moving onto a taller display never changed the size. A size
+  write is clamped by the app at the window's current origin, to the bottom of the display it
+  is on; that is the written part, and size-position-size recovers it. Cross-display and
+  single-display runs ended on the target frame (shortfall 0) except the 1 pt below, Zen with
+  Enhanced UI left on (900 pt off in 3 of 3 runs, see Enhanced UI) and a target at y 0, which
+  ended 39 pt lower because macOS keeps windows below the menu bar; Tafl never targets above
+  the visible frame.
+- **Reapply.** Nothing changed 25 ms after the last read-back in 45 of 45 runs, on one display
+  and across displays. On 27.2 there is no reapply (`reapplyDelay` is nil); the mechanism stays
+  for a later macOS.
+- **Size shortfall.** At most 1 pt (TextEdit and an Electron app, Dock visible). A terminal's
+  cell rounding reads 2 pt off when tiled.
+- **Quiet period.** macOS's moves ended 70 to 400 ms after the end callback, never later than
+  0.5 s. The quiet period stays 1.5 s for margin; the 3 s cap is not near.
+- **Recognition tolerance.** 2 pt. macOS's tiles match Rectangle's gap rule exactly. With
+  tiling margins on they are recognised only when `gap` is 8.
+- **Space coverage.** Accessibility lists only the current Space's windows. Minimized windows
+  are listed.
+- **Dock.** The auto-hidden Dock reserves nothing. `visibleFrame` was current a few seconds
+  after a Dock change, so no correction beyond reading the visible frame is needed at that
+  latency; the Dock reader stays. The Dock sits on the main display: the built-in when docked,
+  the external alone with the lid closed.
+- **A taken shortcut does not show up.** An exclusive registration succeeds silently while
+  another app (Rectangle) holds the chord, and Tafl takes every press (45 of 45). Tafl cannot
+  detect it. The README tells users to quit Rectangle.
+- **Display identity.** Name, vendor, model and serial were stable across reconnect, lid
+  close and open, wake and reboot. The CoreGraphics display id changed across a reboot (3 to
+  2), so Tafl never keys on it.
+- **macOS restores windows itself** to their per-setup frames when a known setup returns
+  (replug, lid, wake), within about 100 ms.
+- **Wake.** For about 2 s around wake, Accessibility reads of live windows fail with -25202
+  (invalid element). So only a window's destroyed notification and its app's quit end a
+  window; a read that finds the element invalid fails that read only and keeps the
+  registration. An app that fails to register in that window is tried again (see "After wake
+  or a user switch"). A DarkWake shows a placeholder display (no name, "unkn" and "virt",
+  1920 x 1080) for about 1.3 s, shorter than the 1.5 s quiet period. One that lasted longer
+  would settle as a new setup, so Tafl never settles on a setup that holds one (see "Display
+  changes"). Known limit: a real display that reports no name with vendor "unkn" and model
+  "virt" would look like the placeholder, and Tafl would never settle on a setup that holds it.
+  Known limit: if Tafl quits while no display is connected and starts again with one, it
+  treats that display as a first setup, because the saved memory cannot tell "no displays"
+  from "nothing remembered".
+- **Launch.** Calendar refuses registration with `kAXErrorCannotComplete` (-25204) for every
+  notification for about 0.8 s after it launches, while the app is not yet finished launching,
+  and accepts it after. Five apps launched during a day failed even the try at the end of
+  their launch, so the later tries (see "An app that fails to register when it launches")
+  cover them.
+- **Enhanced UI.** Switching it off returns -25208 in a Gecko browser, yet it works. Tafl
+  always attempts it and ignores the status. Skipping the switch failed in 3 of 3 runs in Zen
+  (the position write reverted the size, and the frame ended 900 pt off), which is why Tafl
+  always attempts it.
+- **Timing.** Reads take 0.06 to 0.7 ms (up to 168 ms right after a cross-display write, and
+  22 to 36 ms right after a size write on a single display); writes take 0.1 to 38 ms.
 
 ## Success
 
@@ -143,7 +220,8 @@ Each of these can come later if it fits the architecture below.
 - **Editing settings in the interface.** The config file is the only place to change them.
 - **Other window-manager features:**
   - animation, gestures, throw, stash, pin or Todo mode;
-  - automatic tiling, focus switching;
+  - automatic tiling, and focus switching as a feature of its own (a layout you apply
+    brings its windows to the front; see "Layouts");
   - nudge, width-only or height-only resize;
   - custom grids beyond the named placements;
   - per-app rules outside layouts;
@@ -186,8 +264,10 @@ Tafl has failed, even if it works, if it:
     out. Hardened Runtime on.
 - **Install location.** Tafl runs from `/Applications`.
 - **Identity.** Bundle identifier `com.michaelrigart.tafl`.
-- **Signing.** Ad-hoc, like Linger and Hulder. The Accessibility grant is tied to the
-  signature, so every ad-hoc rebuild needs it granted again.
+- **Signing.** Michael's Personal Team, as Linger, Hulder and Muninn now do. The Accessibility
+  grant is tied to the certificate, so it should survive rebuilds; ad hoc builds, which CI and
+  contributors use, need it again after every rebuild. See
+  `docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`.
 - **Toolchain.** The same as Linger and Hulder:
   - Xcode through `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` per command.
   - XcodeGen, pinned in the repository's `mise.toml`; the generated project is not tracked.
@@ -290,15 +370,26 @@ Names are left to the builder. The contract is:
     whether position and size are settable, its minimum size if the app exposes one, and
     its window id when it can be resolved.
   - Events: window created, moved, resized, title changed and destroyed; app launched and
-    quit.
+    quit; and each registration's outcome: the events the app misses (none when it is
+    observed) and whether the platform will try it again, in the app's order and before any
+    window that registration announces. A window is announced as created only while the app's
+    current registration observes placement (creations, moves, resizes and destructions).
   - Which apps can't be observed, and for which events (registering for an event can
-    fail; see "Failures").
+    fail; see "Failures"). The outcome events are the app's state; starting to observe and
+    trying apps again also return the apps they found failing, which decide only which apps
+    a restart tries next.
 - **Writing a window.** Three primitives, each one Accessibility call with a timeout: read
   the frame, set the size, set the position. Each returns its result or a typed failure:
   the app didn't respond, the window can't be moved, or the window is fullscreen. A write
   session wraps a sequence of them for one app: it switches Enhanced UI off at the start
   and restores it at the end. The core judges the results, including a refused size and
   an external change (see "Applying a frame").
+- **Raising windows.** Bring given windows to the front in order, and make the last one's
+  app frontmost. A failure is logged and never fails the layout. The core passes an
+  admission check that the platform asks, on the queue where that call runs, before each
+  raise, each frontmost write and the activation fallback (the app's Accessibility queue
+  for the raise and the frontmost write, the main actor for the fallback); once it answers
+  no, nothing more is raised.
 - **The pointer's display.**
 - **macOS's tiling settings** (read only).
 - **The Accessibility permission state.**
@@ -365,14 +456,20 @@ has a name used in the config file.
   - With a single display, nothing moves and the overlay says so.
 - **Larger and smaller** stop at the visible frame and at the window's minimum size.
 - **Restore** returns the window to the frame it had before a chain of Tafl placements
-  began.
+  began, as it was, even partly off-screen (display-change rule 2 places a remembered frame
+  the same way; larger, smaller and the named placements keep the window on screen).
   - A chain starts when Tafl places a window that the user placed last (or never placed).
     So once the user moves or resizes the window, the next placement records a new restore
     frame, as in Rectangle.
   - Shortcut, menu and layout placements count. Display-change rules don't, because their
     old frame was on a display that may be gone.
-  - A restore frame on a display that is no longer connected is mapped onto the window's
-    current display.
+  - Where the frame goes follows the display it was recorded on. While that display is
+    unchanged, the frame is exact: a Dock or menu bar change (shown, hidden, resized, moved)
+    counts as unchanged. When the display only moved, the frame is translated by the move,
+    with its size kept. When its resolution changed, the frame is mapped onto the display as
+    it is now. When the display is no longer connected, the frame is mapped onto the
+    window's current display. A target with less than a quarter of it on any display is kept
+    on screen; this is the only pull onto the screen, for restore and for rule 2.
 
 ### Repeats
 
@@ -394,8 +491,9 @@ action put it. `repeat` in the config file sets what a repeat does:
 - **Last-known frames.** macOS gives no reliable notice before a display disconnects. So
   Tafl keeps every window's last-known frame per display setup, from window-moved and
   window-resized events. It stops recording for a setup as soon as a reconfiguration
-  begins. Frames are stored relative to their display's visible frame, so a restore
-  survives a change of resolution.
+  begins. A frame is stored with its display's frame and visible frame, and relative to the
+  visible frame. It is placed back by the Restore rule above (exact, translated or mapped),
+  so a change of resolution maps it and a Dock change leaves it where it was.
 - **Settling.** macOS signals neither the end of a docking sequence, which often fires
   several reconfigurations, nor the end of its own window relocation. Tafl treats a
   display change as settled after a quiet period with no reconfiguration and no
@@ -405,7 +503,15 @@ action put it. `repeat` in the config file sets what a repeat does:
   change. So:
   - a display that drops out briefly and returns, on wake or when a monitor sleeps, moves
     nothing;
-  - a change of resolution, arrangement or main display moves nothing.
+  - a change of resolution, arrangement or main display moves nothing;
+  - a setup that holds a placeholder display (no name, vendor "unkn" and model "virt", which
+    macOS shows briefly during a DarkWake) is never a setup: the rules do not run for it, nothing
+    moves, the active layout and the last-known setup stay, and the next real setup is handled
+    as usual, compared with the setup before the placeholder. Such a setup is never recorded,
+    remembered or saved, so when Tafl starts on one with no setup remembered (a first launch, or a
+    memory that failed to load), the next real setup is a first setup: recorded and remembered,
+    with no rule run. Meanwhile no shortcut or layout targets a placeholder: placement and
+    navigation see only the other displays.
 
 When the display setup changes, each visible window (on any display's current Space) is
 handled by the first rule that applies:
@@ -431,9 +537,9 @@ Adding a display that no layout claims and that hasn't been seen before moves no
   restart. It is runtime state, not configuration. It also records which layout is active.
 - **Window matching:** an entry matches by window id, checked against the owning process,
   because titles change. Entries for closed windows are dropped.
-- **macOS's own behaviour comes first.** If the feasibility check shows that macOS 27.2
-  already restores windows when a known setup returns, rule 2 steps aside for the windows
-  macOS restored.
+- **macOS's own behaviour comes first.** macOS 27.2 restores windows itself when a known setup
+  returns (see "Measured on macOS 27.2"), so rule 2 steps aside for a window macOS restored to
+  its last frame.
 
 ### Layouts
 
@@ -471,6 +577,16 @@ shortcut = "ctrl+opt+cmd+1"     # optional
   display. So a desk layout applied by shortcut while undocked arranges the windows on the
   built-in display.
 - **Apps that aren't running** are skipped. Tafl never launches anything.
+- **Raising.** A layout applied by its shortcut or from the menu brings the windows it
+  matched to the front, so the first entry's windows end on top and that app has keyboard
+  focus. The windows of one entry keep their order among themselves. A window that was
+  already in place is raised too; one that failed or vanished is not. A layout that applies
+  on a display change leaves the window order and focus alone, and so does a run that a
+  display change stopped. A run that a newer layout overtook raises nothing, so the newer
+  layout's windows stay on top. Raising stops as soon as the run is no longer current: a
+  newer layout, a display change, or Tafl beginning to quit, that arrives partway through
+  leaves the remaining windows unraised, and each step is checked just before it is made, on the queue where
+  that step runs.
 - **While a layout is active,** a window created later is placed by it, if an entry
   matches. A layout stops being active at the next display change, or when another layout
   is applied.
@@ -630,15 +746,60 @@ Settings shows the configuration in plain language and never edits it.
   fixed wording: no window, not responding, size refused, can't be moved, fullscreen,
   moved during placement, no display that way, or permission missing. It is also logged.
 - A failure is never retried on its own. The next user action tries again.
-- **Permission lost** (for example after a macOS update): Tafl notices on the next action,
-  shows the onboarding again, and logs it.
+- **Permission lost** (for example after a macOS update): Tafl notices within about 2 s, or on
+  the next action, shows the onboarding again, and logs it. A grant that comes later
+  relaunches Tafl.
 - **Apps Tafl can't observe.** macOS can refuse to deliver an app's window events.
   Shortcuts still work on that app's windows, and so does a layout applied by shortcut or
   from the menu. Without its events, though, Tafl has no last-known frames and doesn't see
-  new windows, so the display-change rules and an active layout leave the app's windows
+  new windows (it sees them only while it observes the app's creations, moves, resizes and
+  destructions), so the display-change rules and an active layout leave the app's windows
   alone. Each such app is logged, and the count is in Copy Diagnostics.
 - **After wake or a user switch,** Tafl re-registers its hotkeys and re-creates its
-  observers.
+  observers. An app that observed fine before, and fails to register during the wake
+  transient, is tried again 3 s and 10 s after the restart: one that registers then is
+  observed again, and takes part in the display-change rules and the active layout; one that
+  still fails after the last try stays unobservable. An app that was already unobservable
+  before the restart is not tried again. That baseline is what was unobservable when the first
+  pending restart began, less the apps whose tries are still pending (a restart's, or the
+  platform's after a failed launch), so a newer restart takes over an earlier one's pending
+  tries and a launch's, while an app the tries gave up on is not tried by the next restart. The
+  apps a restart tries are those its own registrations found failing, and those that events
+  reported failing while it was pending; an app that quit meanwhile is not tried. An app's quit
+  or Tafl stopping ends its tries.
+- **An app that fails to register when it launches** (whatever the error, and including an app
+  still launching when Tafl starts), or when a query first meets it, is tried again: once when it
+  finishes launching, if it was still launching, then 3 s and 10 s after that failure, the delays
+  a wake's tries use. One that registers is observed and takes part in the display-change rules;
+  the windows a launched app opened are placed as a launch's would be (an active layout places
+  them). One that still fails after the last try stays unobservable. An app a query first meets
+  after it has finished launching is observed from then on, and windows it opened while
+  unobservable are not placed: a query never announces the windows of such an app, so Tafl cannot
+  tell them from windows the app already had. An app still launching has none it already had: a
+  registration that meets it still launching and is refused (at start, by a query, at a restart,
+  or a try) is made once more when it has finished launching, and that registration owes the
+  windows the app opened their announcement, which the registration that observes makes (an
+  active layout places them). The app's quit, Tafl stopping and a restart end these tries; the
+  restart registers the app again and, if it still fails, tries it as after a wake. One app's
+  tries, its wait to finish launching, or the reads that announce its windows, hold up no other
+  app and no answer Tafl waits for (the start's, a query's, a try's). An app still launching when
+  Tafl starts (at login, other apps are launching too) is met as its launch: it is tried as
+  above, and once it registers, the windows it opened are placed as a launch's would be. An app
+  that fails at Tafl's start for any other reason is not tried again. A registration at a restart
+  is tried once when the app finishes launching, if it was still launching, and otherwise only by
+  the restart's own tries. A launch owes its windows only while it holds the app, so a launch
+  handled after the app's quit leaves nothing for a new process on the same pid.
+- **What Tafl knows of an app comes from its registrations.** Every registration of an app's
+  observers (at start, at launch, when a query first meets it, at a restart, and each try)
+  reports its outcome, the events the app still misses, in that app's ordered events, before any
+  window the registration announces. Tafl holds the latest outcome as the app's state, so what an
+  app misses can shrink to nothing; the result of a call never overrides it (at start, Tafl takes
+  the start's result as what those outcomes will say before it handles any of them, so the start's
+  rules and first readings leave the failing apps out). A window is announced only while the app's
+  current registration observes placement (creations, moves, resizes and destructions), and only
+  under that registration: a window found by one that has since ended (the app quit, observing
+  restarted, or a try replaced it) is never announced. Tafl places a window it is told about, so
+  a window announced by a successful try is placed, and where it lands is its last-known frame.
 
 ### Menu bar icon
 
@@ -652,6 +813,16 @@ Settings shows the configuration in plain language and never edits it.
 - Accessibility is required. Without it, Tafl registers no hotkeys and shows a short
   onboarding window that explains the permission and opens the right page of System
   Settings.
+- **Noticing the switch.** Tafl notices a switch of the Accessibility permission within about
+  2 seconds. A running process's own answer is cached (measured on macOS 27.2.1: the
+  `TCCAccessPreflight` answer never changes, and `AXIsProcessTrusted()` twice cached the old
+  value for good while System Settings was still writing the change), so on each system
+  notification, and again 0.5 s and 2 s later, Tafl asks a short-lived copy of its own
+  executable (`-TaflCheckAccessibility`), which a fresh process answers right and which exits
+  0 for granted and 1 for not, before any AppKit code runs. A copy that fails, or does not
+  answer within 1 s, changes nothing. A grant that arrives in a process that ran without it
+  relaunches Tafl, because observing started in that process right after the grant can fail
+  for every app. Reopen Tafl in the onboarding window is the manual fallback.
 - **Launching for testing.** Start the app with `open` or Finder. Launched from a terminal,
   macOS attributes the Accessibility permission to the terminal (learned on Linger).
 
@@ -716,6 +887,9 @@ with `/usr/bin/log`, because zsh has a `log` builtin.
     never overwritten;
   - the pipeline against the fake platform: steps run in order; a failure before any write
     stops the pipeline before Record and is reported; nothing is retried on its own.
+- **How tests wait:** tests wait only through the shared test support (`TaflTestSupport`), and
+  engine tests on the engine being quiescent; a test that cannot reach its condition fails at
+  its bound instead of hanging; `scripts/lint-tests` enforces it in CI.
 - **A platform probe** for Debug builds only, started with a launch argument as in Linger.
   It runs from `/Applications` and logs the window list, display identities, the
   corrected visible frames, and the event order during a display change. It is run again
