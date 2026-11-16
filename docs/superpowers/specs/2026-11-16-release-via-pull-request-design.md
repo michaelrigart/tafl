@@ -5,7 +5,7 @@
 **Canonical:** [Releasing through a pull request](https://github.com/michaelrigart/muninn/blob/main/docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md)
 (`michaelrigart/muninn`, `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`,
 signed off on 2026-11-16 at b87ed19 on Muninn's `fix/release-via-pr`). That document holds the
-design for all four repositories. This one records only where Tafl differs.
+design for all five repositories. This one records only where Tafl differs.
 **Supersedes in part:** Tafl's distribution design
 (`docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`): the same anti-goal and recovery
 that the canonical design supersedes in Muninn's.
@@ -56,5 +56,5 @@ As the canonical "Acceptance", plus:
 ## Delivery
 
 - Branch `fix/release-via-pr` in `~/Code/tafl-fix-release-via-pr`, from `main` at c654410.
-- All four pull requests (Muninn, Hulder, Linger, Tafl) are opened before any merges; Muninn's
-  merges first.
+- All five pull requests (Muninn, Hulder, Linger, Tafl, Skald) are opened before any merges;
+  Muninn's merges first.
