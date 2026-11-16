@@ -7,6 +7,8 @@ whether it is compatible with the one before. Each section says what changed.
 
 ## [Unreleased]
 
+## [20261116-2103] - 2026-11-16
+
 ### Added
 
 - Tafl v1: place windows on a grid (halves, quarters, thirds, maximize and more) and move them
@@ -19,4 +21,5 @@ whether it is compatible with the one before. Each section says what changed.
 - Releases are signed with a stable certificate, so the Accessibility permission you give Tafl
   survives updates.
 
-[Unreleased]: https://github.com/michaelrigart/tafl/commits/main
+[Unreleased]: https://github.com/michaelrigart/tafl/compare/20261116-2103...HEAD
+[20261116-2103]: https://github.com/michaelrigart/tafl/releases/tag/20261116-2103
