@@ -1,6 +1,6 @@
 # Releasing Through a Pull Request (Tafl Port) Implementation Plan
 
-**Status:** Approved. Codex approved the plan in round 2.
+**Status:** Implemented — [PR #4](https://github.com/michaelrigart/tafl/pull/4). Codex approved the plan in round 2. Completed: do not run it again; the canonical Acceptance 3 follows the next real release, after the merge.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

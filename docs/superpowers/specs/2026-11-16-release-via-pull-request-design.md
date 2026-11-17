@@ -1,7 +1,7 @@
 # Releasing through a pull request (Tafl port) — design
 
 **Date:** 2026-11-16
-**Status:** Approved
+**Status:** Implemented — [PR #4](https://github.com/michaelrigart/tafl/pull/4)
 **Canonical:** [Releasing through a pull request](https://github.com/michaelrigart/muninn/blob/main/docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md)
 (`michaelrigart/muninn`, `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`,
 signed off on 2026-11-16 at b87ed19 on Muninn's `fix/release-via-pr`). That document holds the
