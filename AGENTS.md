@@ -29,8 +29,9 @@ points at Xcode, and don't change `xcode-select`.
   bad signature, non-empty entitlements, `LSUIElement` not true, a wrong bundle identifier or
   version, the probe in the executable, or (with `--team`) a different `TeamIdentifier`.
 - Release: `scripts/release [--dry-run] [--version <YYYYMMDD-HHMM>]`, on Michael's Mac only (it
-  needs the signing certificate and pushes). Use `--dry-run` to check it; never run it for real
-  unless Michael asks. `--version` resumes a failed release.
+  needs the signing certificate and a `gh` login that can merge as admin; it pushes a release
+  branch and merges its pull request, never `main`). Use `--dry-run` to check it; never run it
+  for real unless Michael asks. `--version` resumes a failed release.
 - Regenerate the app icon and menu bar icon PNGs from `design/`: `design/render` (needs
   `rsvg-convert`)
 
@@ -42,6 +43,8 @@ points at Xcode, and don't change `xcode-select`.
   stays on Michael's Mac. It builds with `CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`, as anyone
   without the certificate does.
 - Distribution design: `docs/superpowers/specs/2026-11-06-tafl-distribution-design.md`.
+- Release flow: [the canonical design](https://github.com/michaelrigart/muninn/blob/main/docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md)
+  in Muninn; Tafl's port: `docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md`.
 
 ## Where code goes
 

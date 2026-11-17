@@ -9,6 +9,10 @@
 canonical in Muninn's (`michaelrigart/muninn`,
 `docs/superpowers/specs/2026-11-03-muninn-distribution-design.md`). This document repeats what
 applies to Tafl, so it can be planned on its own, and says where Tafl differs.
+**Release flow:** superseded in part on 2026-11-16 by
+https://github.com/michaelrigart/muninn/blob/main/docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md
+(the release commit lands through a pull request); Tafl's port is
+docs/superpowers/specs/2026-11-16-release-via-pull-request-design.md.
 
 ## Why
 
